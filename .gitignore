@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.elf
+*.bin
+*.img
+gen/
+
+# Editor
+*.swp
+*~
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Test output
+test/output.log
+bench/output.log

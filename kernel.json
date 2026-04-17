@@ -1,0 +1,39 @@
+{
+  "target": "aarch64-qemu-virt",
+
+  "components": {
+    "scheduler": {
+      "impl": "sched_rr",
+      "config": {
+        "time_quantum_ms": 10
+      }
+    },
+    "mem_manager": {
+      "impl": "mm_buddy",
+      "config": {}
+    },
+    "vfs": {
+      "impl": "vfs_simple",
+      "config": {
+        "root_fs": "ramfs"
+      }
+    },
+    "char_device.serial": {
+      "impl": "uart_pl011",
+      "config": {
+        "base_addr": "0x09000000"
+      }
+    }
+  },
+
+  "connections": [
+    {"from": "posix_shim", "to": "vfs", "mode": "async"},
+    {"from": "posix_shim", "to": "scheduler", "mode": "sync"}
+  ],
+
+  "hooks": [],
+
+  "posix": {
+    "enabled": true
+  }
+}
