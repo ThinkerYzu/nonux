@@ -7,37 +7,40 @@ LD       := $(CROSS)ld
 OBJCOPY  := $(CROSS)objcopy
 
 CFLAGS   := -ffreestanding -nostdlib -Wall -Wextra -Werror -O2 \
-            -Icore -Iframework -Iinterfaces -Igen
-ASFLAGS  := -Icore
+            -I. -Igen
+ASFLAGS  := -I.
 
 QEMU     := qemu-system-aarch64
 QEMU_MEM ?= 1G
 QEMU_FLAGS := -M virt -cpu cortex-a53 -nographic -kernel kernel.bin -m $(QEMU_MEM)
 
 # Core sources (always compiled)
-CORE_S   := $(wildcard core/boot/*.S core/cpu/*.S)
-CORE_C   := $(wildcard core/boot/*.c core/cpu/*.c core/pmm/*.c core/irq/*.c core/lib/*.c)
-FW_C     := $(wildcard framework/*.c)
+CORE_S   := core/boot/start.S
+CORE_C   := core/boot/boot.c \
+            core/lib/string.c \
+            core/lib/printf.c
 
-# Component sources (generated from kernel.json)
+# Framework sources (added as they're written)
+FW_C     :=
+
+# Component sources (generated from kernel.json in future phases)
 -include gen/sources.mk
 
-SRCS     := $(CORE_S) $(CORE_C) $(FW_C) $(COMPONENT_SRCS)
-OBJS     := $(SRCS:.S=.o)
-OBJS     := $(OBJS:.c=.o)
+ALL_S    := $(CORE_S)
+ALL_C    := $(CORE_C) $(FW_C) $(COMPONENT_SRCS)
+
+OBJS_S   := $(ALL_S:.S=.o)
+OBJS_C   := $(ALL_C:.c=.o)
+OBJS     := $(OBJS_S) $(OBJS_C)
 
 # Default target
 all: kernel.bin
 
-# Generate config from kernel.json
-gen/config.h gen/sources.mk: kernel.json tools/gen-config.py
-	@mkdir -p gen
-	python3 tools/gen-config.py kernel.json gen/
-
-# Compile
+# Compile assembly
 %.o: %.S
 	$(CC) $(ASFLAGS) -c $< -o $@
 
+# Compile C
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
