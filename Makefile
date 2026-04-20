@@ -7,18 +7,25 @@ LD       := $(CROSS)ld
 OBJCOPY  := $(CROSS)objcopy
 
 CFLAGS   := -ffreestanding -nostdlib -Wall -Wextra -Werror -O2 \
+            -mno-outline-atomics \
             -I. -Igen
 ASFLAGS  := -I.
 
 QEMU     := qemu-system-aarch64
 QEMU_MEM ?= 1G
-QEMU_FLAGS := -M virt -cpu cortex-a53 -nographic -kernel kernel.bin -m $(QEMU_MEM)
+QEMU_FLAGS := -M virt,gic-version=2 -cpu cortex-a53 -nographic -kernel kernel.bin -m $(QEMU_MEM)
 
 # Core sources (always compiled)
-CORE_S   := core/boot/start.S
+CORE_S   := core/boot/start.S \
+            core/cpu/vectors.S
 CORE_C   := core/boot/boot.c \
             core/lib/string.c \
-            core/lib/printf.c
+            core/lib/printf.c \
+            core/cpu/exception.c \
+            core/pmm/pmm.c \
+            core/irq/irq.c \
+            core/irq/gic.c \
+            core/timer/timer.c
 
 # Framework sources (added as they're written)
 FW_C     :=

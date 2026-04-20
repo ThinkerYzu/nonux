@@ -2,14 +2,18 @@
 
 ENTRY(_start)
 
+/* QEMU's `-kernel` on ARM64 injects a small bootloader at 0x40000000 and
+ * loads the kernel image at RAM_BASE + 0x80000.  Matching that offset lets
+ * our absolute symbol addresses line up with what the CPU actually sees. */
+
 MEMORY
 {
-    RAM (rwx) : ORIGIN = 0x40000000, LENGTH = 64M
+    RAM (rwx) : ORIGIN = 0x40080000, LENGTH = 64M
 }
 
 SECTIONS
 {
-    . = 0x40000000;
+    . = 0x40080000;
 
     .text : {
         KEEP(*(.text.boot))   /* _start must be first */

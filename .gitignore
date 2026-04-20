@@ -17,3 +17,6 @@ gen/
 # Test output
 test/output.log
 bench/output.log
+
+# Host test binary
+test/host/test_host

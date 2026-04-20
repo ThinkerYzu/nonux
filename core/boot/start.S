@@ -22,6 +22,13 @@ _start:
 from_el2:
     /* Configure EL1 from EL2 */
 
+    /* CNTHCTL_EL2: allow EL1 to use the physical timer and counter.
+     * Without this, CNTP_*_EL0 accesses from EL1 trap to EL2. */
+    mrs     x0, cnthctl_el2
+    orr     x0, x0, #3          /* EL1PCEN | EL1PCTEN */
+    msr     cnthctl_el2, x0
+    msr     cntvoff_el2, xzr    /* virt counter matches physical */
+
     /* HCR_EL2: RW=1 (EL1 is AArch64) */
     mov     x0, #(1 << 31)
     msr     hcr_el2, x0
