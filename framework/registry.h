@@ -151,11 +151,194 @@ void nx_slot_foreach_dependent  (struct nx_slot *s, nx_connection_cb cb, void *c
 /* Connections where slot `s` is the from_slot (i.e. what `s` depends on). */
 void nx_slot_foreach_dependency (struct nx_slot *s, nx_connection_cb cb, void *ctx);
 
+/* ---------- Change events ------------------------------------------------- */
+
+/*
+ * Every mutation of the registry emits a change event.  Subscribers are
+ * called synchronously from inside the mutation (after the generation bump,
+ * before the mutation API returns to its caller), so they observe the new
+ * state.  The event also lands in the bounded change log (see below).
+ *
+ * Event payloads carry `const char *` names that point to caller-owned
+ * static storage on the original `nx_slot` / `nx_component` struct.  In
+ * production these will be string literals emitted by gen-config; in tests
+ * they're string literals on the stack frame that registered the entity.
+ * Subscribers and change-log readers must NOT retain these pointers past
+ * the lifetime of the underlying caller storage.
+ *
+ * Subscriber callbacks must be short and non-blocking.  Intended consumers
+ * are instrumentation recorders, the recomposer's invariant checker, and
+ * test watchers.
+ */
+
+enum nx_graph_event_type {
+    NX_EV_SLOT_CREATED = 1,
+    NX_EV_SLOT_DESTROYED,
+    NX_EV_SLOT_SWAPPED,            /* active impl changed (incl. NULL bind) */
+    NX_EV_COMPONENT_REGISTERED,
+    NX_EV_COMPONENT_UNREGISTERED,
+    NX_EV_COMPONENT_STATE,         /* lifecycle state transition */
+    NX_EV_CONNECTION_ADDED,
+    NX_EV_CONNECTION_REMOVED,
+    NX_EV_CONNECTION_RETUNED,      /* mode or stateful flag changed */
+};
+
+struct nx_graph_event {
+    enum nx_graph_event_type type;
+    uint64_t                 generation;
+    uint64_t                 timestamp_ns;
+    union {
+        /* SLOT_CREATED, SLOT_DESTROYED */
+        struct {
+            const char *name;
+        } slot;
+
+        /* SLOT_SWAPPED — old/new manifest+instance are NULL when the
+         * corresponding side is unbound. */
+        struct {
+            const char *slot_name;
+            const char *old_manifest;
+            const char *old_instance;
+            const char *new_manifest;
+            const char *new_instance;
+        } swap;
+
+        /* COMPONENT_REGISTERED, COMPONENT_UNREGISTERED */
+        struct {
+            const char *manifest_id;
+            const char *instance_id;
+        } comp;
+
+        /* COMPONENT_STATE */
+        struct {
+            const char             *manifest_id;
+            const char             *instance_id;
+            enum nx_lifecycle_state from;
+            enum nx_lifecycle_state to;
+        } state;
+
+        /* CONNECTION_ADDED, CONNECTION_REMOVED, CONNECTION_RETUNED.
+         * `from_slot` is NULL for boot/external entry edges. */
+        struct {
+            const char         *from_slot;
+            const char         *to_slot;
+            enum nx_conn_mode   mode;
+            bool                stateful;
+        } conn;
+    } u;
+};
+
+typedef void (*nx_graph_event_cb)(const struct nx_graph_event *ev, void *ctx);
+
+/* Append a subscriber.  `(cb, ctx)` pairs must be unique — duplicate
+ * subscription returns NX_EEXIST.  Capacity is fixed (NX_MAX_SUBSCRIBERS);
+ * exceeding it returns NX_ENOMEM.  Returns NX_OK on success. */
+int  nx_graph_subscribe  (nx_graph_event_cb cb, void *ctx);
+
+/* Remove the subscriber matching `(cb, ctx)`.  No-op if not subscribed. */
+void nx_graph_unsubscribe(nx_graph_event_cb cb, void *ctx);
+
+/* ---------- Change log (registrator) -------------------------------------- */
+
+/*
+ * Bounded append-only ring buffer of recent events.  Capacity is fixed at
+ * compile time (NX_CHANGE_LOG_CAPACITY).  Writes are atomic against
+ * concurrent readers; on overflow, the oldest entries are overwritten.
+ *
+ * The log answers questions the live graph can't: "what was the boot
+ * composition?", "when did this slot last swap?", "in what order did the
+ * recomposition transaction apply?".
+ */
+
+/* Total events ever appended (monotonic).  May exceed capacity. */
+uint64_t nx_change_log_total(void);
+
+/* Number of currently-readable entries (min(total, capacity)). */
+size_t   nx_change_log_size(void);
+
+/* Read up to `max` events with `generation > since_gen`, oldest first,
+ * into `out`.  Returns the number actually copied.  Stops at the oldest
+ * still-retained event if `since_gen` is older than what the ring holds. */
+size_t   nx_change_log_read(uint64_t since_gen,
+                            struct nx_graph_event *out, size_t max);
+
+/* Reset the log (test-only; registry doesn't normally clear it). */
+void     nx_change_log_reset(void);
+
+/* ---------- Snapshot ------------------------------------------------------ */
+
+/*
+ * A graph snapshot captures the registry's contents at a single generation.
+ * It owns its own copies of the entity arrays — once taken, the snapshot is
+ * stable even if the registry mutates underneath.  String fields point to
+ * the same caller-owned storage referenced by the live registry; they remain
+ * valid as long as the underlying nx_slot / nx_component structs do.
+ *
+ * Snapshots are reference-counted: `nx_graph_snapshot_take()` returns one
+ * with refcount=1; pass it around freely and call `nx_graph_snapshot_put()`
+ * exactly once per take.  Reading a snapshot does not block writers.
+ */
+
+struct nx_graph_snapshot;       /* opaque */
+
+struct nx_graph_snapshot *nx_graph_snapshot_take  (void);
+void                      nx_graph_snapshot_retain(struct nx_graph_snapshot *s);
+void                      nx_graph_snapshot_put   (struct nx_graph_snapshot *s);
+
+uint64_t nx_graph_snapshot_generation     (const struct nx_graph_snapshot *s);
+uint64_t nx_graph_snapshot_timestamp_ns   (const struct nx_graph_snapshot *s);
+size_t   nx_graph_snapshot_slot_count     (const struct nx_graph_snapshot *s);
+size_t   nx_graph_snapshot_component_count(const struct nx_graph_snapshot *s);
+size_t   nx_graph_snapshot_connection_count(const struct nx_graph_snapshot *s);
+
+/* Per-entity views (frozen copies, NOT pointers into the live registry). */
+struct nx_snapshot_slot {
+    const char              *name;
+    const char              *iface;
+    enum nx_slot_mutability  mutability;
+    enum nx_slot_concurrency concurrency;
+    const char              *active_manifest;   /* NULL if no active impl */
+    const char              *active_instance;
+};
+
+struct nx_snapshot_component {
+    const char             *manifest_id;
+    const char             *instance_id;
+    enum nx_lifecycle_state state;
+};
+
+struct nx_snapshot_connection {
+    const char           *from_slot;            /* NULL for boot edge */
+    const char           *to_slot;
+    enum nx_conn_mode     mode;
+    bool                  stateful;
+    enum nx_pause_policy  policy;
+    uint64_t              installed_gen;
+};
+
+const struct nx_snapshot_slot       *nx_graph_snapshot_slot      (const struct nx_graph_snapshot *s, size_t i);
+const struct nx_snapshot_component  *nx_graph_snapshot_component (const struct nx_graph_snapshot *s, size_t i);
+const struct nx_snapshot_connection *nx_graph_snapshot_connection(const struct nx_graph_snapshot *s, size_t i);
+
+/* ---------- JSON serialization -------------------------------------------- */
+
+/*
+ * Both serializers write a NUL-terminated JSON string into `buf`.  Return
+ * value: number of bytes written EXCLUDING the terminating NUL, or a
+ * negative NX_E* code on error.  If the output is truncated due to buflen,
+ * returns NX_ENOMEM and writes as much as fits (still NUL-terminated).
+ */
+int nx_graph_snapshot_to_json(const struct nx_graph_snapshot *s,
+                              char *buf, size_t buflen);
+
+int nx_change_log_to_json(char *buf, size_t buflen);
+
 /* ---------- Lifecycle of the registry itself ------------------------------ */
 
-/* Releases every internal node and zeroes all global state.  Safe to call
- * unconditionally at the start of every test.  Caller-owned slot/component
- * structs are NOT freed — only the registry's own bookkeeping. */
+/* Releases every internal node and zeroes all global state, including the
+ * change log and subscriber list.  Safe to call unconditionally at the
+ * start of every test.  Caller-owned slot/component structs are NOT
+ * freed — only the registry's own bookkeeping. */
 void nx_graph_reset(void);
 
 #endif /* NX_FRAMEWORK_REGISTRY_H */
