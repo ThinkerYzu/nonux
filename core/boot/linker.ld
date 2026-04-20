@@ -22,6 +22,15 @@ SECTIONS
 
     .rodata : ALIGN(4096) {
         *(.rodata .rodata.*)
+
+        /* In-kernel test registry (kernel-test.bin only).  Define
+         * __start_/__stop_ explicitly: ld only auto-generates those
+         * markers for orphan sections, and this one is placed into
+         * .rodata by the script. */
+        . = ALIGN(8);
+        __start_kernel_test_registry = .;
+        KEEP(*(kernel_test_registry))
+        __stop_kernel_test_registry = .;
     } > RAM
 
     .data : ALIGN(4096) {

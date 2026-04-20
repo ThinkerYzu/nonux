@@ -80,15 +80,54 @@ deps: kernel.json
 deps-dot: kernel.json
 	python3 tools/validate-config.py kernel.json components/ --deps-dot
 
+# In-kernel test binary (kernel-test.bin).  Same objects as kernel.bin
+# except boot.o is replaced by boot-test.o (compiled with -DNX_KTEST so
+# boot_main dispatches into ktest_main instead of the idle loop), plus
+# the ktest runner and test cases.
+KTEST_C       := test/kernel/ktest_main.c \
+                 test/kernel/ktest_pmm.c \
+                 test/kernel/ktest_irq.c
+KTEST_OBJS    := $(KTEST_C:.c=.o)
+
+core/boot/boot-test.o: core/boot/boot.c
+	$(CC) $(CFLAGS) -DNX_KTEST -c $< -o $@
+
+TEST_OBJS     := $(filter-out core/boot/boot.o,$(OBJS)) \
+                 core/boot/boot-test.o \
+                 $(KTEST_OBJS)
+
+kernel-test.elf: $(TEST_OBJS) core/boot/linker.ld
+	$(LD) -T core/boot/linker.ld -o $@ $(TEST_OBJS)
+
+kernel-test.bin: kernel-test.elf
+	$(OBJCOPY) -O binary $< $@
+
 # Tests
 test: test-host test-kernel
 
 test-host:
 	$(MAKE) -C test/host
 
-test-kernel: kernel.bin
-	timeout 30 $(QEMU) $(QEMU_FLAGS) -append "test" | tee test/output.log
-	python3 test/check_results.py test/output.log
+# Runs the in-kernel suite under QEMU with semihosting.  ktest_main
+# exits via SYS_EXIT_EXTENDED, which QEMU propagates as its own exit
+# code (0 = all tests passed).  An outer `timeout` catches hangs.
+#
+# QEMU writes the kernel's serial output to test/kernel-output.log; we
+# `cat` it after QEMU exits.  This keeps QEMU completely off the parent
+# TTY, which avoids a class of hangs observed under GNU screen/tmux
+# where QEMU's -nographic or -serial stdio can deadlock with the
+# multiplexer's pty handling.
+KTEST_LOG := test/kernel-output.log
+
+test-kernel: kernel-test.bin
+	@rm -f $(KTEST_LOG)
+	@-timeout --preserve-status 15 \
+	    $(QEMU) -M virt,gic-version=2 -cpu cortex-a53 \
+	    -display none -serial file:$(KTEST_LOG) -monitor none \
+	    -m $(QEMU_MEM) -semihosting -kernel kernel-test.bin; \
+	    rc=$$?; \
+	    cat $(KTEST_LOG); \
+	    exit $$rc
 
 # Benchmarks
 bench: kernel.bin
@@ -97,6 +136,6 @@ bench: kernel.bin
 # Clean
 clean:
 	find . -name '*.o' -delete
-	rm -rf gen/ kernel.elf kernel.bin
+	rm -rf gen/ kernel.elf kernel.bin kernel-test.elf kernel-test.bin
 
 .PHONY: all run debug validate-config deps deps-dot test test-host test-kernel bench clean

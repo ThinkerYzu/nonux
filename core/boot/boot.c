@@ -62,8 +62,16 @@ void boot_main(void)
     timer_init(10);
 
     irq_enable_local();
+
+#ifdef NX_KTEST
+    /* When built with -DNX_KTEST, run the in-kernel test suite instead
+     * of the idle loop.  ktest_main exits via semihosting. */
+    extern void ktest_main(void) __attribute__((noreturn));
+    ktest_main();
+#else
     kprintf("[boot] Phase 2 ready — tick prints once/sec.\n\n");
 
     for (;;)
         asm volatile("wfi");
+#endif
 }

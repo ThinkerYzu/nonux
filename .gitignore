@@ -16,6 +16,7 @@ gen/
 
 # Test output
 test/output.log
+test/kernel-output.log
 bench/output.log
 
 # Host test binary
