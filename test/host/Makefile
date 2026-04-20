@@ -9,15 +9,17 @@ LDFLAGS :=
 SRCS := main.c \
         test_runner.c \
         mem_track.c \
-        pmm_test.c
+        pmm_test.c \
+        registry_test.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
-        ../../core/lib/string.c
+        ../../core/lib/string.c \
+        ../../framework/registry.c
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
-vpath %.c ../../core/pmm ../../core/lib
+vpath %.c ../../core/pmm ../../core/lib ../../framework
 
 OBJS := $(notdir $(SRCS:.c=.o))
 
