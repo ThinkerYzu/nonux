@@ -104,6 +104,10 @@ class TestManifestMode(unittest.TestCase):
 class TestKernelMode(unittest.TestCase):
 
     def _run(self, kernel: dict) -> tuple[str, str]:
+        config_h, sources_mk, _ = self._run3(kernel)
+        return (config_h, sources_mk)
+
+    def _run3(self, kernel: dict) -> tuple[str, str, str]:
         with tempfile.TemporaryDirectory() as d:
             dpath = pathlib.Path(d)
             kpath = dpath / "kernel.json"
@@ -114,7 +118,8 @@ class TestKernelMode(unittest.TestCase):
             rc = gc.main(["kernel", str(kpath), str(comp_dir), str(outdir)])
             self.assertEqual(rc, 0)
             return ((outdir / "config.h").read_text(),
-                    (outdir / "sources.mk").read_text())
+                    (outdir / "sources.mk").read_text(),
+                    (outdir / "slot_table.c").read_text())
 
     def test_minimal_kernel_emits_target_and_one_slot(self):
         config_h, sources_mk = self._run({
@@ -178,6 +183,51 @@ class TestKernelMode(unittest.TestCase):
             },
         }
         self.assertEqual(self._run(k), self._run(k))
+
+    def test_slot_table_c_shape(self):
+        _, _, slot_c = self._run3({
+            "target": "t",
+            "components": {
+                "char_device.serial": {"impl": "uart_pl011"},
+                "scheduler":          {"impl": "sched_rr"},
+            },
+        })
+        # Generated header + include preamble.
+        self.assertIn('#include "framework/bootstrap.h"', slot_c)
+        self.assertIn('#include "framework/registry.h"', slot_c)
+        # One static nx_slot per binding.  Dotted slot name maps to
+        # underscore in the C identifier but keeps the dotted string as
+        # the registry's name field.
+        self.assertIn("static struct nx_slot nx_slot_char_device_serial",
+                      slot_c)
+        self.assertIn('.name        = "char_device.serial"', slot_c)
+        self.assertIn('.iface       = "char_device"', slot_c)  # before the dot
+        self.assertIn("static struct nx_slot nx_slot_scheduler", slot_c)
+        self.assertIn('.iface       = "scheduler"', slot_c)    # no dot → self
+        # Binding table.
+        self.assertIn("struct nx_boot_slot nx_boot_slots[] = {", slot_c)
+        self.assertIn(
+            '{ .slot = &nx_slot_char_device_serial, '
+            '.impl_name = "uart_pl011" },', slot_c)
+        self.assertIn(
+            "const unsigned nx_boot_slots_count = "
+            "sizeof nx_boot_slots / sizeof nx_boot_slots[0];", slot_c)
+
+    def test_slot_table_deterministic(self):
+        # Re-running gen-config on the same input must produce byte-
+        # identical slot_table.c — same determinism invariant as
+        # config.h / sources.mk.  Bindings sort by slot name.
+        k = {
+            "target": "t",
+            "components": {
+                "vfs":       {"impl": "vfs_simple"},
+                "scheduler": {"impl": "sched_rr"},
+                "char_device.serial": {"impl": "uart_pl011"},
+            },
+        }
+        _, _, a = self._run3(k)
+        _, _, b = self._run3(k)
+        self.assertEqual(a, b)
 
     def test_missing_target_errors(self):
         with tempfile.TemporaryDirectory() as d:

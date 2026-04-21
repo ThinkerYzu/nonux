@@ -1,0 +1,5 @@
+{
+  "name": "uart_pl011",
+  "version": "0.1.0",
+  "iface": "char_device"
+}

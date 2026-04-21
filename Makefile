@@ -7,7 +7,7 @@ LD       := $(CROSS)ld
 OBJCOPY  := $(CROSS)objcopy
 
 CFLAGS   := -ffreestanding -nostdlib -Wall -Wextra -Werror -O2 \
-            -mno-outline-atomics \
+            -mno-outline-atomics -mgeneral-regs-only -mstrict-align \
             -I. -Igen
 ASFLAGS  := -I.
 
@@ -21,20 +21,28 @@ CORE_S   := core/boot/start.S \
 CORE_C   := core/boot/boot.c \
             core/lib/string.c \
             core/lib/printf.c \
+            core/lib/kheap.c \
             core/cpu/exception.c \
             core/pmm/pmm.c \
             core/irq/irq.c \
             core/irq/gic.c \
             core/timer/timer.c
 
-# Framework sources (added as they're written)
-FW_C     :=
+# Framework sources — compiled into every kernel build since slice 3.9a.
+# Host tests compile these via test/host/Makefile with system cc instead.
+FW_C     := framework/registry.c \
+            framework/component.c \
+            framework/hook.c \
+            framework/ipc.c \
+            framework/bootstrap.c
 
-# Component sources (generated from kernel.json in future phases)
+# Component sources + the gen/slot_table.c binding table, both emitted
+# by `make kernel-config`.
 -include gen/sources.mk
+GEN_C    := gen/slot_table.c
 
 ALL_S    := $(CORE_S)
-ALL_C    := $(CORE_C) $(FW_C) $(COMPONENT_SRCS)
+ALL_C    := $(CORE_C) $(FW_C) $(COMPONENT_SRCS) $(GEN_C)
 
 OBJS_S   := $(ALL_S:.S=.o)
 OBJS_C   := $(ALL_C:.c=.o)
@@ -81,17 +89,22 @@ GENCONFIG := tools/gen-config.py
 VALIDATE  := tools/validate-config.py
 VERIFY    := tools/verify-registry.py
 
-# Generated build artefacts from kernel.json. Invoked explicitly as
-# `make kernel-config`. We deliberately do NOT write a rule that names
-# gen/config.h or gen/sources.mk as outputs — the top-level
-# `-include gen/sources.mk` would otherwise auto-trigger a rebuild
-# that fails until every component referenced in kernel.json actually
-# exists (Phase 4+). kernel-config is phony; it writes the files as a
-# side-effect. Tooling that needs them today (validate-config, deps)
-# reads kernel.json directly.
-kernel-config:
+# Generated build artefacts from kernel.json.  Each output has a
+# concrete rule so `make` can auto-run gen-config the first time
+# anything depends on gen/sources.mk or gen/slot_table.c.  GNU make
+# automatically re-execs after resolving an -include target.
+#
+# All three outputs are produced by a single gen-config invocation,
+# so we cascade the other two off gen/sources.mk to avoid redundant
+# regeneration.  kernel-config stays as a phony convenience target.
+gen/sources.mk: kernel.json $(GENCONFIG)
 	@mkdir -p gen
 	$(PYTHON) $(GENCONFIG) kernel kernel.json components/ gen/
+
+gen/config.h: gen/sources.mk
+gen/slot_table.c: gen/sources.mk
+
+kernel-config: gen/sources.mk
 .PHONY: kernel-config
 
 # Validate kernel config (needs venv → jsonschema)
@@ -133,7 +146,8 @@ venv: $(VENV_STAMP)
 # the ktest runner and test cases.
 KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_pmm.c \
-                 test/kernel/ktest_irq.c
+                 test/kernel/ktest_irq.c \
+                 test/kernel/ktest_bootstrap.c
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
 core/boot/boot-test.o: core/boot/boot.c

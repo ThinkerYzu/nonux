@@ -208,16 +208,16 @@ int nx_resolve_deps(const struct nx_component_descriptor *d,
         .ops         = (OPS),                                               \
     }
 
-/* Same as NX_COMPONENT_REGISTER but for a component with no dependencies.
- * The empty deps array triggers GCC's `-Wpedantic zero-length array`
- * diagnostic, which is a false positive here — we pick a tiny unused
- * sentinel to keep the macro uniform. */
-#define NX_COMPONENT_REGISTER_NO_DEPS(NAME, CONTAINER, DEPS_FIELD, OPS)     \
+/* Same as NX_COMPONENT_REGISTER but for a component with no
+ * dependencies.  No DEPS_FIELD is needed: `deps_offset` is never
+ * read when `n_deps == 0`, so we pass 0 and the state struct stays
+ * free of otherwise-useless placeholder fields. */
+#define NX_COMPONENT_REGISTER_NO_DEPS(NAME, CONTAINER, OPS)                 \
     const struct nx_component_descriptor NAME##_descriptor                  \
         __attribute__((section("nx_components"), used)) = {                 \
         .name        = #NAME,                                               \
         .state_size  = sizeof(CONTAINER),                                   \
-        .deps_offset = offsetof(CONTAINER, DEPS_FIELD),                     \
+        .deps_offset = 0,                                                   \
         .deps        = NULL,                                                \
         .n_deps      = 0,                                                   \
         .ops         = (OPS),                                               \

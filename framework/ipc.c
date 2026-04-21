@@ -3,8 +3,17 @@
 #include "framework/hook.h"
 #include "framework/registry.h"
 
+/* Host vs kernel — same split as framework/registry.c.  ipc.c needs
+ * calloc/free (from stdlib / kheap); string.h is pulled in for
+ * consistency with the host build even though this file doesn't
+ * currently use its functions. */
+#if __STDC_HOSTED__
 #include <stdlib.h>
 #include <string.h>
+#else
+#include "core/lib/kheap.h"
+#include "core/lib/lib.h"
+#endif
 
 /*
  * IPC router — slice 3.6 (sync/async + caps) plus slice 3.8 (pause

@@ -3,17 +3,22 @@
 #include "core/cpu/exception.h"
 #include "core/irq/irq.h"
 #include "core/timer/timer.h"
+#include "framework/bootstrap.h"
+#include "framework/registry.h"
 
 /*
  * boot_main — C entry point after start.S sets up EL1, stack, and BSS.
  *
- * Phase 2 bring-up order:
- *   1. UART (already done in Phase 1).
+ * Bring-up order:
+ *   1. UART (low-level setup done in Phase 1).
  *   2. PMM over all RAM above __free_mem_start up to RAM_END.
  *   3. Exception vectors (VBAR_EL1).
  *   4. GIC distributor + CPU interface.
  *   5. ARM Generic Timer at 10 Hz.
- *   6. Unmask IRQ, park in wfi.  Tick handler prints once/sec.
+ *   6. Framework bootstrap (slice 3.9a): walk the nx_components linker
+ *      section, register slots + components from gen/slot_table.c,
+ *      run init → enable in topo order, dump the composition.
+ *   7. Unmask IRQ, park in wfi.  Tick handler prints once/sec.
  *
  * RAM_END is hardcoded to 0x80000000 (matches QEMU -m 1G).  Phase 5's DTB
  * parsing will replace this with the DTB-reported value.
@@ -60,6 +65,28 @@ void boot_main(void)
     kprintf("[gic]  distributor + CPU interface enabled\n");
 
     timer_init(10);
+
+    /* Phase 3 bring-up — walk nx_components, register every slot +
+     * descriptor, run init / enable in topo order.  Any non-OK return
+     * leaves the composition partially up; for now we just log and
+     * carry on (slice 3.9b will own the rollback story). */
+    int fw_rc = nx_framework_bootstrap();
+    if (fw_rc == NX_OK) {
+        static char snap_buf[4096];
+        struct nx_graph_snapshot *snap = nx_graph_snapshot_take();
+        if (snap) {
+            int n = nx_graph_snapshot_to_json(snap, snap_buf, sizeof snap_buf);
+            kprintf("[fw]   composition (gen=%lu, %lu slots, %lu components):\n",
+                    (uint64_t)nx_graph_snapshot_generation(snap),
+                    (uint64_t)nx_graph_snapshot_slot_count(snap),
+                    (uint64_t)nx_graph_snapshot_component_count(snap));
+            if (n > 0) uart_puts(snap_buf);
+            uart_puts("\n");
+            nx_graph_snapshot_put(snap);
+        }
+    } else {
+        kprintf("[fw]   bootstrap failed (rc=%d)\n", fw_rc);
+    }
 
     irq_enable_local();
 

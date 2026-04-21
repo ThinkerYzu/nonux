@@ -46,7 +46,6 @@ static const struct nx_component_ops trivial_ops = { 0 };
 
 NX_COMPONENT_REGISTER_NO_DEPS(trivial,
                               struct trivial_state,
-                              deps,
                               &trivial_ops);
 
 extern const struct nx_component_descriptor trivial_descriptor;

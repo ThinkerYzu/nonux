@@ -31,6 +31,14 @@ SECTIONS
         __start_kernel_test_registry = .;
         KEEP(*(kernel_test_registry))
         __stop_kernel_test_registry = .;
+
+        /* Component descriptors (slice 3.9a).  Every
+         * NX_COMPONENT_REGISTER emits a const descriptor into this
+         * section; framework/bootstrap.c walks the range at boot. */
+        . = ALIGN(8);
+        __start_nx_components = .;
+        KEEP(*(nx_components))
+        __stop_nx_components = .;
     } > RAM
 
     .data : ALIGN(4096) {

@@ -90,7 +90,15 @@ static int transition_from(struct nx_component *c,
 int nx_component_init(struct nx_component *c)
 {
     /* v1 synchronous init: UNINIT → READY in a single step.  The INIT
-     * state is legal-but-unused until async bring-up is added. */
+     * state is legal-but-unused until async bring-up is added.
+     * ops->init runs before the state transition so a failing init
+     * leaves the component in UNINIT — free to retry. */
+    if (!c) return NX_EINVAL;
+    if (c->state != NX_LC_UNINIT) return NX_ESTATE;
+    if (c->descriptor && c->descriptor->ops && c->descriptor->ops->init) {
+        int orc = c->descriptor->ops->init(c->impl);
+        if (orc != NX_OK) return orc;
+    }
     return transition_from(c, NX_LC_UNINIT, NX_LC_READY);
 }
 
@@ -100,6 +108,10 @@ int nx_component_enable(struct nx_component *c)
     if (c->state != NX_LC_READY) return NX_ESTATE;
     int rc = dispatch_lifecycle_hook(NX_HOOK_COMPONENT_ENABLE, c, NX_LC_ACTIVE);
     if (rc != NX_OK) return rc;
+    if (c->descriptor && c->descriptor->ops && c->descriptor->ops->enable) {
+        int orc = c->descriptor->ops->enable(c->impl);
+        if (orc != NX_OK) return orc;
+    }
     return transition_from(c, NX_LC_READY, NX_LC_ACTIVE);
 }
 
@@ -192,6 +204,10 @@ int nx_component_disable(struct nx_component *c)
         return NX_ESTATE;
     int rc = dispatch_lifecycle_hook(NX_HOOK_COMPONENT_DISABLE, c, NX_LC_READY);
     if (rc != NX_OK) return rc;
+    if (c->descriptor && c->descriptor->ops && c->descriptor->ops->disable) {
+        int orc = c->descriptor->ops->disable(c->impl);
+        if (orc != NX_OK) return orc;
+    }
     return nx_component_state_set(c, NX_LC_READY);
 }
 
@@ -205,6 +221,9 @@ int nx_component_destroy(struct nx_component *c)
      * leaving a dangling `active` pointer after the subsequent
      * unregister path. */
     if (nx_component_is_bound(c)) return NX_EBUSY;
+    if (c->descriptor && c->descriptor->ops && c->descriptor->ops->destroy) {
+        c->descriptor->ops->destroy(c->impl);
+    }
     return transition_from(c, NX_LC_READY, NX_LC_DESTROYED);
 }
 

@@ -1,10 +1,22 @@
 #include "framework/registry.h"
 
 #include <stdatomic.h>
+
+/*
+ * Host vs kernel: the host build has libc (stdio, stdlib, string, time);
+ * the kernel build is freestanding — we route to core/lib equivalents.
+ * Single point of divergence, guarded by __STDC_HOSTED__ (GCC sets it
+ * to 0 under -ffreestanding).
+ */
+#if __STDC_HOSTED__
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#else
+#include "core/lib/kheap.h"
+#include "core/lib/lib.h"
+#endif
 
 /*
  * Component Graph Registry — first slice (host-side).
@@ -62,13 +74,19 @@ static uint64_t bump_gen(void)
 
 /* ---------- Timestamp helper --------------------------------------------- */
 
-/* Host build: CLOCK_MONOTONIC in nanoseconds.  Kernel build will replace
- * this with a system-tick reader (single point to swap). */
+/* Host build: CLOCK_MONOTONIC in nanoseconds.  Kernel build: returns
+ * 0 in slice 3.9a — slice 3.9b wires this to cntpct_el0 once the
+ * dispatcher thread owns a monotonic-time API.  Timestamps are
+ * informational on events; correctness doesn't depend on them. */
 static uint64_t now_ns(void)
 {
+#if __STDC_HOSTED__
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#else
+    return 0;
+#endif
 }
 
 /* ---------- Subscribers --------------------------------------------------- */
@@ -808,6 +826,34 @@ static void jb_puts(struct json_buf *jb, const char *s)
     while (*s) jb_putc(jb, *s++);
 }
 
+/* Freestanding-friendly formatters — no snprintf needed.  Both write
+ * NUL-terminated output into a caller-owned buffer large enough for
+ * the worst case (7 and 24 bytes respectively). */
+static void fmt_hex4(char *out, unsigned c)
+{
+    static const char hex[] = "0123456789abcdef";
+    out[0] = '\\'; out[1] = 'u';
+    out[2] = hex[(c >> 12) & 0xf];
+    out[3] = hex[(c >>  8) & 0xf];
+    out[4] = hex[(c >>  4) & 0xf];
+    out[5] = hex[ c        & 0xf];
+    out[6] = '\0';
+}
+
+static void fmt_u64(char *out, uint64_t v)
+{
+    /* Decimal ASCII.  Max 20 digits + NUL → 21 bytes; callers size 24. */
+    char digits[20];
+    size_t n = 0;
+    if (v == 0) { digits[n++] = '0'; }
+    else {
+        while (v > 0) { digits[n++] = (char)('0' + v % 10); v /= 10; }
+    }
+    size_t i = 0;
+    while (n > 0) out[i++] = digits[--n];
+    out[i] = '\0';
+}
+
 static void jb_puts_escaped(struct json_buf *jb, const char *s)
 {
     if (!s) { jb_puts(jb, "null"); return; }
@@ -823,7 +869,7 @@ static void jb_puts_escaped(struct json_buf *jb, const char *s)
         default:
             if (c < 0x20) {
                 char tmp[8];
-                snprintf(tmp, sizeof tmp, "\\u%04x", c);
+                fmt_hex4(tmp, c);
                 jb_puts(jb, tmp);
             } else {
                 jb_putc(jb, (char)c);
@@ -836,7 +882,7 @@ static void jb_puts_escaped(struct json_buf *jb, const char *s)
 static void jb_putu64(struct json_buf *jb, uint64_t v)
 {
     char tmp[24];
-    snprintf(tmp, sizeof tmp, "%llu", (unsigned long long)v);
+    fmt_u64(tmp, v);
     jb_puts(jb, tmp);
 }
 
