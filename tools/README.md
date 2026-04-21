@@ -1,11 +1,14 @@
 # nonux build tooling
 
-Small Python tool chain that drives the nonux build. Two scripts:
+Small Python tool chain that drives the nonux build. Three scripts:
 
 - **`gen-config.py`** — code generator. Stdlib-only; emits C and Make
   artefacts from JSON inputs.
 - **`validate-config.py`** — whole-tree validator. Needs the venv
   (depends on `jsonschema`).
+- **`verify-registry.py`** — static checker for DESIGN.md's R1–R8
+  registry rules. Stdlib-only; wired as a build gate for `make` and
+  `make test`.
 
 Plus a shell runner:
 
@@ -203,13 +206,82 @@ make deps-dot           # checks + --deps-dot
 
 ---
 
+## `verify-registry.py`
+
+Static checker for DESIGN.md §AI Verification (R1–R8). Walks every
+`components/<name>/` with a `manifest.json` and runs the implemented
+rule checks. Exits non-zero on any finding; wired as a prerequisite
+of `make` (for `kernel.bin`) and `make test`, so violations block
+the build.
+
+Scope in slice 3.7 is deliberately narrow — only rules that can be
+honestly checked with regex-level analysis. The rest are marked
+`deferred` in the tool output rather than silently passing.
+
+### Rules
+
+Run `verify-registry.py --list` for the current status summary. A
+snapshot:
+
+| Rule | Status        | Check                                     |
+|------|---------------|-------------------------------------------|
+| R1   | deferred      | fabricated slot pointers (needs clang/pycparser) |
+| R2   | **implemented** | every `struct nx_slot *<field>;` in component `.c` matches a `requires` / `optional` entry in `manifest.json` (both drift directions) |
+| R3   | deferred      | cap-only slot transfer (needs interface schemas) |
+| R4   | **implemented** | `nx_slot_ref_retain(` and `nx_slot_ref_release(` call counts match per component |
+| R5   | deferred      | sender owns slot caps it passes (needs held-refs tracking) |
+| R6   | deferred      | handler doesn't stash borrowed caps (needs dataflow) |
+| R7   | deferred      | regenerate-and-diff presupposes `gen/` is checked in; generator determinism is already covered by `test_gen_config.py::*determinism*` |
+| R8   | deferred      | slot-resolve locality (needs ISR/kthread call-graph) |
+
+### CLI
+
+```
+verify-registry.py [COMPONENTS_DIR]          default: components/
+verify-registry.py --list                    list rules + status
+verify-registry.py --rule R2 [COMPONENTS]    run one rule only (repeatable)
+```
+
+**Exit codes:** `0` on no findings (including when `components/` is
+empty or missing); `2` on any finding or unknown rule.
+
+### Output format
+
+One finding per line on stderr:
+
+```
+<path>:<line> R<n>: <message>      # when line info applies
+<path> R<n>: <message>             # otherwise
+```
+
+Trailing summary on stdout:
+
+```
+verify-registry: N finding(s); ran R2,R4; deferred R1,R3,R5,R6,R7,R8
+```
+
+### Makefile target
+
+```sh
+make verify-registry
+```
+
+Also implicitly runs before `make` and `make test`. Slow additions
+(e.g. pycparser-based R1/R6 checks) can be gated behind a flag when
+they arrive.
+
+---
+
 ## Unit tests
 
-31 stdlib-unittest tests under `tools/tests/`:
+47 stdlib-unittest tests under `tools/tests/`:
 
 - `test_gen_config.py` — 15 tests covering both subcommands
 - `test_validate_config.py` — 16 tests covering version parsing,
   cycle detection, and 8 end-to-end tempdir-based fixtures
+- `test_verify_registry.py` — 16 tests covering the `--list` output,
+  empty-tree handling, R2 drift detection in both directions,
+  R4 retain/release pairing, argument validation, and summary shape
 
 Run via:
 
@@ -220,7 +292,10 @@ make test-tools
 which is also hooked into `make test` alongside `test-host` /
 `test-kernel`. Stdlib `unittest` (no pytest dep) — tests use
 `importlib.util.spec_from_file_location` to import the hyphenated
-tool filenames (`gen-config.py`, `validate-config.py`) as modules.
+tool filenames (`gen-config.py`, `validate-config.py`,
+`verify-registry.py`) as modules. The helper registers each module
+in `sys.modules` before exec so stdlib machinery (notably
+`@dataclass`) can resolve `cls.__module__` lookups.
 
 ---
 

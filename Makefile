@@ -41,7 +41,7 @@ OBJS_C   := $(ALL_C:.c=.o)
 OBJS     := $(OBJS_S) $(OBJS_C)
 
 # Default target
-all: kernel.bin
+all: verify-registry kernel.bin
 
 # Compile assembly
 %.o: %.S
@@ -79,6 +79,7 @@ PYTHON     ?= $(VENV_PY)
 # Generator (no venv deps — stdlib only)
 GENCONFIG := tools/gen-config.py
 VALIDATE  := tools/validate-config.py
+VERIFY    := tools/verify-registry.py
 
 # Generated build artefacts from kernel.json. Invoked explicitly as
 # `make kernel-config`. We deliberately do NOT write a rule that names
@@ -103,6 +104,16 @@ deps: kernel.json $(VENV_STAMP)
 
 deps-dot: kernel.json $(VENV_STAMP)
 	$(PYTHON) $(VALIDATE) kernel.json components/ --deps-dot
+
+# Static-checker build gate (DESIGN.md §AI Verification, R1-R8).
+# verify-registry.py is stdlib-only today — R1/R3/R5/R6/R8 are marked
+# `deferred` in the output; R2 and R4 are the currently-enforced
+# regex-level checks. components/ is empty until Phase 4+, so this
+# target is a no-op right now; wiring it as a prereq of kernel.bin
+# and test now means it auto-kicks in when real components land.
+verify-registry:
+	$(PYTHON) $(VERIFY) components/
+.PHONY: verify-registry
 
 # One-shot venv setup: creates .venv/ and installs tools/requirements.txt.
 # The stamp file $(VENV_STAMP) is our "tools are installed" sentinel —
@@ -139,7 +150,7 @@ kernel-test.bin: kernel-test.elf
 	$(OBJCOPY) -O binary $< $@
 
 # Tests
-test: test-tools test-host test-kernel
+test: verify-registry test-tools test-host test-kernel
 
 test-host:
 	$(MAKE) -C test/host
