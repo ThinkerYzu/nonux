@@ -29,6 +29,14 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/dep_spec" },
       "description": "Optional dependencies. Missing is fine; slot pointer stays NULL."
+    },
+    "spawns_threads": {
+      "type": "boolean",
+      "description": "True if the component spawns kernel threads of its own (not just the dispatcher). Must also set pause_hook: true so the pause protocol can quiesce the threads within the 1 ms deadline. Default: false."
+    },
+    "pause_hook": {
+      "type": "boolean",
+      "description": "True if the component implements ops->pause_hook to quiesce its own threads / timers during pause. Required when spawns_threads is true. Default: false."
     }
   },
   "$defs": {

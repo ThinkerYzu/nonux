@@ -109,6 +109,19 @@ size_t nx_ipc_dispatch(struct nx_slot *slot, size_t max);
 /* Number of messages currently queued on `slot`'s inbox. */
 size_t nx_ipc_inbox_depth(struct nx_slot *slot);
 
+/* Number of messages currently held for the (`src`, `dst`) edge under the
+ * NX_PAUSE_QUEUE policy.  `src == NULL` counts held messages where the
+ * sender was a boot/external edge.  Zero for non-existent entries. */
+size_t nx_ipc_hold_queue_depth(struct nx_slot *src, struct nx_slot *dst);
+
+/*
+ * Flush every held message for `dst` back through the router.  Called from
+ * the pause protocol's resume path after the slot's pause_state drops to
+ * NX_SLOT_PAUSE_NONE — held messages then route normally (sync or async,
+ * per the edge's mode).  Safe to call with no pending items (no-op).
+ */
+void   nx_ipc_flush_hold_queue(struct nx_slot *dst);
+
 /* Drop every queued message for every slot and free every queue head.
  * Test-only — called from nx_graph_reset() equivalents. */
 void   nx_ipc_reset(void);

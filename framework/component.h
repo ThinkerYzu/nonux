@@ -82,6 +82,22 @@ struct nx_ipc_message;  /* forward — full def in framework/ipc.h */
 struct nx_component_ops {
     int  (*init)   (void *self);
     int  (*enable) (void *self);
+
+    /*
+     * pause_hook — per Session 3 rule 2.  Called during the pause protocol
+     * between cutoff+drain and `ops->pause`.  A component that spawns its
+     * own threads (manifest `spawns_threads: true`) MUST implement this to
+     * drain those threads; dispatcher-only components leave it NULL.
+     *
+     * The manifest validator (`tools/validate-config.py`) treats
+     * `spawns_threads: true` without `pause_hook: true` as a config error.
+     *
+     * DESIGN calls for a 1 ms wall-clock deadline — host-side has no
+     * timer, so the framework trusts the hook's return.  The deadline
+     * lands with the kernel boot path in slice 3.9.
+     */
+    int  (*pause_hook)(void *self);
+
     int  (*pause)  (void *self);
     int  (*resume) (void *self);
     int  (*disable)(void *self);

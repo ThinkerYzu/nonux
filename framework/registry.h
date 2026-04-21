@@ -1,6 +1,7 @@
 #ifndef NX_FRAMEWORK_REGISTRY_H
 #define NX_FRAMEWORK_REGISTRY_H
 
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -35,6 +36,8 @@
 #define NX_ENOENT    -4
 #define NX_EBUSY     -5    /* operation would leave dangling references */
 #define NX_ESTATE    -6    /* lifecycle / state-machine violation */
+#define NX_ELOOP     -7    /* redirect loop depth exceeded */
+#define NX_EABORT    -8    /* hook chain returned ABORT */
 
 /* ---------- Enums --------------------------------------------------------- */
 
@@ -71,6 +74,27 @@ enum nx_slot_concurrency {
     NX_CONC_DEDICATED,
 };
 
+/*
+ * Pause state lives on the slot rather than the bound component: the IPC
+ * router holds slot pointers and the component behind the slot can swap
+ * mid-pause, so the flag must be slot-side.
+ *
+ * Transitions in v1 (single-core host build):
+ *
+ *     NONE ──cutoff──► CUTTING ──drain──► DRAINING ──quiesce──► DONE
+ *       ▲                                                         │
+ *       └─────────────────────resume───────────────────────────────┘
+ *
+ * SMP upgrade: the field is `_Atomic` from day one — barriers are added
+ * where readers live (IPC send path, resume flush), no restructure needed.
+ */
+enum nx_slot_pause_state {
+    NX_SLOT_PAUSE_NONE = 0,
+    NX_SLOT_PAUSE_CUTTING,          /* rejecting new sends per policy */
+    NX_SLOT_PAUSE_DRAINING,         /* inbox being drained */
+    NX_SLOT_PAUSE_DONE,             /* component.pause_hook + ops->pause ran */
+};
+
 /* ---------- Caller-owned framework objects -------------------------------- */
 
 /* A slot names a typed connection point in the composition. */
@@ -80,6 +104,17 @@ struct nx_slot {
     enum nx_slot_mutability  mutability;
     enum nx_slot_concurrency concurrency;
     struct nx_component     *active;      /* NULL until a component is bound */
+
+    /* Fallback for NX_PAUSE_REDIRECT policy.  NULL by default; callers wire
+     * it up via `nx_slot_set_fallback`.  When set and the slot is paused,
+     * a send with REDIRECT policy is re-routed to `fallback`.  The IPC
+     * router enforces a redirect depth limit to cut loops (NX_ELOOP). */
+    struct nx_slot          *fallback;
+
+    /* Written during the pause protocol; read by the IPC router on every
+     * send.  `_Atomic` so the SMP build only needs a barrier swap, not a
+     * restructure. */
+    _Atomic(enum nx_slot_pause_state) pause_state;
 };
 
 /* Forward declaration — full type in framework/component.h.  Kept here
@@ -116,6 +151,22 @@ struct nx_connection {
 int  nx_slot_register      (struct nx_slot *s);
 int  nx_slot_swap          (struct nx_slot *s, struct nx_component *new_impl);
 int  nx_slot_unregister    (struct nx_slot *s);
+
+/* Configure the REDIRECT fallback on a registered slot.  `fallback` may
+ * be NULL to clear.  Returns NX_ENOENT if `s` is not registered, NX_EINVAL
+ * if `s == fallback` (self-loop with depth 1).  Does not emit an event —
+ * fallbacks are wiring metadata, not part of the live composition graph. */
+int  nx_slot_set_fallback  (struct nx_slot *s, struct nx_slot *fallback);
+
+/* Transition a slot's pause_state.  Used by the pause protocol in
+ * `nx_component_pause` / `_resume`.  Returns NX_ENOENT if `s` is not
+ * registered.  Does not emit an event — pause transitions are observed
+ * via the COMPONENT_PAUSE/RESUME hook points, not the change log. */
+int  nx_slot_set_pause_state(struct nx_slot *s, enum nx_slot_pause_state st);
+
+/* Read a slot's current pause_state.  Returns NX_SLOT_PAUSE_NONE for a
+ * NULL or unregistered slot. */
+enum nx_slot_pause_state nx_slot_pause_state(const struct nx_slot *s);
 
 int  nx_component_register (struct nx_component *c);
 int  nx_component_unregister(struct nx_component *c);
@@ -160,6 +211,17 @@ void nx_graph_foreach_connection(nx_connection_cb cb, void *ctx);
 void nx_slot_foreach_dependent  (struct nx_slot *s, nx_connection_cb cb, void *ctx);
 /* Connections where slot `s` is the from_slot (i.e. what `s` depends on). */
 void nx_slot_foreach_dependency (struct nx_slot *s, nx_connection_cb cb, void *ctx);
+
+/* True if `c` is currently bound as the `active` impl of at least one
+ * registered slot.  Used by `nx_component_destroy` as the cross-check
+ * that a registered-and-bound component can't be silently destroyed.
+ * Returns false for NULL. */
+bool nx_component_is_bound(const struct nx_component *c);
+
+/* Invoke `cb` for every registered slot whose `active` pointer equals
+ * `c`.  The pause protocol walks these to drive slot-side state. */
+void nx_component_foreach_bound_slot(const struct nx_component *c,
+                                     nx_slot_cb cb, void *ctx);
 
 /* ---------- Change events ------------------------------------------------- */
 

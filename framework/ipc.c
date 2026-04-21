@@ -1,23 +1,35 @@
 #include "framework/ipc.h"
 #include "framework/component.h"
+#include "framework/hook.h"
 #include "framework/registry.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 /*
- * IPC router — slice 3.6 host-side.
+ * IPC router — slice 3.6 (sync/async + caps) plus slice 3.8 (pause
+ * protocol + hooks + REDIRECT).
  *
- * Data structures kept deliberately small: a per-slot inbox head +
- * tail pointer, and a side table keyed by slot pointer so we don't
- * have to extend `struct nx_slot` for framework bookkeeping.  A
- * singly-linked-list lookup by slot pointer is O(slots); swapping
- * to a hash is slice 3.9's problem.
+ * Data structures kept deliberately small:
  *
- * Slice 3.9 replaces the inbox with an MPSC lock-free queue and lets
- * a pinned per-CPU dispatcher run `nx_ipc_dispatch` continuously.
- * The public contract in ipc.h stays the same.
+ *   g_queues — per-slot inbox head/tail (slice 3.6 async path).
+ *   g_holds  — per-(src, dst) hold queue used by NX_PAUSE_QUEUE policy
+ *              when the destination slot is paused.  Keyed by slot
+ *              pointer pair rather than extending `struct nx_slot`
+ *              so the registry type stays stable and a slot can hold
+ *              messages from many callers without a ragged array.
+ *
+ * A singly-linked-list lookup by slot pointer is O(slots) on both;
+ * swapping to a hash is slice 3.9's problem.
+ *
+ * REDIRECT loop guard: `do_send(depth)` recurses with `depth + 1` when
+ * the destination is paused and the edge's policy is REDIRECT.  Once
+ * depth crosses `NX_IPC_REDIRECT_DEPTH_MAX`, we return NX_ELOOP — the
+ * caller gets a clear signal that the fallback chain folded back onto
+ * itself rather than silently spinning.
  */
+
+#define NX_IPC_REDIRECT_DEPTH_MAX 4
 
 /* ---------- Per-slot inbox --------------------------------------------- */
 
@@ -44,28 +56,6 @@ static struct ipc_slot_queue *queue_for(struct nx_slot *slot, bool create)
     return q;
 }
 
-void nx_ipc_reset(void)
-{
-    while (g_queues) {
-        struct ipc_slot_queue *q = g_queues;
-        g_queues = q->next;
-        /* Messages themselves are caller-owned storage; we just clear
-         * the `_next` links so stale pointers don't linger. */
-        for (struct nx_ipc_message *m = q->head; m; ) {
-            struct nx_ipc_message *nxt = m->_next;
-            m->_next = NULL;
-            m = nxt;
-        }
-        free(q);
-    }
-}
-
-size_t nx_ipc_inbox_depth(struct nx_slot *slot)
-{
-    struct ipc_slot_queue *q = queue_for(slot, false);
-    return q ? q->depth : 0;
-}
-
 static void enqueue(struct ipc_slot_queue *q, struct nx_ipc_message *m)
 {
     m->_next = NULL;
@@ -84,6 +74,95 @@ static struct nx_ipc_message *dequeue(struct ipc_slot_queue *q)
     q->depth--;
     m->_next = NULL;
     return m;
+}
+
+size_t nx_ipc_inbox_depth(struct nx_slot *slot)
+{
+    struct ipc_slot_queue *q = queue_for(slot, false);
+    return q ? q->depth : 0;
+}
+
+/* ---------- Per-edge hold queue (NX_PAUSE_QUEUE) ----------------------- */
+
+struct ipc_hold_entry {
+    struct nx_slot         *src;       /* NULL for boot/external edges */
+    struct nx_slot         *dst;
+    struct nx_ipc_message  *head;
+    struct nx_ipc_message  *tail;
+    size_t                  depth;
+    struct ipc_hold_entry  *next;
+};
+
+static struct ipc_hold_entry *g_holds;
+
+static struct ipc_hold_entry *hold_entry_for(struct nx_slot *src,
+                                             struct nx_slot *dst,
+                                             bool create)
+{
+    for (struct ipc_hold_entry *e = g_holds; e; e = e->next)
+        if (e->src == src && e->dst == dst) return e;
+    if (!create) return NULL;
+    struct ipc_hold_entry *e = calloc(1, sizeof *e);
+    if (!e) return NULL;
+    e->src = src;
+    e->dst = dst;
+    e->next = g_holds;
+    g_holds = e;
+    return e;
+}
+
+static void hold_enqueue(struct ipc_hold_entry *e, struct nx_ipc_message *m)
+{
+    m->_next = NULL;
+    if (!e->head) e->head = m;
+    else          e->tail->_next = m;
+    e->tail = m;
+    e->depth++;
+}
+
+static struct nx_ipc_message *hold_dequeue(struct ipc_hold_entry *e)
+{
+    struct nx_ipc_message *m = e->head;
+    if (!m) return NULL;
+    e->head = m->_next;
+    if (!e->head) e->tail = NULL;
+    e->depth--;
+    m->_next = NULL;
+    return m;
+}
+
+size_t nx_ipc_hold_queue_depth(struct nx_slot *src, struct nx_slot *dst)
+{
+    struct ipc_hold_entry *e = hold_entry_for(src, dst, false);
+    return e ? e->depth : 0;
+}
+
+/* ---------- Reset ------------------------------------------------------ */
+
+void nx_ipc_reset(void)
+{
+    while (g_queues) {
+        struct ipc_slot_queue *q = g_queues;
+        g_queues = q->next;
+        /* Messages themselves are caller-owned storage; we just clear
+         * the `_next` links so stale pointers don't linger. */
+        for (struct nx_ipc_message *m = q->head; m; ) {
+            struct nx_ipc_message *nxt = m->_next;
+            m->_next = NULL;
+            m = nxt;
+        }
+        free(q);
+    }
+    while (g_holds) {
+        struct ipc_hold_entry *e = g_holds;
+        g_holds = e->next;
+        for (struct nx_ipc_message *m = e->head; m; ) {
+            struct nx_ipc_message *nxt = m->_next;
+            m->_next = NULL;
+            m = nxt;
+        }
+        free(e);
+    }
 }
 
 /* ---------- Connection edge lookup ------------------------------------ */
@@ -160,15 +239,55 @@ static int invoke_handler(struct nx_slot *dst, struct nx_ipc_message *msg)
     return rc;
 }
 
-int nx_ipc_send(struct nx_ipc_message *msg)
+/* Slice 3.8: `do_send` is the real router, recursive on REDIRECT with
+ * a depth counter.  `nx_ipc_send` is the public zero-depth wrapper. */
+static int do_send(struct nx_ipc_message *msg, int depth)
 {
     if (!msg || !msg->src_slot || !msg->dst_slot) return NX_EINVAL;
+
+    /* Pre-route hook.  edge is NULL on purpose — the hook sees the
+     * routing intent, not the resolved edge, so filters / tracers
+     * can ABORT before the router even looks up the connection. */
+    struct nx_hook_context hctx = {
+        .point = NX_HOOK_IPC_SEND,
+        .u.ipc = { .src = msg->src_slot, .dst = msg->dst_slot,
+                   .msg = msg, .edge = NULL },
+    };
+    if (nx_hook_dispatch(&hctx) == NX_HOOK_ABORT) return NX_EABORT;
 
     struct nx_connection *edge = find_edge(msg->src_slot, msg->dst_slot);
     if (!edge) return NX_ENOENT;
 
     int rc = nx_ipc_scan_send_caps(msg->src_slot, msg);
     if (rc != NX_OK) return rc;
+
+    /* Pause protocol.  If dst_slot is in any non-NONE state, the
+     * edge's policy decides what to do.  NONE is the fast path. */
+    enum nx_slot_pause_state ps = nx_slot_pause_state(msg->dst_slot);
+    if (ps != NX_SLOT_PAUSE_NONE) {
+        switch (edge->policy) {
+        case NX_PAUSE_QUEUE: {
+            struct ipc_hold_entry *e =
+                hold_entry_for(msg->src_slot, msg->dst_slot, true);
+            if (!e) return NX_ENOMEM;
+            hold_enqueue(e, msg);
+            return NX_OK;
+        }
+        case NX_PAUSE_REJECT:
+            return NX_EBUSY;
+        case NX_PAUSE_REDIRECT: {
+            if (depth >= NX_IPC_REDIRECT_DEPTH_MAX) return NX_ELOOP;
+            struct nx_slot *fb = msg->dst_slot->fallback;
+            if (!fb) return NX_ENOENT;
+            /* Retarget in place — the caller's msg reflects the final
+             * hop (documented behaviour).  Async enqueue relies on
+             * msg->dst_slot holding the queue key when the dispatcher
+             * runs, so we can't restore it on the way out. */
+            msg->dst_slot = fb;
+            return do_send(msg, depth + 1);
+        }
+        }
+    }
 
     if (edge->mode == NX_CONN_SYNC) {
         return invoke_handler(msg->dst_slot, msg);
@@ -181,6 +300,11 @@ int nx_ipc_send(struct nx_ipc_message *msg)
     return NX_OK;
 }
 
+int nx_ipc_send(struct nx_ipc_message *msg)
+{
+    return do_send(msg, 0);
+}
+
 size_t nx_ipc_dispatch(struct nx_slot *slot, size_t max)
 {
     if (!slot || max == 0) return 0;
@@ -190,11 +314,52 @@ size_t nx_ipc_dispatch(struct nx_slot *slot, size_t max)
     while (dispatched < max) {
         struct nx_ipc_message *m = dequeue(q);
         if (!m) break;
+
+        /* Pre-handler hook.  ABORT drops this message and continues
+         * the drain — same ledger as a delivered msg so observability
+         * hooks can filter noise without stalling the queue. */
+        struct nx_hook_context hctx = {
+            .point = NX_HOOK_IPC_RECV,
+            .u.ipc = { .src  = m->src_slot, .dst = slot,
+                       .msg  = m,
+                       .edge = find_edge(m->src_slot, slot) },
+        };
+        if (nx_hook_dispatch(&hctx) == NX_HOOK_ABORT) {
+            dispatched++;
+            continue;
+        }
+
         int rc = invoke_handler(slot, m);
         dispatched++;
         if (rc != NX_OK) break;
     }
     return dispatched;
+}
+
+/* ---------- Hold-queue flush ------------------------------------------ */
+
+void nx_ipc_flush_hold_queue(struct nx_slot *dst)
+{
+    if (!dst) return;
+    /* Walk every (src, dst) entry matching `dst`.  We detach each
+     * matching entry from g_holds first so nested flushes (a hook
+     * that somehow triggers another flush) don't revisit the same
+     * entry.  Messages are then replayed via nx_ipc_send so they
+     * traverse hooks, cap-scan, and pause-policy normally. */
+    struct ipc_hold_entry **pp = &g_holds;
+    while (*pp) {
+        struct ipc_hold_entry *e = *pp;
+        if (e->dst != dst) { pp = &e->next; continue; }
+        *pp = e->next;
+
+        for (struct nx_ipc_message *m = hold_dequeue(e); m;
+             m = hold_dequeue(e)) {
+            (void)nx_ipc_send(m);    /* caller may inspect return via hook */
+        }
+        free(e);
+        /* pp is unchanged — *pp now points to the node that used to
+         * follow `e`, which is the next candidate. */
+    }
 }
 
 /* ---------- slot_ref_retain / _release -------------------------------- */

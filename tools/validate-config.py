@@ -149,6 +149,23 @@ def load_component_manifests(components_dir: pathlib.Path,
 # Cross-manifest checks
 # ---------------------------------------------------------------------------
 
+def check_pause_hook_required(manifests: dict[str, dict],
+                              errors: list[str]) -> None:
+    """
+    Slice 3.8: any component declaring `spawns_threads: true` must also
+    declare `pause_hook: true`. The framework's pause protocol relies on
+    the hook to quiesce per-component threads within the 1 ms deadline
+    — a spawning component without a hook is a silent hang waiting to
+    happen, so catch it at build time.
+    """
+    for impl, m in sorted(manifests.items()):
+        if m.get("spawns_threads") and not m.get("pause_hook"):
+            errors.append(
+                f"components/{impl}/manifest.json: spawns_threads=true "
+                f"requires pause_hook=true (pause protocol needs a hook "
+                f"to quiesce component-spawned threads)")
+
+
 def check_versions(kernel: dict, manifests: dict[str, dict],
                    errors: list[str]) -> None:
     """
@@ -338,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         path = args.components_dir / impl / "manifest.json"
         errors.extend(validate_against("manifest", manifest, path))
 
+    check_pause_hook_required(manifests, errors)
     check_versions(kernel, manifests, errors)
     graph = build_dep_graph(kernel, manifests)
     check_cycles(graph, errors)

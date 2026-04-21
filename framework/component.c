@@ -1,13 +1,29 @@
 #include "framework/component.h"
+#include "framework/hook.h"
+#include "framework/ipc.h"
+
+#include <stddef.h>
 
 /*
  * Lifecycle state machine — see framework/component.h for the edge diagram.
  *
- * Rationale for keeping the transition table open-coded in C rather than a
- * 2D lookup array: the matrix is small (six states, nine legal edges) and
- * reads more obviously as a switch than as sparse integer arrays.  When
- * PAUSING lands with the pause protocol it will grow to two more edges and
- * the switch will still fit on one screen.
+ * Slice 3.8 adds three things on top of the 3.3 matrix:
+ *
+ *   1. Hook dispatch around enable / disable / pause / resume.  Hooks run
+ *      BEFORE the state transition, carrying the proposed (from, to) pair.
+ *      An ABORT return causes the verb to fail with NX_EABORT without
+ *      mutating state.
+ *
+ *   2. Pause protocol — nx_component_pause drives its bound slot(s)
+ *      through CUTTING → DRAINING → DONE (cutoff, drain inbox, call
+ *      ops->pause_hook, call ops->pause).  nx_component_resume runs the
+ *      symmetric path: ops->resume, set NX_SLOT_PAUSE_NONE, flush the
+ *      hold queue for every incoming edge.
+ *
+ *   3. Destroy guard — nx_component_destroy refuses (NX_EBUSY) if the
+ *      component is still bound as any slot's `active`.  The guard
+ *      complements nx_component_unregister's existing check and makes
+ *      destroy-without-unbind impossible.
  */
 
 bool nx_lifecycle_transition_legal(enum nx_lifecycle_state from,
@@ -43,6 +59,19 @@ const char *nx_lifecycle_state_name(enum nx_lifecycle_state s)
     return "unknown";
 }
 
+/* ---------- Hook dispatch helper --------------------------------------- */
+
+static int dispatch_lifecycle_hook(enum nx_hook_point point,
+                                   struct nx_component *c,
+                                   enum nx_lifecycle_state to)
+{
+    struct nx_hook_context ctx = {
+        .point = point,
+        .u.comp = { .comp = c, .from = c->state, .to = to },
+    };
+    return nx_hook_dispatch(&ctx) == NX_HOOK_ABORT ? NX_EABORT : NX_OK;
+}
+
 /* Single-step transition helper.  `expected_from` is the only legal current
  * state; any other value (including an unknown component caught by
  * state_set's NX_ENOENT path) returns NX_ESTATE / NX_ENOENT / NX_EINVAL
@@ -67,16 +96,92 @@ int nx_component_init(struct nx_component *c)
 
 int nx_component_enable(struct nx_component *c)
 {
+    if (!c) return NX_EINVAL;
+    if (c->state != NX_LC_READY) return NX_ESTATE;
+    int rc = dispatch_lifecycle_hook(NX_HOOK_COMPONENT_ENABLE, c, NX_LC_ACTIVE);
+    if (rc != NX_OK) return rc;
     return transition_from(c, NX_LC_READY, NX_LC_ACTIVE);
+}
+
+/* ---------- Pause / resume --------------------------------------------- */
+
+static void slot_cutoff_cb(struct nx_slot *s, void *ctx)
+{
+    (void)ctx;
+    nx_slot_set_pause_state(s, NX_SLOT_PAUSE_CUTTING);
+}
+
+static void slot_drain_cb(struct nx_slot *s, void *ctx)
+{
+    (void)ctx;
+    nx_slot_set_pause_state(s, NX_SLOT_PAUSE_DRAINING);
+    /* Drain every queued message synchronously.  Host-side v1: dispatch
+     * runs on the caller's thread.  Slice 3.9 replaces this with a wait
+     * on the dispatcher-thread's drain-complete signal. */
+    nx_ipc_dispatch(s, (size_t)-1);
+}
+
+static void slot_done_cb(struct nx_slot *s, void *ctx)
+{
+    (void)ctx;
+    nx_slot_set_pause_state(s, NX_SLOT_PAUSE_DONE);
+}
+
+static void slot_resume_cb(struct nx_slot *s, void *ctx)
+{
+    (void)ctx;
+    nx_slot_set_pause_state(s, NX_SLOT_PAUSE_NONE);
+    nx_ipc_flush_hold_queue(s);
 }
 
 int nx_component_pause(struct nx_component *c)
 {
+    if (!c) return NX_EINVAL;
+    if (c->state != NX_LC_ACTIVE) return NX_ESTATE;
+
+    int rc = dispatch_lifecycle_hook(NX_HOOK_COMPONENT_PAUSE, c, NX_LC_PAUSED);
+    if (rc != NX_OK) return rc;
+
+    /* Pause protocol.  Cutoff → drain → pause_hook → ops->pause → DONE.
+     * A component may be bound to zero slots (registered but not yet
+     * wired in), in which case the _bound_slot walks are no-ops — the
+     * lifecycle transition still happens so recomposition can keep
+     * progressing. */
+    nx_component_foreach_bound_slot(c, slot_cutoff_cb, NULL);
+    nx_component_foreach_bound_slot(c, slot_drain_cb,  NULL);
+
+    if (c->descriptor && c->descriptor->ops) {
+        if (c->descriptor->ops->pause_hook) {
+            int hrc = c->descriptor->ops->pause_hook(c->impl);
+            if (hrc != NX_OK) return hrc;
+        }
+        if (c->descriptor->ops->pause) {
+            int orc = c->descriptor->ops->pause(c->impl);
+            if (orc != NX_OK) return orc;
+        }
+    }
+
+    nx_component_foreach_bound_slot(c, slot_done_cb, NULL);
     return transition_from(c, NX_LC_ACTIVE, NX_LC_PAUSED);
 }
 
 int nx_component_resume(struct nx_component *c)
 {
+    if (!c) return NX_EINVAL;
+    if (c->state != NX_LC_PAUSED) return NX_ESTATE;
+
+    int rc = dispatch_lifecycle_hook(NX_HOOK_COMPONENT_RESUME, c, NX_LC_ACTIVE);
+    if (rc != NX_OK) return rc;
+
+    if (c->descriptor && c->descriptor->ops && c->descriptor->ops->resume) {
+        int orc = c->descriptor->ops->resume(c->impl);
+        if (orc != NX_OK) return orc;
+    }
+
+    /* Clear pause state and flush each slot's hold queue before the
+     * component is officially ACTIVE again.  Messages held during pause
+     * thus run before anything that was queued after resume. */
+    nx_component_foreach_bound_slot(c, slot_resume_cb, NULL);
     return transition_from(c, NX_LC_PAUSED, NX_LC_ACTIVE);
 }
 
@@ -85,11 +190,21 @@ int nx_component_disable(struct nx_component *c)
     if (!c) return NX_EINVAL;
     if (c->state != NX_LC_ACTIVE && c->state != NX_LC_PAUSED)
         return NX_ESTATE;
+    int rc = dispatch_lifecycle_hook(NX_HOOK_COMPONENT_DISABLE, c, NX_LC_READY);
+    if (rc != NX_OK) return rc;
     return nx_component_state_set(c, NX_LC_READY);
 }
 
 int nx_component_destroy(struct nx_component *c)
 {
+    if (!c) return NX_EINVAL;
+    if (c->state != NX_LC_READY) return NX_ESTATE;
+    /* Destroy guard: the component must be fully unbound first.
+     * Matches nx_component_unregister's check — without this, a caller
+     * could run `destroy()` while a slot still points at the component,
+     * leaving a dangling `active` pointer after the subsequent
+     * unregister path. */
+    if (nx_component_is_bound(c)) return NX_EBUSY;
     return transition_from(c, NX_LC_READY, NX_LC_DESTROYED);
 }
 

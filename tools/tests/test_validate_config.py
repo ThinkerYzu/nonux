@@ -207,6 +207,35 @@ class TestEndToEnd(unittest.TestCase):
                 manifests={})
             self.assertEqual(self.vc.main([str(kp), str(cd)]), 2)
 
+    def test_spawns_threads_without_pause_hook_errors(self):
+        # Slice 3.8 rule: a component that spawns kernel threads must
+        # also declare pause_hook: true so the pause protocol can quiesce
+        # them. Missing pause_hook is a config error, not a warning.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = pathlib.Path(d)
+            kp, cd = self._tree(tmp,
+                {"target": "t",
+                 "components": {"sweeper": {"impl": "sweeper_impl"}}},
+                {"sweeper_impl": {
+                    "name": "sweeper_impl", "version": "0.1.0",
+                    "spawns_threads": True,
+                    # pause_hook deliberately omitted
+                 }})
+            self.assertEqual(self.vc.main([str(kp), str(cd)]), 2)
+
+    def test_spawns_threads_with_pause_hook_ok(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = pathlib.Path(d)
+            kp, cd = self._tree(tmp,
+                {"target": "t",
+                 "components": {"sweeper": {"impl": "sweeper_impl"}}},
+                {"sweeper_impl": {
+                    "name": "sweeper_impl", "version": "0.1.0",
+                    "spawns_threads": True,
+                    "pause_hook": True,
+                 }})
+            self.assertEqual(self.vc.main([str(kp), str(cd)]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

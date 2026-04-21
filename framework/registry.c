@@ -227,13 +227,22 @@ static struct component_node *component_node_for(const struct nx_component *c)
     return NULL;
 }
 
-/* True if any registered slot's `active` is `c`. */
-static bool component_is_active_anywhere(const struct nx_component *c)
+bool nx_component_is_bound(const struct nx_component *c)
 {
+    if (!c) return false;
     for (struct slot_node *n = g_slots; n; n = n->next) {
         if (n->slot->active == c) return true;
     }
     return false;
+}
+
+void nx_component_foreach_bound_slot(const struct nx_component *c,
+                                     nx_slot_cb cb, void *ctx)
+{
+    if (!c || !cb) return;
+    for (struct slot_node *n = g_slots; n; n = n->next) {
+        if (n->slot->active == c) cb(n->slot, ctx);
+    }
 }
 
 /* ---------- Per-slot connection list helpers ----------------------------- */
@@ -274,6 +283,15 @@ int nx_slot_register(struct nx_slot *s)
     struct slot_node *n = calloc(1, sizeof *n);
     if (!n) return NX_ENOMEM;
 
+    /* atomic_init is the portable way to initialise an _Atomic member;
+     * subsequent operations must go through atomic_load / atomic_store.
+     * Without this, a caller-owned `struct nx_slot` zeroed by plain
+     * struct assignment or memset may not be well-defined per C11 even
+     * though it works on every host compiler we test on.  fallback is
+     * a plain pointer so a plain assignment is fine. */
+    atomic_init(&s->pause_state, NX_SLOT_PAUSE_NONE);
+    s->fallback = NULL;
+
     n->slot        = s;
     n->created_gen = bump_gen();
     n->next        = g_slots;
@@ -310,6 +328,32 @@ int nx_slot_swap(struct nx_slot *s, struct nx_component *new_impl)
     };
     emit_event(&ev);
     return NX_OK;
+}
+
+int nx_slot_set_fallback(struct nx_slot *s, struct nx_slot *fallback)
+{
+    struct slot_node *sn = slot_node_for(s);
+    if (!sn) return NX_ENOENT;
+    if (fallback == s) return NX_EINVAL;
+    if (fallback && !slot_node_for(fallback)) return NX_ENOENT;
+    s->fallback = fallback;
+    return NX_OK;
+}
+
+int nx_slot_set_pause_state(struct nx_slot *s, enum nx_slot_pause_state st)
+{
+    if (!slot_node_for(s)) return NX_ENOENT;
+    atomic_store_explicit(&s->pause_state, st, memory_order_release);
+    return NX_OK;
+}
+
+enum nx_slot_pause_state nx_slot_pause_state(const struct nx_slot *s)
+{
+    if (!s) return NX_SLOT_PAUSE_NONE;
+    /* Casting-away-const is sound: atomic_load reads only. */
+    return atomic_load_explicit(
+        (_Atomic(enum nx_slot_pause_state) *)&s->pause_state,
+        memory_order_acquire);
 }
 
 int nx_slot_unregister(struct nx_slot *s)
@@ -368,7 +412,7 @@ int nx_component_unregister(struct nx_component *c)
 {
     struct component_node *cn = component_node_for(c);
     if (!cn) return NX_ENOENT;
-    if (component_is_active_anywhere(c)) return NX_EBUSY;
+    if (nx_component_is_bound(c)) return NX_EBUSY;
 
     struct component_node **pp = &g_components;
     while (*pp && *pp != cn) pp = &(*pp)->next;
