@@ -231,10 +231,3 @@ tool filenames (`gen-config.py`, `validate-config.py`) as modules.
   generated deps headers.
 - [`tools/schemas/`](schemas/) — the authoritative JSON Schema
   definitions for both manifest and kernel config.
-- [`proj_docs/nonux/DESIGN.md`](../../proj_docs/nonux/DESIGN.md)
-  §Dependency Injection Mechanism — architectural rationale.
-- Session logs
-  [`session-10-dependency-injection.md`](../../proj_docs/nonux/logs/session-10-dependency-injection.md)
-  (slice 3.4) and
-  [`session-11-config-tooling.md`](../../proj_docs/nonux/logs/session-11-config-tooling.md)
-  (slice 3.5) — design decisions and known gotchas.
