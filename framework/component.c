@@ -92,3 +92,50 @@ int nx_component_destroy(struct nx_component *c)
 {
     return transition_from(c, NX_LC_READY, NX_LC_DESTROYED);
 }
+
+/* ---------- Dependency resolution (slice 3.4) -------------------------- */
+
+/*
+ * Walk the descriptor's dep list once.  For each dep we look up the slot
+ * by name, then:
+ *
+ *   - missing + required       → NX_ENOENT (leaves previously-written
+ *                                 pointers alone; caller is expected to
+ *                                 reset component state before retrying)
+ *   - missing + optional       → leave the slot pointer as-is, skip the
+ *                                 connection edge
+ *   - found                    → write the pointer, register a connection
+ *                                 edge from self_slot to the target
+ *
+ * `self_slot` may be NULL to signal a boot/external entry edge (the
+ * registry accepts from_slot == NULL as the boot-edge marker).  Writing
+ * the pointer happens *before* `connection_register` so a later ENOMEM
+ * from the registry doesn't leave the graph registered without the
+ * component field populated.
+ */
+int nx_resolve_deps(const struct nx_component_descriptor *d,
+                    struct nx_slot *self_slot,
+                    void *state)
+{
+    if (!d || !state) return NX_EINVAL;
+
+    for (size_t i = 0; i < d->n_deps; i++) {
+        const struct nx_dep_descriptor *dep = &d->deps[i];
+        struct nx_slot *tgt = nx_slot_lookup(dep->name);
+
+        if (!tgt) {
+            if (dep->required) return NX_ENOENT;
+            continue;
+        }
+
+        struct nx_slot **field = (struct nx_slot **)
+            ((char *)state + dep->offset);
+        *field = tgt;
+
+        int err = NX_OK;
+        nx_connection_register(self_slot, tgt,
+                               dep->mode, dep->stateful, dep->policy, &err);
+        if (err != NX_OK) return err;
+    }
+    return NX_OK;
+}

@@ -5,6 +5,12 @@
 *.img
 gen/
 
+# Python tooling (tools/ is stdlib-only for v1; venv exists for future
+# deps like jsonschema in slice 3.5).
+.venv/
+__pycache__/
+*.pyc
+
 # Editor
 *.swp
 *~

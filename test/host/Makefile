@@ -1,9 +1,11 @@
 # Host-side test build. Uses the system cc (not the cross-compiler) so tests
 # run on the dev machine with libc and a debugger attached.
 
-CC      ?= cc
-CFLAGS  := -Wall -Wextra -Werror -O0 -g -I../..
-LDFLAGS :=
+CC       ?= cc
+PYTHON   ?= python3
+CFLAGS   := -Wall -Wextra -Werror -O0 -g -I../.. -I.
+LDFLAGS  :=
+GENCONF  := ../../tools/gen-config.py
 
 # Tests + infrastructure:
 SRCS := main.c \
@@ -11,7 +13,8 @@ SRCS := main.c \
         mem_track.c \
         pmm_test.c \
         registry_test.c \
-        component_test.c
+        component_test.c \
+        component_deps_test.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
@@ -25,10 +28,21 @@ vpath %.c ../../core/pmm ../../core/lib ../../framework
 
 OBJS := $(notdir $(SRCS:.c=.o))
 
+# Generated headers for slice-3.4 dep-injection tests.  `component_deps_test.c`
+# consumes these via `#include "gen/<name>_deps.h"` — GCC's quote-form search
+# finds the header relative to the including file's directory (./gen/...).
+GEN_HEADERS := gen/sample_deps.h gen/trivial_deps.h
+
 all: run
 
 test_host: $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
+
+component_deps_test.o: $(GEN_HEADERS)
+
+gen/%_deps.h: fixtures/%_deps.json $(GENCONF)
+	@mkdir -p gen
+	$(PYTHON) $(GENCONF) $< gen/
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -37,6 +51,6 @@ run: test_host
 	./test_host
 
 clean:
-	rm -f test_host *.o
+	rm -rf test_host *.o gen/
 
 .PHONY: all run clean
