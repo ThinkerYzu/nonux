@@ -7,12 +7,13 @@ are the normative source; docs track them.
 
 ## Modules
 
-| Doc                                      | Header             | Role                                                                    |
-|------------------------------------------|--------------------|-------------------------------------------------------------------------|
+| Doc                                      | Header                  | Role                                                                    |
+|------------------------------------------|-------------------------|-------------------------------------------------------------------------|
 | [Registry](framework-registry.md)        | `framework/registry.h`  | Slots, components, connections; events, change log, snapshots, JSON. The source of truth for the running composition. |
 | [Component lifecycle](framework-components.md) | `framework/component.h` | Six-verb lifecycle state machine, `struct nx_component_ops`, dependency resolver, `NX_COMPONENT_REGISTER` macro. |
 | [IPC router](framework-ipc.md)           | `framework/ipc.h`       | `nx_ipc_send` / dispatch, per-slot inbox, per-edge hold queue, pause-policy routing, capabilities, `slot_ref_retain/release`. |
 | [Hook framework](framework-hooks.md)     | `framework/hook.h`      | Per-hook-point chains, priority-sorted insert, typed context union, mark-then-sweep unregister. |
+| [Bootstrap](framework-bootstrap.md)      | `framework/bootstrap.h` | `nx_framework_bootstrap()` — walks the `nx_components` linker section at boot, registers slots + components, runs init / enable in topo order, dumps composition. |
 
 ## Error codes
 
@@ -65,11 +66,13 @@ every case so state from previous tests is gone.
 
 ## Thread model
 
-Slice 3.6–3.8 runs on a single-threaded host build. The kernel boot
-path (slice 3.9) upgrades the inbox to an MPSC lock-free queue with
-a per-CPU dispatcher thread. The public APIs in the docs below don't
-change across that upgrade — the synchronisation primitives inside
-`registry.c` / `ipc.c` do.
+Slice 3.6–3.9a runs on a single-threaded model. Slice 3.9a brings
+the framework up inline on the boot thread — composition bring-up,
+hook dispatch, and `nx_ipc_dispatch` all run on the caller. Slice
+3.9b upgrades the async inbox to an MPSC lock-free queue with a
+per-CPU dispatcher thread once Phase 4 provides kthread spawning;
+the public APIs below don't change across that upgrade, only the
+synchronisation primitives inside `registry.c` / `ipc.c`.
 
 `pause_state` on `struct nx_slot` is already `_Atomic` so the SMP
 upgrade is a barrier swap, not a restructure.

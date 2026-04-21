@@ -50,9 +50,9 @@ real headers. Headers are the normative source; docs track them.</p>
 <h2 id="modules">Modules</h2>
 <table>
 <colgroup>
-<col style="width: 31%" />
-<col style="width: 14%" />
-<col style="width: 54%" />
+<col style="width: 30%" />
+<col style="width: 17%" />
+<col style="width: 52%" />
 </colgroup>
 <thead>
 <tr class="header">
@@ -87,6 +87,13 @@ queue, pause-policy routing, capabilities,
 <td><code>framework/hook.h</code></td>
 <td>Per-hook-point chains, priority-sorted insert, typed context union,
 mark-then-sweep unregister.</td>
+</tr>
+<tr class="odd">
+<td><a href="framework-bootstrap.html">Bootstrap</a></td>
+<td><code>framework/bootstrap.h</code></td>
+<td><code>nx_framework_bootstrap()</code> — walks the
+<code>nx_components</code> linker section at boot, registers slots +
+components, runs init / enable in topo order, dumps composition.</td>
 </tr>
 </tbody>
 </table>
@@ -207,11 +214,13 @@ queue.</td>
 framework state. On the host build, tests call them at the top of every
 case so state from previous tests is gone.</p>
 <h2 id="thread-model">Thread model</h2>
-<p>Slice 3.6–3.8 runs on a single-threaded host build. The kernel boot
-path (slice 3.9) upgrades the inbox to an MPSC lock-free queue with a
-per-CPU dispatcher thread. The public APIs in the docs below don’t
-change across that upgrade — the synchronisation primitives inside
-<code>registry.c</code> / <code>ipc.c</code> do.</p>
+<p>Slice 3.6–3.9a runs on a single-threaded model. Slice 3.9a brings the
+framework up inline on the boot thread — composition bring-up, hook
+dispatch, and <code>nx_ipc_dispatch</code> all run on the caller. Slice
+3.9b upgrades the async inbox to an MPSC lock-free queue with a per-CPU
+dispatcher thread once Phase 4 provides kthread spawning; the public
+APIs below don’t change across that upgrade, only the synchronisation
+primitives inside <code>registry.c</code> / <code>ipc.c</code>.</p>
 <p><code>pause_state</code> on <code>struct nx_slot</code> is already
 <code>_Atomic</code> so the SMP upgrade is a barrier swap, not a
 restructure.</p>

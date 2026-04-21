@@ -359,7 +359,7 @@ id="struct-nx_component_ops"><code>struct nx_component_ops</code></h2>
 <code>self = component-&gt;impl</code>.</strong> This is the component’s
 private state pointer. All ops are optional — a NULL slot is a no-op as
 far as the framework is concerned.</p>
-<p><strong>Which ops are called today (slice 3.8):</strong></p>
+<p><strong>Which ops are called today (slice 3.9a):</strong></p>
 <table>
 <colgroup>
 <col style="width: 17%" />
@@ -374,12 +374,13 @@ far as the framework is concerned.</p>
 <tbody>
 <tr class="odd">
 <td><code>init</code></td>
-<td>Not yet — slice 3.9’s boot walker will invoke it during
-bring-up.</td>
+<td><code>nx_component_init</code>, before the
+<code>UNINIT → READY</code> transition.</td>
 </tr>
 <tr class="even">
 <td><code>enable</code></td>
-<td>Not yet — slice 3.9.</td>
+<td><code>nx_component_enable</code>, after the hook fires, before the
+<code>READY → ACTIVE</code> transition.</td>
 </tr>
 <tr class="odd">
 <td><code>pause_hook</code></td>
@@ -397,11 +398,13 @@ state.</td>
 </tr>
 <tr class="even">
 <td><code>disable</code></td>
-<td>Not yet — slice 3.9.</td>
+<td><code>nx_component_disable</code>, after the hook fires, before the
+state transition.</td>
 </tr>
 <tr class="odd">
 <td><code>destroy</code></td>
-<td>Not yet — slice 3.9.</td>
+<td><code>nx_component_destroy</code>, after the bound-slot guard,
+before the <code>READY → DESTROYED</code> transition.</td>
 </tr>
 <tr class="even">
 <td><code>handle_msg</code></td>

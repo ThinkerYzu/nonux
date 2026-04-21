@@ -103,7 +103,7 @@ v1.
 
 ### `gen-config.py kernel <kernel.json> <components_dir> <outdir>`
 
-Reads the top-level `kernel.json` and emits two files:
+Reads the top-level `kernel.json` and emits three files:
 
 - **`<outdir>/config.h`** — kernel config `#define`s:
   - `NX_TARGET` — the target triple (e.g. `"aarch64-qemu-virt"`)
@@ -119,6 +119,13 @@ Reads the top-level `kernel.json` and emits two files:
 - **`<outdir>/sources.mk`** — deduplicated, sorted
   `COMPONENT_SRCS := components/<impl>/<impl>.c \ …` list for
   `-include` by the top-level Makefile.
+- **`<outdir>/slot_table.c`** (slice 3.9a) — one static
+  `struct nx_slot` per binding plus an `nx_boot_slots[]` binding
+  array and an `nx_boot_slots_count`. `framework/bootstrap.c` walks
+  this table at boot to register slots and bind descriptors to them.
+  The in-struct slot identifier mirrors the config.h macro
+  (`char_device.serial` → `nx_slot_char_device_serial`); the iface
+  is the part before the first `.`.
 
 `components_dir` is accepted but unused today — reserved for slice
 3.7's cross-manifest checks; pass `components/`.
@@ -154,11 +161,10 @@ Reads the top-level `kernel.json` and emits two files:
 make kernel-config      # phony target — emits both files
 ```
 
-`make kernel-config` is deliberately phony (the files are a recipe
-*side-effect*, not named outputs). If the rule named them as outputs,
-the top-level `-include gen/sources.mk` would auto-trigger a rebuild
-that cascades into missing-source link errors until every component
-referenced in `kernel.json` actually exists (Phase 4+).
+Since slice 3.9a, `gen/sources.mk` and `gen/slot_table.c` are
+real Makefile targets so `make` auto-regenerates them when
+`kernel.json` changes or they're missing. `make kernel-config`
+stays as a convenience alias.
 
 ---
 

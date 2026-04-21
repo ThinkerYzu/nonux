@@ -189,17 +189,17 @@ struct nx_component_ops {
 component's private state pointer. All ops are optional — a NULL
 slot is a no-op as far as the framework is concerned.
 
-**Which ops are called today (slice 3.8):**
+**Which ops are called today (slice 3.9a):**
 
 | Op            | Called from                                                             |
 |---------------|-------------------------------------------------------------------------|
-| `init`        | Not yet — slice 3.9's boot walker will invoke it during bring-up.       |
-| `enable`      | Not yet — slice 3.9.                                                    |
+| `init`        | `nx_component_init`, before the `UNINIT → READY` transition.            |
+| `enable`      | `nx_component_enable`, after the hook fires, before the `READY → ACTIVE` transition. |
 | `pause_hook`  | `nx_component_pause`, between cutoff/drain and `ops->pause`.            |
 | `pause`       | `nx_component_pause`, after `pause_hook`.                               |
 | `resume`      | `nx_component_resume`, before clearing slot pause state.                |
-| `disable`     | Not yet — slice 3.9.                                                    |
-| `destroy`     | Not yet — slice 3.9.                                                    |
+| `disable`     | `nx_component_disable`, after the hook fires, before the state transition. |
+| `destroy`     | `nx_component_destroy`, after the bound-slot guard, before the `READY → DESTROYED` transition. |
 | `handle_msg`  | `nx_ipc_dispatch` and the sync `nx_ipc_send` shortcut.                  |
 
 **`pause_hook` semantics.** Called during the pause protocol between
