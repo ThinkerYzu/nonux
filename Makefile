@@ -17,7 +17,8 @@ QEMU_FLAGS := -M virt,gic-version=2 -cpu cortex-a53 -nographic -kernel kernel.bi
 
 # Core sources (always compiled)
 CORE_S   := core/boot/start.S \
-            core/cpu/vectors.S
+            core/cpu/vectors.S \
+            core/cpu/context.S
 CORE_C   := core/boot/boot.c \
             core/lib/string.c \
             core/lib/printf.c \
@@ -26,7 +27,9 @@ CORE_C   := core/boot/boot.c \
             core/pmm/pmm.c \
             core/irq/irq.c \
             core/irq/gic.c \
-            core/timer/timer.c
+            core/timer/timer.c \
+            core/sched/task.c \
+            core/sched/sched.c
 
 # Framework sources — compiled into every kernel build since slice 3.9a.
 # Host tests compile these via test/host/Makefile with system cc instead.
@@ -147,7 +150,8 @@ venv: $(VENV_STAMP)
 KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_pmm.c \
                  test/kernel/ktest_irq.c \
-                 test/kernel/ktest_bootstrap.c
+                 test/kernel/ktest_bootstrap.c \
+                 test/kernel/ktest_context.c
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
 core/boot/boot-test.o: core/boot/boot.c

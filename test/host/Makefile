@@ -18,7 +18,8 @@ SRCS := main.c \
         component_ipc_test.c \
         component_hook_test.c \
         component_pause_test.c \
-        component_destroy_test.c
+        component_destroy_test.c \
+        task_test.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
@@ -26,11 +27,13 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/registry.c \
         ../../framework/component.c \
         ../../framework/ipc.c \
-        ../../framework/hook.c
+        ../../framework/hook.c \
+        ../../core/sched/task.c \
+        ../../core/sched/sched.c
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
-vpath %.c ../../core/pmm ../../core/lib ../../framework
+vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched
 
 OBJS := $(notdir $(SRCS:.c=.o))
 
