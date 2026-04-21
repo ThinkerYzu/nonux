@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>framework-registry – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {  background-color: #f8f8f8; }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ef2929; } /* Alert */
+    code span.an { color: #8f5902; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #204a87; } /* Attribute */
+    code span.bn { color: #0000cf; } /* BaseN */
+    code span.cf { color: #204a87; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4e9a06; } /* Char */
+    code span.cn { color: #8f5902; } /* Constant */
+    code span.co { color: #8f5902; font-style: italic; } /* Comment */
+    code span.cv { color: #8f5902; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #8f5902; font-weight: bold; font-style: italic; } /* Documentation */
+    code span.dt { color: #204a87; } /* DataType */
+    code span.dv { color: #0000cf; } /* DecVal */
+    code span.er { color: #a40000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #0000cf; } /* Float */
+    code span.fu { color: #204a87; font-weight: bold; } /* Function */
+    code span.im { } /* Import */
+    code span.in { color: #8f5902; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #204a87; font-weight: bold; } /* Keyword */
+    code span.op { color: #ce5c00; font-weight: bold; } /* Operator */
+    code span.ot { color: #8f5902; } /* Other */
+    code span.pp { color: #8f5902; font-style: italic; } /* Preprocessor */
+    code span.sc { color: #ce5c00; font-weight: bold; } /* SpecialChar */
+    code span.ss { color: #4e9a06; } /* SpecialString */
+    code span.st { color: #4e9a06; } /* String */
+    code span.va { color: #000000; } /* Variable */
+    code span.vs { color: #4e9a06; } /* VerbatimString */
+    code span.wa { color: #8f5902; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#registry-frameworkregistry.hc"
+id="toc-registry-frameworkregistry.hc">Registry —
+<code>framework/registry.{h,c}</code></a>
+<ul>
+<li><a href="#concepts" id="toc-concepts">Concepts</a>
+<ul>
+<li><a href="#slot" id="toc-slot">Slot</a></li>
+<li><a href="#component" id="toc-component">Component</a></li>
+<li><a href="#connection" id="toc-connection">Connection</a></li>
+<li><a href="#generation" id="toc-generation">Generation</a></li>
+<li><a href="#pause-state" id="toc-pause-state">Pause state</a></li>
+<li><a href="#fallback" id="toc-fallback">Fallback</a></li>
+</ul></li>
+<li><a href="#types" id="toc-types">Types</a>
+<ul>
+<li><a href="#enums" id="toc-enums">Enums</a></li>
+<li><a href="#struct-nx_slot-caller-owned"
+id="toc-struct-nx_slot-caller-owned"><code>struct nx_slot</code>
+(caller-owned)</a></li>
+<li><a href="#struct-nx_component-caller-owned"
+id="toc-struct-nx_component-caller-owned"><code>struct nx_component</code>
+(caller-owned)</a></li>
+<li><a href="#struct-nx_connection"
+id="toc-struct-nx_connection"><code>struct nx_connection</code></a></li>
+</ul></li>
+<li><a href="#mutation-api" id="toc-mutation-api">Mutation API</a>
+<ul>
+<li><a href="#slots" id="toc-slots">Slots</a></li>
+<li><a href="#components" id="toc-components">Components</a></li>
+<li><a href="#connections" id="toc-connections">Connections</a></li>
+<li><a href="#introspection"
+id="toc-introspection">Introspection</a></li>
+<li><a href="#traversal" id="toc-traversal">Traversal</a></li>
+</ul></li>
+<li><a href="#events-and-subscribers"
+id="toc-events-and-subscribers">Events and subscribers</a>
+<ul>
+<li><a href="#callback-discipline" id="toc-callback-discipline">Callback
+discipline</a></li>
+</ul></li>
+<li><a href="#change-log-registrator"
+id="toc-change-log-registrator">Change log (registrator)</a></li>
+<li><a href="#snapshots" id="toc-snapshots">Snapshots</a></li>
+<li><a href="#json-serialisation" id="toc-json-serialisation">JSON
+serialisation</a></li>
+<li><a href="#lifecycle-of-the-registry-itself"
+id="toc-lifecycle-of-the-registry-itself">Lifecycle of the registry
+itself</a></li>
+<li><a href="#invariants" id="toc-invariants">Invariants</a></li>
+<li><a href="#atomic-init-gotcha"
+id="toc-atomic-init-gotcha">Atomic-init gotcha</a></li>
+<li><a href="#example-registering-a-slot-and-listening-for-mutations"
+id="toc-example-registering-a-slot-and-listening-for-mutations">Example
+— registering a slot and listening for mutations</a></li>
+<li><a href="#example-dumping-the-live-composition"
+id="toc-example-dumping-the-live-composition">Example — dumping the live
+composition</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="registry-frameworkregistry.hc">Registry —
+<code>framework/registry.{h,c}</code></h1>
+<p>The Component Graph Registry is the single source of truth for “what
+is the kernel built out of right now?” Every slot, every component, and
+every connection edge in the running composition is registered here.
+Instrumentation, hot-swap, the test harness, and AI reviewers all
+consume the same graph.</p>
+<p>This module owns:</p>
+<ol type="1">
+<li><p><strong>Caller-owned framework objects</strong> —
+<code>struct nx_slot</code>, <code>struct nx_component</code>,
+<code>struct nx_connection</code>.</p></li>
+<li><p><strong>Mutation API</strong> — register, unregister, swap,
+retune.</p></li>
+<li><p><strong>Lookup and traversal</strong> — by name, by
+neighbourhood.</p></li>
+<li><p><strong>Change events</strong> — 9 typed <code>NX_EV_*</code>
+events delivered to subscribers synchronously after each
+mutation.</p></li>
+<li><p><strong>Bounded change log</strong> — a 256-entry ring buffer of
+every event, readable by <code>since_gen</code>.</p></li>
+<li><p><strong>Mutation-stable snapshots</strong> — refcounted views
+frozen at a generation; JSON serialisable.</p></li>
+</ol>
+<hr />
+<h2 id="concepts">Concepts</h2>
+<h3 id="slot">Slot</h3>
+<p>A <strong>slot</strong> names a typed connection point. Example: the
+“scheduler” slot has iface <code>"scheduler"</code>; any component that
+implements the scheduler interface can be bound as its
+<code>active</code> impl. Slots are identified by their string
+<code>name</code> (globally unique within the registry).</p>
+<h3 id="component">Component</h3>
+<p>A <strong>component</strong> is a registered implementation instance.
+Identified by the pair <code>(manifest_id, instance_id)</code> so the
+same manifest can have multiple instances (e.g. two
+<code>mm_buddy</code> zones). Carries a <code>descriptor</code> (ops
+table, dep list — see <a href="framework-components.html">Component
+lifecycle</a>) and an <code>impl</code> pointer for the component’s
+private state.</p>
+<h3 id="connection">Connection</h3>
+<p>A <strong>connection</strong> is a directed edge
+<code>(from_slot → to_slot)</code>. Carries mode
+(<code>async</code>/<code>sync</code>), stateful flag, and
+pause-protocol policy (<code>NX_PAUSE_QUEUE</code> / <code>REJECT</code>
+/ <code>REDIRECT</code>). <code>from_slot == NULL</code> means a boot /
+external entry edge.</p>
+<h3 id="generation">Generation</h3>
+<p>Every mutation bumps a monotonic <code>uint64_t</code>. Event
+payloads and snapshots carry the generation at which they were emitted,
+so readers can order events and detect whether their view is up to
+date.</p>
+<h3 id="pause-state">Pause state</h3>
+<p>Slots carry an <code>_Atomic(enum nx_slot_pause_state)</code> flag
+driven by the pause protocol
+(<code>NONE → CUTTING → DRAINING → DONE</code>). The IPC router reads it
+on every send; see <a href="framework-ipc.html">IPC</a> and <a
+href="framework-components.html">Component lifecycle</a> for the
+protocol.</p>
+<h3 id="fallback">Fallback</h3>
+<p>Slots carry an optional <code>fallback</code> pointer used by the
+<code>NX_PAUSE_REDIRECT</code> policy: when the slot is paused and the
+connection’s policy is REDIRECT, the router re-routes to the fallback.
+Set via <code>nx_slot_set_fallback</code>.</p>
+<hr />
+<h2 id="types">Types</h2>
+<h3 id="enums">Enums</h3>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_lifecycle_state <span class="op">{</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    NX_LC_UNINIT <span class="op">=</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>    NX_LC_INIT<span class="op">,</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>    NX_LC_READY<span class="op">,</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>    NX_LC_ACTIVE<span class="op">,</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>    NX_LC_PAUSED<span class="op">,</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>    NX_LC_DESTROYED<span class="op">,</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_conn_mode       <span class="op">{</span> NX_CONN_ASYNC <span class="op">=</span> <span class="dv">0</span><span class="op">,</span> NX_CONN_SYNC <span class="op">};</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_pause_policy    <span class="op">{</span> NX_PAUSE_QUEUE <span class="op">=</span> <span class="dv">0</span><span class="op">,</span> NX_PAUSE_REJECT<span class="op">,</span> NX_PAUSE_REDIRECT <span class="op">};</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_slot_mutability <span class="op">{</span> NX_MUT_HOT <span class="op">=</span> <span class="dv">0</span><span class="op">,</span> NX_MUT_WARM<span class="op">,</span> NX_MUT_FROZEN <span class="op">};</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_slot_concurrency<span class="op">{</span> NX_CONC_SHARED <span class="op">=</span> <span class="dv">0</span><span class="op">,</span> NX_CONC_SERIALIZED<span class="op">,</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>                          NX_CONC_PER_CPU<span class="op">,</span> NX_CONC_DEDICATED <span class="op">};</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_slot_pause_state <span class="op">{</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>    NX_SLOT_PAUSE_NONE <span class="op">=</span> <span class="dv">0</span><span class="op">,</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>    NX_SLOT_PAUSE_CUTTING<span class="op">,</span>       <span class="co">/* rejecting new sends per policy */</span></span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    NX_SLOT_PAUSE_DRAINING<span class="op">,</span>      <span class="co">/* inbox being drained */</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>    NX_SLOT_PAUSE_DONE<span class="op">,</span>          <span class="co">/* pause_hook + ops-&gt;pause ran */</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<h3 id="struct-nx_slot-caller-owned"><code>struct nx_slot</code>
+(caller-owned)</h3>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_slot <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">char</span>              <span class="op">*</span>name<span class="op">;</span>         <span class="co">/* unique, e.g. &quot;scheduler&quot; */</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">char</span>              <span class="op">*</span>iface<span class="op">;</span>        <span class="co">/* e.g. &quot;scheduler&quot; */</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_slot_mutability  mutability<span class="op">;</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_slot_concurrency concurrency<span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_component     <span class="op">*</span>active<span class="op">;</span>       <span class="co">/* NULL until bound */</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_slot          <span class="op">*</span>fallback<span class="op">;</span>     <span class="co">/* NULL until set */</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="kw">_Atomic</span><span class="op">(</span><span class="kw">enum</span> nx_slot_pause_state<span class="op">)</span> pause_state<span class="op">;</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p>Callers provide <code>name</code> and <code>iface</code>;
+<code>active</code>, <code>fallback</code>, and <code>pause_state</code>
+are written by the framework (the registry explicitly re-initialises
+<code>fallback</code> and <code>pause_state</code> on
+<code>nx_slot_register</code> — see note below).</p>
+<h3
+id="struct-nx_component-caller-owned"><code>struct nx_component</code>
+(caller-owned)</h3>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_component <span class="op">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">char</span>                            <span class="op">*</span>manifest_id<span class="op">;</span> <span class="co">/* &quot;sched_rr&quot; */</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">char</span>                            <span class="op">*</span>instance_id<span class="op">;</span> <span class="co">/* unique within manifest_id */</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_lifecycle_state                state<span class="op">;</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">void</span>                                  <span class="op">*</span>impl<span class="op">;</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="kw">struct</span> nx_component_descriptor  <span class="op">*</span>descriptor<span class="op">;</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p><code>descriptor</code> and <code>impl</code> are caller-owned; the
+registry does not touch them except via the published APIs
+(<code>nx_component_state_set</code>, etc.).</p>
+<h3 id="struct-nx_connection"><code>struct nx_connection</code></h3>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_connection <span class="op">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_slot         <span class="op">*</span>from_slot<span class="op">;</span>      <span class="co">/* NULL = boot/external edge */</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_slot         <span class="op">*</span>to_slot<span class="op">;</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_conn_mode       mode<span class="op">;</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">bool</span>                    stateful<span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_pause_policy    policy<span class="op">;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span>                installed_gen<span class="op">;</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<p>Connection storage is allocated by
+<code>nx_connection_register</code> and freed by
+<code>nx_connection_unregister</code> — unlike slots / components,
+callers do not provide the struct.</p>
+<hr />
+<h2 id="mutation-api">Mutation API</h2>
+<h3 id="slots">Slots</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_slot_register      <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_slot_swap          <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">,</span> <span class="kw">struct</span> nx_component <span class="op">*</span>new_impl<span class="op">);</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_slot_unregister    <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_slot_set_fallback  <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">,</span> <span class="kw">struct</span> nx_slot <span class="op">*</span>fallback<span class="op">);</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_slot_set_pause_state<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">,</span> <span class="kw">enum</span> nx_slot_pause_state st<span class="op">);</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_slot_pause_state nx_slot_pause_state<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p><code>nx_slot_register(s)</code> — records <code>s</code> in the
+registry. <code>s-&gt;name</code> and <code>s-&gt;iface</code> must be
+set; the registry re-initialises <code>s-&gt;fallback = NULL</code> and
+<code>s-&gt;pause_state = NX_SLOT_PAUSE_NONE</code> (via
+<code>atomic_init</code> — see <em>atomic init gotcha</em> below). Emits
+<code>NX_EV_SLOT_CREATED</code>. Returns <code>NX_EINVAL</code> on NULL
+/ missing name, <code>NX_EEXIST</code> on duplicate name.</p></li>
+<li><p><code>nx_slot_swap(s, new_impl)</code> — retargets
+<code>s-&gt;active</code>. <code>new_impl</code> may be NULL (unbind).
+<code>new_impl</code> must be registered, or <code>NX_ENOENT</code>.
+Emits <code>NX_EV_SLOT_SWAPPED</code>.</p></li>
+<li><p><code>nx_slot_unregister(s)</code> — refuses with
+<code>NX_EBUSY</code> if <code>s</code> is bound as endpoint of any
+connection; caller must drop connections first. Emits
+<code>NX_EV_SLOT_DESTROYED</code>.</p></li>
+<li><p><code>nx_slot_set_fallback(s, fb)</code> — <code>fb</code> may be
+NULL (clears); self-loop (<code>s == fb</code>) returns
+<code>NX_EINVAL</code>; unregistered <code>fb</code> returns
+<code>NX_ENOENT</code>. Does NOT emit an event — fallbacks are wiring
+metadata, not part of the live composition graph.</p></li>
+<li><p><code>nx_slot_set_pause_state(s, st)</code> /
+<code>nx_slot_pause_state(s)</code> — release-store / acquire-load on
+the atomic. Used by the pause protocol; most code observes pause state
+via the router’s behaviour, not directly. Returns
+<code>NX_SLOT_PAUSE_NONE</code> for a NULL or unregistered slot on the
+getter.</p></li>
+</ul>
+<h3 id="components">Components</h3>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_component_register  <span class="op">(</span><span class="kw">struct</span> nx_component <span class="op">*</span>c<span class="op">);</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_component_unregister<span class="op">(</span><span class="kw">struct</span> nx_component <span class="op">*</span>c<span class="op">);</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_component_state_set <span class="op">(</span><span class="kw">struct</span> nx_component <span class="op">*</span>c<span class="op">,</span> <span class="kw">enum</span> nx_lifecycle_state s<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p><code>nx_component_register(c)</code> — requires
+<code>manifest_id</code> + <code>instance_id</code>. Duplicate
+<code>(manifest_id, instance_id)</code> pair returns
+<code>NX_EEXIST</code>. Emits
+<code>NX_EV_COMPONENT_REGISTERED</code>.</p></li>
+<li><p><code>nx_component_unregister(c)</code> — refuses with
+<code>NX_EBUSY</code> if <code>c</code> is bound as <code>active</code>
+on any slot. Emits <code>NX_EV_COMPONENT_UNREGISTERED</code>.</p></li>
+<li><p><code>nx_component_state_set(c, s)</code> — raw state setter; the
+lifecycle state machine in <code>framework/component.c</code> is the
+normal entry point (see <a href="framework-components.html">Component
+lifecycle</a>). Emits <code>NX_EV_COMPONENT_STATE { from, to }</code>.
+Does not enforce the legal transition matrix — callers who need that go
+through
+<code>nx_component_{init,enable,pause,resume,disable,destroy}</code>.</p></li>
+</ul>
+<h3 id="connections">Connections</h3>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_connection <span class="op">*</span>nx_connection_register<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>from<span class="op">,</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>                                             <span class="kw">struct</span> nx_slot <span class="op">*</span>to<span class="op">,</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>                                             <span class="kw">enum</span> nx_conn_mode mode<span class="op">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>                                             <span class="dt">bool</span> stateful<span class="op">,</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>                                             <span class="kw">enum</span> nx_pause_policy policy<span class="op">,</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>                                             <span class="dt">int</span> <span class="op">*</span>err<span class="op">);</span></span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> nx_connection_retune     <span class="op">(</span><span class="kw">struct</span> nx_connection <span class="op">*</span>c<span class="op">,</span></span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>                              <span class="kw">enum</span> nx_conn_mode mode<span class="op">,</span> <span class="dt">bool</span> stateful<span class="op">);</span></span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> nx_connection_unregister <span class="op">(</span><span class="kw">struct</span> nx_connection <span class="op">*</span>c<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p><code>nx_connection_register</code> — returns the new
+<code>struct nx_connection *</code> on success, or NULL with
+<code>*err</code> set on failure. <code>from</code> may be NULL
+(boot/external edge); <code>to</code> is required. Emits
+<code>NX_EV_CONNECTION_ADDED</code>. <code>err</code> pointer may itself
+be NULL if caller doesn’t care about the diagnostic.</p></li>
+<li><p><code>nx_connection_retune(c, mode, stateful)</code> — changes
+routing mode (sync ↔︎ async) and/or stateful flag without dropping the
+edge. Emits <code>NX_EV_CONNECTION_RETUNED</code>.</p></li>
+<li><p><code>nx_connection_unregister(c)</code> — removes the edge and
+frees it. Emits <code>NX_EV_CONNECTION_REMOVED</code>.</p></li>
+</ul>
+<h3 id="introspection">Introspection</h3>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_slot      <span class="op">*</span>nx_slot_lookup     <span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">);</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_component <span class="op">*</span>nx_component_lookup<span class="op">(</span><span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>manifest_id<span class="op">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>                                         <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>instance_id<span class="op">);</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="dt">uint64_t</span> nx_graph_generation       <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_graph_slot_count       <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_graph_component_count  <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_graph_connection_count <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="dt">bool</span>     nx_component_is_bound          <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_component <span class="op">*</span>c<span class="op">);</span></span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span>     nx_component_foreach_bound_slot<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_component <span class="op">*</span>c<span class="op">,</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>                                         nx_slot_cb cb<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p><code>nx_component_is_bound(c)</code> — true if <code>c</code> is
+the <code>active</code> impl of at least one registered slot. Used by
+the destroy guard and by the pause protocol.</p></li>
+<li><p><code>nx_component_foreach_bound_slot(c, cb, ctx)</code> —
+invokes <code>cb(slot,   ctx)</code> for every slot whose
+<code>active == c</code>. The pause protocol walks these to drive
+per-slot state.</p></li>
+</ul>
+<h3 id="traversal">Traversal</h3>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">void</span> <span class="op">(*</span>nx_slot_cb<span class="op">)</span>      <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*,</span>       <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">void</span> <span class="op">(*</span>nx_component_cb<span class="op">)</span> <span class="op">(</span><span class="kw">struct</span> nx_component <span class="op">*,</span>  <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">void</span> <span class="op">(*</span>nx_connection_cb<span class="op">)(</span><span class="kw">struct</span> nx_connection <span class="op">*,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_graph_foreach_slot      <span class="op">(</span>nx_slot_cb cb<span class="op">,</span>       <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_graph_foreach_component <span class="op">(</span>nx_component_cb cb<span class="op">,</span>  <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_graph_foreach_connection<span class="op">(</span>nx_connection_cb cb<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="co">/* Per-slot neighbourhoods (O(deg), not O(all-connections)). */</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_slot_foreach_dependent  <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">,</span> nx_connection_cb cb<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_slot_foreach_dependency <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>s<span class="op">,</span> nx_connection_cb cb<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><code>dependent</code> = edges where <code>s</code> is the
+<code>to_slot</code> (who depends on <code>s</code>).</li>
+<li><code>dependency</code> = edges where <code>s</code> is the
+<code>from_slot</code> (what <code>s</code> depends on).</li>
+</ul>
+<p>Order within a foreach is not guaranteed (currently linked-list
+insertion order, reversed) — do not rely on it.</p>
+<hr />
+<h2 id="events-and-subscribers">Events and subscribers</h2>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_graph_event_type <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    NX_EV_SLOT_CREATED <span class="op">=</span> <span class="dv">1</span><span class="op">,</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    NX_EV_SLOT_DESTROYED<span class="op">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    NX_EV_SLOT_SWAPPED<span class="op">,</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    NX_EV_COMPONENT_REGISTERED<span class="op">,</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>    NX_EV_COMPONENT_UNREGISTERED<span class="op">,</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>    NX_EV_COMPONENT_STATE<span class="op">,</span></span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>    NX_EV_CONNECTION_ADDED<span class="op">,</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>    NX_EV_CONNECTION_REMOVED<span class="op">,</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>    NX_EV_CONNECTION_RETUNED<span class="op">,</span></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_graph_event <span class="op">{</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_graph_event_type type<span class="op">;</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span>                 generation<span class="op">;</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint64_t</span>                 timestamp_ns<span class="op">;</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>    <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">;</span> <span class="op">}</span> slot<span class="op">;</span></span>
+<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>slot_name<span class="op">;</span></span>
+<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>                 <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>old_manifest<span class="op">,</span> <span class="op">*</span>old_instance<span class="op">;</span></span>
+<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>                 <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>new_manifest<span class="op">,</span> <span class="op">*</span>new_instance<span class="op">;</span> <span class="op">}</span> swap<span class="op">;</span></span>
+<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>manifest_id<span class="op">,</span> <span class="op">*</span>instance_id<span class="op">;</span> <span class="op">}</span> comp<span class="op">;</span></span>
+<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span>             <span class="op">*</span>manifest_id<span class="op">,</span> <span class="op">*</span>instance_id<span class="op">;</span></span>
+<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a>                 <span class="kw">enum</span> nx_lifecycle_state from<span class="op">,</span> to<span class="op">;</span> <span class="op">}</span> state<span class="op">;</span></span>
+<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span>       <span class="op">*</span>from_slot<span class="op">,</span> <span class="op">*</span>to_slot<span class="op">;</span></span>
+<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>                 <span class="kw">enum</span> nx_conn_mode mode<span class="op">;</span></span>
+<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>                 <span class="dt">bool</span>              stateful<span class="op">;</span> <span class="op">}</span> conn<span class="op">;</span></span>
+<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> u<span class="op">;</span></span>
+<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a><span class="kw">typedef</span> <span class="dt">void</span> <span class="op">(*</span>nx_graph_event_cb<span class="op">)(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_event <span class="op">*</span>ev<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_graph_subscribe  <span class="op">(</span>nx_graph_event_cb cb<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span>
+<span id="cb10-34"><a href="#cb10-34" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_graph_unsubscribe<span class="op">(</span>nx_graph_event_cb cb<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p>Subscribers are stored in a fixed-capacity array
+(<code>NX_MAX_SUBSCRIBERS</code>). <code>nx_graph_subscribe</code>
+deduplicates on <code>(cb, ctx)</code> — duplicate registration returns
+<code>NX_EEXIST</code>. Capacity overflow returns
+<code>NX_ENOMEM</code>.</p></li>
+<li><p>Events are delivered <strong>synchronously</strong> from inside
+the mutation path, after the generation bump, before the mutation API
+returns. Subscribers therefore observe the new state.</p></li>
+<li><p>Event strings (<code>name</code>, <code>manifest_id</code>, etc.)
+point at caller-owned static storage on the original
+<code>nx_slot</code> / <code>nx_component</code> — do
+<strong>not</strong> retain them past the underlying struct’s
+lifetime.</p></li>
+</ul>
+<h3 id="callback-discipline">Callback discipline</h3>
+<p>Subscriber callbacks must:</p>
+<ul>
+<li><p>Be <strong>short</strong> — they run inside a lock / dispatcher
+hot path.</p></li>
+<li><p>Be <strong>non-blocking</strong> — no waits, no IPC sends (IPC
+sends can emit events themselves; re-entry is undefined today).</p></li>
+<li><p>Treat strings as <strong>borrowed</strong> — copy anything that
+needs to outlive the call.</p></li>
+</ul>
+<p>Intended consumers are instrumentation recorders, the recomposer’s
+invariant checker, and test watchers.</p>
+<hr />
+<h2 id="change-log-registrator">Change log (registrator)</h2>
+<p>A bounded append-only ring buffer of every event ever emitted.
+Capacity fixed at <code>NX_CHANGE_LOG_CAPACITY = 256</code>. Writes are
+atomic against concurrent readers via C11 atomics on the head / total
+counters. On overflow, the oldest entries are silently overwritten.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dt">uint64_t</span> nx_change_log_total<span class="op">(</span><span class="dt">void</span><span class="op">);</span>             <span class="co">/* monotonic — may exceed capacity */</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_change_log_size <span class="op">(</span><span class="dt">void</span><span class="op">);</span>             <span class="co">/* currently-readable count */</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_change_log_read <span class="op">(</span><span class="dt">uint64_t</span> since_gen<span class="op">,</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>                             <span class="kw">struct</span> nx_graph_event <span class="op">*</span>out<span class="op">,</span> <span class="dt">size_t</span> max<span class="op">);</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span>     nx_change_log_reset<span class="op">(</span><span class="dt">void</span><span class="op">);</span>             <span class="co">/* test-only */</span></span></code></pre></div>
+<ul>
+<li><p><code>nx_change_log_read(since_gen, out, max)</code> — copies up
+to <code>max</code> events with <code>generation &gt; since_gen</code>,
+oldest first. Returns the number copied. If <code>since_gen</code> is
+older than the oldest retained entry, reads start at the oldest retained
+entry.</p></li>
+<li><p>The change log answers questions the live graph can’t: “what was
+the boot composition?”, “when did this slot last swap?”, “in what order
+did the recomposition transaction apply?”.</p></li>
+<li><p><code>nx_change_log_reset()</code> is test-only; production code
+never truncates the log.</p></li>
+</ul>
+<hr />
+<h2 id="snapshots">Snapshots</h2>
+<p>A snapshot captures the registry’s contents at a single generation.
+It owns its own copies of the entity arrays, so subsequent mutation
+doesn’t affect a held snapshot. Refcounted: <code>take</code> returns
+one with refcount 1; each caller that wants to keep a reference calls
+<code>retain</code>; every holder calls <code>put</code> exactly
+once.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_graph_snapshot<span class="op">;</span>                       <span class="co">/* opaque */</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>nx_graph_snapshot_take   <span class="op">(</span><span class="dt">void</span><span class="op">);</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span>                      nx_graph_snapshot_retain <span class="op">(</span><span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span>                      nx_graph_snapshot_put    <span class="op">(</span><span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a><span class="dt">uint64_t</span> nx_graph_snapshot_generation     <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a><span class="dt">uint64_t</span> nx_graph_snapshot_timestamp_ns   <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_graph_snapshot_slot_count     <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_graph_snapshot_component_count<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span>   nx_graph_snapshot_connection_count<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">);</span></span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_snapshot_slot       <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">,</span> <span class="op">*</span>iface<span class="op">;</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>                                <span class="kw">enum</span> nx_slot_mutability  mutability<span class="op">;</span></span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>                                <span class="kw">enum</span> nx_slot_concurrency concurrency<span class="op">;</span></span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>                                <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>active_manifest<span class="op">;</span>   <span class="co">/* NULL = unbound */</span></span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>                                <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>active_instance<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_snapshot_component  <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>manifest_id<span class="op">,</span> <span class="op">*</span>instance_id<span class="op">;</span></span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>                                <span class="kw">enum</span> nx_lifecycle_state state<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_snapshot_connection <span class="op">{</span> <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>from_slot<span class="op">;</span>   <span class="co">/* NULL = boot edge */</span></span>
+<span id="cb12-21"><a href="#cb12-21" aria-hidden="true" tabindex="-1"></a>                                <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>to_slot<span class="op">;</span></span>
+<span id="cb12-22"><a href="#cb12-22" aria-hidden="true" tabindex="-1"></a>                                <span class="kw">enum</span> nx_conn_mode    mode<span class="op">;</span></span>
+<span id="cb12-23"><a href="#cb12-23" aria-hidden="true" tabindex="-1"></a>                                <span class="dt">bool</span>                 stateful<span class="op">;</span></span>
+<span id="cb12-24"><a href="#cb12-24" aria-hidden="true" tabindex="-1"></a>                                <span class="kw">enum</span> nx_pause_policy policy<span class="op">;</span></span>
+<span id="cb12-25"><a href="#cb12-25" aria-hidden="true" tabindex="-1"></a>                                <span class="dt">uint64_t</span>             installed_gen<span class="op">;</span> <span class="op">};</span></span>
+<span id="cb12-26"><a href="#cb12-26" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-27"><a href="#cb12-27" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> nx_snapshot_slot       <span class="op">*</span>nx_graph_snapshot_slot      <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb12-28"><a href="#cb12-28" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> nx_snapshot_component  <span class="op">*</span>nx_graph_snapshot_component <span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*,</span> <span class="dt">size_t</span><span class="op">);</span></span>
+<span id="cb12-29"><a href="#cb12-29" aria-hidden="true" tabindex="-1"></a><span class="dt">const</span> <span class="kw">struct</span> nx_snapshot_connection <span class="op">*</span>nx_graph_snapshot_connection<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*,</span> <span class="dt">size_t</span><span class="op">);</span></span></code></pre></div>
+<p><code>nx_graph_snapshot_put(NULL)</code> is a no-op.</p>
+<p>String fields inside <code>nx_snapshot_*</code> point at caller-owned
+storage on the original structs, exactly like event strings — valid as
+long as the underlying structs are.</p>
+<hr />
+<h2 id="json-serialisation">JSON serialisation</h2>
+<p>Both the snapshot and the change log can be dumped as JSON for boot
+logs, diagnostics, and AI reviewers.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> nx_graph_snapshot_to_json<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s<span class="op">,</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>                              <span class="dt">char</span> <span class="op">*</span>buf<span class="op">,</span> <span class="dt">size_t</span> buflen<span class="op">);</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> nx_change_log_to_json    <span class="op">(</span><span class="dt">char</span> <span class="op">*</span>buf<span class="op">,</span> <span class="dt">size_t</span> buflen<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p>Returns the number of bytes written <strong>excluding</strong>
+the terminating NUL, or a negative <code>NX_E*</code> on error.</p></li>
+<li><p>Truncation: if the buffer is too small, returns
+<code>NX_ENOMEM</code> after writing as much as fits (still
+NUL-terminated at the last valid point). Callers can grow the buffer and
+retry.</p></li>
+<li><p>Output is deterministic for the same snapshot — keys are emitted
+in a fixed order.</p></li>
+<li><p>Escapes <code>"</code>, <code>\</code>, <code>\n</code>,
+<code>\r</code>, <code>\t</code>, control characters via
+<code>\u00xx</code>. Escapes only what JSON requires; identifiers are
+assumed to be ASCII-safe (manifest validation enforces this
+upstream).</p></li>
+</ul>
+<p><strong>Shape:</strong></p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;generation&quot;</span><span class="fu">:</span> <span class="dv">42</span><span class="fu">,</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;timestamp_ns&quot;</span><span class="fu">:</span> <span class="dv">12345678</span><span class="fu">,</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;slots&quot;</span><span class="fu">:</span>       <span class="ot">[</span> <span class="fu">{</span><span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;scheduler&quot;</span><span class="fu">,</span> <span class="dt">&quot;iface&quot;</span><span class="fu">:</span> <span class="st">&quot;scheduler&quot;</span><span class="fu">,</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>                    <span class="dt">&quot;active&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;manifest&quot;</span><span class="fu">:</span> <span class="st">&quot;sched_rr&quot;</span><span class="fu">,</span> <span class="dt">&quot;instance&quot;</span><span class="fu">:</span> <span class="st">&quot;0&quot;</span><span class="fu">}}</span> <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;components&quot;</span><span class="fu">:</span>  <span class="ot">[</span> <span class="fu">{</span><span class="dt">&quot;manifest&quot;</span><span class="fu">:</span> <span class="st">&quot;sched_rr&quot;</span><span class="fu">,</span> <span class="dt">&quot;instance&quot;</span><span class="fu">:</span> <span class="st">&quot;0&quot;</span><span class="fu">,</span> <span class="dt">&quot;state&quot;</span><span class="fu">:</span> <span class="st">&quot;active&quot;</span><span class="fu">}</span> <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;connections&quot;</span><span class="fu">:</span> <span class="ot">[</span> <span class="fu">{</span><span class="dt">&quot;from&quot;</span><span class="fu">:</span> <span class="kw">null</span><span class="fu">,</span> <span class="dt">&quot;to&quot;</span><span class="fu">:</span> <span class="st">&quot;scheduler&quot;</span><span class="fu">,</span></span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>                    <span class="dt">&quot;mode&quot;</span><span class="fu">:</span> <span class="st">&quot;sync&quot;</span><span class="fu">,</span> <span class="dt">&quot;stateful&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>                    <span class="dt">&quot;policy&quot;</span><span class="fu">:</span> <span class="st">&quot;queue&quot;</span><span class="fu">,</span> <span class="dt">&quot;installed_gen&quot;</span><span class="fu">:</span> <span class="dv">3</span><span class="fu">}</span> <span class="ot">]</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="lifecycle-of-the-registry-itself">Lifecycle of the registry
+itself</h2>
+<div class="sourceCode" id="cb15"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_graph_reset<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span></code></pre></div>
+<p>Releases every internal bookkeeping node and zeroes all global state,
+including the change log, subscriber list, and generation counter.
+<strong>Caller-owned slot and component structs are NOT freed</strong> —
+only the registry’s own bookkeeping. Test-only on the kernel side; host
+tests call it at the top of every case.</p>
+<hr />
+<h2 id="invariants">Invariants</h2>
+<ol type="1">
+<li><p><strong>Slot identity by name.</strong> Two slots with the same
+<code>name</code> are a duplicate-registration error, even if they
+differ in iface or mutability.</p></li>
+<li><p><strong>Component identity by pair.</strong> Two components with
+the same <code>(manifest_id, instance_id)</code> are duplicates. Same
+<code>manifest_id</code> with different <code>instance_id</code> is
+fine.</p></li>
+<li><p><strong>Bound components cannot be destroyed /
+unregistered.</strong> Both <code>nx_component_unregister</code> and the
+destroy verb in <code>framework/component.c</code> refuse with
+<code>NX_EBUSY</code> while <code>nx_component_is_bound(c)</code> is
+true.</p></li>
+<li><p><strong>Connection endpoints pin their slots.</strong> Trying to
+unregister a slot that is still an endpoint of any live connection
+returns <code>NX_EBUSY</code>.</p></li>
+<li><p><strong>Event strings are borrowed.</strong> Subscribers must not
+retain them past the underlying nx_slot / nx_component
+lifetime.</p></li>
+<li><p><strong>The change log is monotonic.</strong>
+<code>nx_change_log_total()</code> only grows, even across
+overflow.</p></li>
+<li><p><strong>Pause state and fallback are slot-side.</strong> The IPC
+router holds slot pointers; the component can swap mid-pause, so these
+must survive component swap.</p></li>
+</ol>
+<hr />
+<h2 id="atomic-init-gotcha">Atomic-init gotcha</h2>
+<p><code>struct nx_slot::pause_state</code> is
+<code>_Atomic(enum nx_slot_pause_state)</code>. The C11 standard does
+not fully define what happens when a struct containing an
+<code>_Atomic</code> member is zero-initialised via compound literal or
+<code>memset</code>. Every host compiler we test on happens to do the
+right thing, but the standard-conformant answer is to use
+<code>atomic_init</code>.</p>
+<p><code>nx_slot_register</code> calls
+<code>atomic_init(&amp;s-&gt;pause_state, NX_SLOT_PAUSE_NONE)</code> and
+sets <code>s-&gt;fallback = NULL</code> on every registration, so the
+registry’s published view of these fields is always well-defined
+regardless of how the caller zero-initialised.</p>
+<p>If you reuse a <code>struct nx_slot</code> across register/unregister
+cycles, each re-registration re-initialises these fields. Don’t rely on
+the caller’s own initialisation sticking past a
+<code>nx_graph_reset()</code> + new <code>nx_slot_register</code>.</p>
+<hr />
+<h2 id="example-registering-a-slot-and-listening-for-mutations">Example
+— registering a slot and listening for mutations</h2>
+<div class="sourceCode" id="cb16"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#include </span><span class="im">&quot;framework/registry.h&quot;</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_slot scheduler_slot <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>name <span class="op">=</span> <span class="st">&quot;scheduler&quot;</span><span class="op">,</span> <span class="op">.</span>iface <span class="op">=</span> <span class="st">&quot;scheduler&quot;</span><span class="op">,</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>mutability <span class="op">=</span> NX_MUT_HOT<span class="op">,</span> <span class="op">.</span>concurrency <span class="op">=</span> NX_CONC_SHARED<span class="op">,</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">void</span> trace<span class="op">(</span><span class="dt">const</span> <span class="kw">struct</span> nx_graph_event <span class="op">*</span>ev<span class="op">,</span> <span class="dt">void</span> <span class="op">*</span>ctx<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    <span class="op">(</span><span class="dt">void</span><span class="op">)</span>ctx<span class="op">;</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>    <span class="cf">switch</span> <span class="op">(</span>ev<span class="op">-&gt;</span>type<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> NX_EV_SLOT_CREATED<span class="op">:</span></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;[graph] slot </span><span class="sc">%s</span><span class="st"> created at gen %&quot;</span> PRIu64 <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a>               ev<span class="op">-&gt;</span>u<span class="op">.</span>slot<span class="op">.</span>name<span class="op">,</span> ev<span class="op">-&gt;</span>generation<span class="op">);</span></span>
+<span id="cb16-14"><a href="#cb16-14" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb16-15"><a href="#cb16-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> NX_EV_SLOT_SWAPPED<span class="op">:</span></span>
+<span id="cb16-16"><a href="#cb16-16" aria-hidden="true" tabindex="-1"></a>        printf<span class="op">(</span><span class="st">&quot;[graph] </span><span class="sc">%s</span><span class="st">: </span><span class="sc">%s</span><span class="st">/</span><span class="sc">%s</span><span class="st"> -&gt; </span><span class="sc">%s</span><span class="st">/</span><span class="sc">%s\n</span><span class="st">&quot;</span><span class="op">,</span></span>
+<span id="cb16-17"><a href="#cb16-17" aria-hidden="true" tabindex="-1"></a>               ev<span class="op">-&gt;</span>u<span class="op">.</span>swap<span class="op">.</span>slot_name<span class="op">,</span></span>
+<span id="cb16-18"><a href="#cb16-18" aria-hidden="true" tabindex="-1"></a>               ev<span class="op">-&gt;</span>u<span class="op">.</span>swap<span class="op">.</span>old_manifest <span class="op">?:</span> <span class="st">&quot;-&quot;</span><span class="op">,</span></span>
+<span id="cb16-19"><a href="#cb16-19" aria-hidden="true" tabindex="-1"></a>               ev<span class="op">-&gt;</span>u<span class="op">.</span>swap<span class="op">.</span>old_instance <span class="op">?:</span> <span class="st">&quot;-&quot;</span><span class="op">,</span></span>
+<span id="cb16-20"><a href="#cb16-20" aria-hidden="true" tabindex="-1"></a>               ev<span class="op">-&gt;</span>u<span class="op">.</span>swap<span class="op">.</span>new_manifest <span class="op">?:</span> <span class="st">&quot;-&quot;</span><span class="op">,</span></span>
+<span id="cb16-21"><a href="#cb16-21" aria-hidden="true" tabindex="-1"></a>               ev<span class="op">-&gt;</span>u<span class="op">.</span>swap<span class="op">.</span>new_instance <span class="op">?:</span> <span class="st">&quot;-&quot;</span><span class="op">);</span></span>
+<span id="cb16-22"><a href="#cb16-22" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb16-23"><a href="#cb16-23" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span></span>
+<span id="cb16-24"><a href="#cb16-24" aria-hidden="true" tabindex="-1"></a>        <span class="cf">break</span><span class="op">;</span></span>
+<span id="cb16-25"><a href="#cb16-25" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb16-26"><a href="#cb16-26" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span>
+<span id="cb16-27"><a href="#cb16-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-28"><a href="#cb16-28" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> boot_init<span class="op">(</span><span class="dt">void</span><span class="op">)</span> <span class="op">{</span></span>
+<span id="cb16-29"><a href="#cb16-29" aria-hidden="true" tabindex="-1"></a>    nx_graph_subscribe<span class="op">(</span>trace<span class="op">,</span> NULL<span class="op">);</span></span>
+<span id="cb16-30"><a href="#cb16-30" aria-hidden="true" tabindex="-1"></a>    nx_slot_register<span class="op">(&amp;</span>scheduler_slot<span class="op">);</span></span>
+<span id="cb16-31"><a href="#cb16-31" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* ...bind a component later via nx_slot_swap... */</span></span>
+<span id="cb16-32"><a href="#cb16-32" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<hr />
+<h2 id="example-dumping-the-live-composition">Example — dumping the live
+composition</h2>
+<div class="sourceCode" id="cb17"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="dt">char</span> buf<span class="op">[</span><span class="dv">4096</span><span class="op">];</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_graph_snapshot <span class="op">*</span>s <span class="op">=</span> nx_graph_snapshot_take<span class="op">();</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> n <span class="op">=</span> nx_graph_snapshot_to_json<span class="op">(</span>s<span class="op">,</span> buf<span class="op">,</span> <span class="kw">sizeof</span> buf<span class="op">);</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="op">(</span>n <span class="op">&gt;=</span> <span class="dv">0</span><span class="op">)</span> fputs<span class="op">(</span>buf<span class="op">,</span> stdout<span class="op">);</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>nx_graph_snapshot_put<span class="op">(</span>s<span class="op">);</span></span></code></pre></div>
+<p>The <code>nx_ipc_*</code> router, the IPC-router’s pause policies,
+and the hook framework all build on these primitives — see the sibling
+docs for how the composition actually drives message flow.</p>
+</body>
+</html>

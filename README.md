@@ -34,11 +34,17 @@ nonux is a microkernel where every subsystem (scheduler, memory manager, filesys
 
 ## Documentation
 
-See `proj_docs/nonux/` for full project documentation:
-- [SPEC.md](../../proj_docs/nonux/SPEC.md) — Requirements and constraints
-- [DESIGN.md](../../proj_docs/nonux/DESIGN.md) — Architecture and design decisions
-- [IMPLEMENTATION-GUIDE.md](../../proj_docs/nonux/IMPLEMENTATION-GUIDE.md) — Build guide and phase plan
-- [HANDOFF.md](../../proj_docs/nonux/HANDOFF.md) — Current status and next actions
+Framework API reference (types, functions, examples) lives alongside
+the code under [`docs/`](docs/):
+
+- [Registry](docs/framework-registry.md) — slots, components, connections; events + change log + snapshots + JSON.
+- [Component lifecycle](docs/framework-components.md) — six-verb state machine, `nx_component_ops`, pause protocol, dependency injection.
+- [IPC router](docs/framework-ipc.md) — `nx_ipc_send` / dispatch, pause-policy routing, capabilities, `slot_ref_retain/release`.
+- [Hook framework](docs/framework-hooks.md) — per-hook-point chains, typed contexts, mark-then-sweep unregister.
+- [Tool chain](tools/README.md) — `gen-config.py`, `validate-config.py`, `verify-registry.py`.
+
+Start at [`docs/README.md`](docs/README.md) for the index and the
+shared error-code table.
 
 ## License
 

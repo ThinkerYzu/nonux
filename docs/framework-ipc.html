@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>framework-ipc – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {  background-color: #f8f8f8; }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ef2929; } /* Alert */
+    code span.an { color: #8f5902; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #204a87; } /* Attribute */
+    code span.bn { color: #0000cf; } /* BaseN */
+    code span.cf { color: #204a87; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4e9a06; } /* Char */
+    code span.cn { color: #8f5902; } /* Constant */
+    code span.co { color: #8f5902; font-style: italic; } /* Comment */
+    code span.cv { color: #8f5902; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #8f5902; font-weight: bold; font-style: italic; } /* Documentation */
+    code span.dt { color: #204a87; } /* DataType */
+    code span.dv { color: #0000cf; } /* DecVal */
+    code span.er { color: #a40000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #0000cf; } /* Float */
+    code span.fu { color: #204a87; font-weight: bold; } /* Function */
+    code span.im { } /* Import */
+    code span.in { color: #8f5902; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #204a87; font-weight: bold; } /* Keyword */
+    code span.op { color: #ce5c00; font-weight: bold; } /* Operator */
+    code span.ot { color: #8f5902; } /* Other */
+    code span.pp { color: #8f5902; font-style: italic; } /* Preprocessor */
+    code span.sc { color: #ce5c00; font-weight: bold; } /* SpecialChar */
+    code span.ss { color: #4e9a06; } /* SpecialString */
+    code span.st { color: #4e9a06; } /* String */
+    code span.va { color: #000000; } /* Variable */
+    code span.vs { color: #4e9a06; } /* VerbatimString */
+    code span.wa { color: #8f5902; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#ipc-router-frameworkipc.hc"
+id="toc-ipc-router-frameworkipc.hc">IPC router —
+<code>framework/ipc.{h,c}</code></a>
+<ul>
+<li><a href="#concepts" id="toc-concepts">Concepts</a>
+<ul>
+<li><a href="#messages" id="toc-messages">Messages</a></li>
+<li><a href="#capabilities" id="toc-capabilities">Capabilities</a></li>
+<li><a href="#per-slot-inbox" id="toc-per-slot-inbox">Per-slot
+inbox</a></li>
+<li><a href="#per-edge-hold-queue" id="toc-per-edge-hold-queue">Per-edge
+hold queue</a></li>
+<li><a href="#slot-resolve-locality"
+id="toc-slot-resolve-locality">Slot-resolve locality</a></li>
+</ul></li>
+<li><a href="#types" id="toc-types">Types</a>
+<ul>
+<li><a href="#enum-nx_cap_kind-nx_cap_ownership"
+id="toc-enum-nx_cap_kind-nx_cap_ownership"><code>enum nx_cap_kind</code>
+/ <code>nx_cap_ownership</code></a></li>
+<li><a href="#struct-nx_ipc_cap"
+id="toc-struct-nx_ipc_cap"><code>struct nx_ipc_cap</code></a></li>
+<li><a href="#struct-nx_ipc_message"
+id="toc-struct-nx_ipc_message"><code>struct nx_ipc_message</code></a></li>
+</ul></li>
+<li><a href="#sending" id="toc-sending">Sending</a></li>
+<li><a href="#draining-async" id="toc-draining-async">Draining
+(async)</a></li>
+<li><a href="#pause-policy-inspection"
+id="toc-pause-policy-inspection">Pause policy inspection</a></li>
+<li><a href="#reset-test-only" id="toc-reset-test-only">Reset
+(test-only)</a></li>
+<li><a href="#cap-scanning" id="toc-cap-scanning">Cap scanning</a>
+<ul>
+<li><a href="#send-side-scan_send_caps"
+id="toc-send-side-scan_send_caps">Send-side
+(<code>scan_send_caps</code>)</a></li>
+<li><a href="#receive-side-scan_recv_caps"
+id="toc-receive-side-scan_recv_caps">Receive-side
+(<code>scan_recv_caps</code>)</a></li>
+</ul></li>
+<li><a href="#slot_ref_retain-_release"
+id="toc-slot_ref_retain-_release"><code>slot_ref_retain</code> /
+<code>_release</code></a></li>
+<li><a href="#interaction-with-the-pause-protocol"
+id="toc-interaction-with-the-pause-protocol">Interaction with the pause
+protocol</a></li>
+<li><a href="#example-synchronous-request-reply"
+id="toc-example-synchronous-request-reply">Example — synchronous request
+/ reply</a></li>
+<li><a href="#example-async-send-explicit-drain-host-test-shape"
+id="toc-example-async-send-explicit-drain-host-test-shape">Example —
+async send + explicit drain (host test shape)</a></li>
+<li><a href="#example-capability-transfer"
+id="toc-example-capability-transfer">Example — capability
+transfer</a></li>
+<li><a href="#invariants" id="toc-invariants">Invariants</a></li>
+<li><a href="#see-also" id="toc-see-also">See also</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="ipc-router-frameworkipc.hc">IPC router —
+<code>framework/ipc.{h,c}</code></h1>
+<p>Inter-component messaging. Components never call each other directly;
+they address a destination slot and the router resolves, enforces
+policy, and dispatches. The router reads its routing tables from the <a
+href="framework-registry.html">registry</a> and consults the <a
+href="framework-hooks.html">hook framework</a> at send / receive
+boundaries.</p>
+<p>This module owns:</p>
+<ol type="1">
+<li><p><strong><code>nx_ipc_message</code> + <code>nx_ipc_cap</code>
+types</strong> — the on-wire format.</p></li>
+<li><p><strong><code>nx_ipc_send</code></strong> — public send entry
+point. Sync dispatch or async enqueue depending on the edge’s
+mode.</p></li>
+<li><p><strong>Per-slot inbox (<code>g_queues</code>)</strong> — FIFO of
+async messages per destination slot.</p></li>
+<li><p><strong>Per-<code>(src, dst)</code> hold queue
+(<code>g_holds</code>)</strong> — messages parked while the destination
+is paused with <code>NX_PAUSE_QUEUE</code> policy.</p></li>
+<li><p><strong><code>nx_ipc_dispatch</code></strong> — drain helper.
+Replaced by a pinned per-CPU dispatcher thread in slice 3.9.</p></li>
+<li><p><strong>Cap scanning</strong> — send-side forged-cap rejection,
+receive-side unclaimed-transfer counting.</p></li>
+<li><p><strong><code>nx_slot_ref_retain</code> /
+<code>_release</code></strong> — promote a received slot-ref cap into a
+registered connection edge.</p></li>
+</ol>
+<hr />
+<h2 id="concepts">Concepts</h2>
+<h3 id="messages">Messages</h3>
+<p>A message travels from <code>src_slot</code> to
+<code>dst_slot</code>. The router uses the registered connection edge
+between them to pick sync vs async and to apply the pause-protocol
+policy. Message storage is <strong>caller-owned</strong> — the caller
+allocates the <code>struct nx_ipc_message</code> (typically on the stack
+for sync sends, in some pool for async). The router uses the message’s
+<code>_next</code> field to link it into a queue; it does not
+<code>free()</code> the message.</p>
+<h3 id="capabilities">Capabilities</h3>
+<p>Messages can carry an array of <code>struct nx_ipc_cap</code>. The
+supported cap kind today is <code>NX_CAP_SLOT_REF</code> — a typed
+reference to another slot. Caps travel in a dedicated array, NOT inside
+<code>payload[]</code>, so the router can scan them generically.</p>
+<ul>
+<li><p><strong>Ownership</strong> is either <code>BORROW</code> (the
+receiver may use the ref during the handler but not retain it) or
+<code>TRANSFER</code> (the receiver must claim via
+<code>nx_slot_ref_retain</code> or the router flags the cap as
+unclaimed-transfer on recv-scan).</p></li>
+<li><p><strong>Forged caps are rejected on send.</strong> The sender
+must have a registered connection edge to every slot it passes a cap to
+— otherwise <code>nx_ipc_send</code> returns
+<code>NX_EINVAL</code>.</p></li>
+</ul>
+<h3 id="per-slot-inbox">Per-slot inbox</h3>
+<p>For async routing, messages are queued on the destination slot’s
+inbox. <code>nx_ipc_dispatch(slot, max)</code> drains up to
+<code>max</code> messages, invoking <code>handle_msg</code> on the
+slot’s active component. Host build dispatches synchronously on the
+caller’s thread; kernel build (slice 3.9) runs a pinned per-CPU
+dispatcher thread.</p>
+<h3 id="per-edge-hold-queue">Per-edge hold queue</h3>
+<p>When the destination slot is paused and the connection’s policy is
+<code>NX_PAUSE_QUEUE</code>, the router stashes the message into a
+side-table keyed by <code>(src_slot, dst_slot)</code> instead of the
+inbox. On resume, <code>nx_ipc_flush_hold_queue(dst)</code> replays
+every held message back through <code>nx_ipc_send</code>, so they
+observe hooks, cap-scan, and policy normally on the way out.</p>
+<p>Why a per-edge table rather than a field on
+<code>struct nx_slot</code>: a single paused slot may have distinct
+pause semantics for distinct senders (a sync caller and an async caller
+can share a destination but differ on <code>mode</code>), so the key has
+to be <code>(src, dst)</code>.</p>
+<h3 id="slot-resolve-locality">Slot-resolve locality</h3>
+<p>Slot dereference — reading <code>slot-&gt;active</code> or calling
+through <code>slot-&gt;active-&gt;ops-&gt;...</code> — is only permitted
+on a framework-owned dispatcher thread. <code>nx_ipc_send</code>’s sync
+shortcut and <code>nx_ipc_dispatch</code> are the framework’s designated
+dispatcher contexts in v1; ISRs and arbitrary kernel threads may
+<strong>enqueue</strong> messages (slice 3.9 adds a lock-free enqueue
+entry point for that) but never dispatch. See the <a
+href="framework-registry.html">registry doc</a> for the rationale.</p>
+<hr />
+<h2 id="types">Types</h2>
+<h3 id="enum-nx_cap_kind-nx_cap_ownership"><code>enum nx_cap_kind</code>
+/ <code>nx_cap_ownership</code></h3>
+<div class="sourceCode" id="cb1"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_cap_kind      <span class="op">{</span> NX_CAP_SLOT_REF <span class="op">=</span> <span class="dv">1</span><span class="op">,</span> <span class="co">/* + NX_CAP_HANDLE, NX_CAP_VMO_CHUNK later */</span> <span class="op">};</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">enum</span> nx_cap_ownership <span class="op">{</span> NX_CAP_BORROW <span class="op">=</span> <span class="dv">0</span><span class="op">,</span> NX_CAP_TRANSFER <span class="op">};</span></span></code></pre></div>
+<h3 id="struct-nx_ipc_cap"><code>struct nx_ipc_cap</code></h3>
+<div class="sourceCode" id="cb2"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_ipc_cap <span class="op">{</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_cap_kind      kind<span class="op">;</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">enum</span> nx_cap_ownership ownership<span class="op">;</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">union</span> <span class="op">{</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> nx_slot <span class="op">*</span>slot_ref<span class="op">;</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> u<span class="op">;</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span>              cap_id<span class="op">;</span>     <span class="co">/* stable id within the message */</span></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">bool</span>                  claimed<span class="op">;</span>    <span class="co">/* set by nx_slot_ref_retain */</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<h3 id="struct-nx_ipc_message"><code>struct nx_ipc_message</code></h3>
+<div class="sourceCode" id="cb3"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="pp">#define NX_MSG_FLAG_REPLY   </span><span class="op">(</span><span class="dv">1</span><span class="bu">u</span><span class="pp"> </span><span class="op">&lt;&lt;</span><span class="pp"> </span><span class="dv">0</span><span class="op">)</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="pp">#define NX_MSG_FLAG_ONEWAY  </span><span class="op">(</span><span class="dv">1</span><span class="bu">u</span><span class="pp"> </span><span class="op">&lt;&lt;</span><span class="pp"> </span><span class="dv">1</span><span class="op">)</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_ipc_message <span class="op">{</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_slot        <span class="op">*</span>src_slot<span class="op">;</span>   <span class="co">/* sender; must be registered */</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_slot        <span class="op">*</span>dst_slot<span class="op">;</span>   <span class="co">/* receiver; active impl dispatches */</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span>               msg_type<span class="op">;</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span>               flags<span class="op">;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span>               n_caps<span class="op">;</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_ipc_cap     <span class="op">*</span>caps<span class="op">;</span>       <span class="co">/* may be NULL if n_caps == 0 */</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">uint32_t</span>               payload_len<span class="op">;</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">const</span> <span class="dt">void</span>            <span class="op">*</span>payload<span class="op">;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> nx_ipc_message <span class="op">*</span>_next<span class="op">;</span>      <span class="co">/* framework-owned; don&#39;t touch */</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
+<ul>
+<li><p><code>_next</code> is used by the router to link messages into
+inbox / hold queue chains. Callers must leave it alone; using the same
+message in two places simultaneously (e.g. re-queuing while it’s already
+queued) is undefined.</p></li>
+<li><p><code>payload</code> is borrowed — the router passes the pointer
+unchanged to the handler and does not copy. The caller must keep the
+payload alive for the duration of the handler call (sync) or the
+message’s queue time (async).</p></li>
+</ul>
+<hr />
+<h2 id="sending">Sending</h2>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> nx_ipc_send<span class="op">(</span><span class="kw">struct</span> nx_ipc_message <span class="op">*</span>msg<span class="op">);</span></span></code></pre></div>
+<p><strong>Sequence (fast path):</strong></p>
+<ol type="1">
+<li><p>Validate <code>msg</code>, <code>msg-&gt;src_slot</code>,
+<code>msg-&gt;dst_slot</code> are non-NULL.</p></li>
+<li><p>Dispatch <code>NX_HOOK_IPC_SEND</code> (pre-route,
+<code>ctx.edge = NULL</code>). <code>ABORT</code> → return
+<code>NX_EABORT</code>.</p></li>
+<li><p><code>find_edge(src, dst)</code> — the registered connection.
+None → <code>NX_ENOENT</code>.</p></li>
+<li><p><code>nx_ipc_scan_send_caps</code> — reject forged caps with
+<code>NX_EINVAL</code>.</p></li>
+<li><p>Read <code>dst_slot</code> pause state.
+<code>NX_SLOT_PAUSE_NONE</code> → skip to 7.</p></li>
+<li><p><strong>Policy branch (slow path):</strong> per the edge’s
+<code>policy</code>:</p>
+<ul>
+<li><code>NX_PAUSE_QUEUE</code> — append to per-<code>(src, dst)</code>
+hold queue, return <code>NX_OK</code>.</li>
+<li><code>NX_PAUSE_REJECT</code> — return <code>NX_EBUSY</code>.</li>
+<li><code>NX_PAUSE_REDIRECT</code> — retarget
+<code>msg-&gt;dst_slot = dst-&gt;fallback</code> and recurse. Depth
+limit is <code>NX_IPC_REDIRECT_DEPTH_MAX = 4</code>; exceeding it
+returns <code>NX_ELOOP</code>. <code>fallback == NULL</code> returns
+<code>NX_ENOENT</code> (fail-closed).</li>
+</ul></li>
+<li><p>If <code>edge-&gt;mode == NX_CONN_SYNC</code>: invoke
+<code>handle_msg(impl, msg)</code> synchronously, run the recv-cap
+sweep, return the handler’s rc.</p></li>
+<li><p>Else (async): enqueue into the destination’s inbox, return
+<code>NX_OK</code>.</p></li>
+</ol>
+<p><strong>Return codes:</strong></p>
+<table>
+<colgroup>
+<col style="width: 17%" />
+<col style="width: 82%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>NX_OK</code></td>
+<td>Success (sync: handler returned 0; async: enqueued).</td>
+</tr>
+<tr class="even">
+<td><code>NX_EINVAL</code></td>
+<td>NULL <code>msg</code> / missing <code>src</code> or <code>dst</code>
+/ forged cap.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_ENOENT</code></td>
+<td>No edge from <code>src</code> to <code>dst</code>, or REDIRECT with
+no fallback, or destination has no active impl /
+<code>handle_msg</code>.</td>
+</tr>
+<tr class="even">
+<td><code>NX_ENOMEM</code></td>
+<td>Inbox or hold-queue allocation failed.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_EBUSY</code></td>
+<td>Destination paused with <code>NX_PAUSE_REJECT</code> policy.</td>
+</tr>
+<tr class="even">
+<td><code>NX_ELOOP</code></td>
+<td>REDIRECT chain exceeded depth 4.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_EABORT</code></td>
+<td><code>NX_HOOK_IPC_SEND</code> hook returned
+<code>NX_HOOK_ABORT</code>.</td>
+</tr>
+<tr class="even">
+<td><em>handler rc</em></td>
+<td>Sync path: whatever <code>handle_msg</code> returned (may be any
+value).</td>
+</tr>
+</tbody>
+</table>
+<p><strong>REDIRECT mutation warning.</strong> On REDIRECT, the router
+sets <code>msg-&gt;dst_slot</code> to the fallback in place and does not
+restore it on the way out. This is so that an async enqueue on the
+recursive hop correctly uses the fallback slot as the queue key when the
+dispatcher runs later. The caller’s <code>msg</code> therefore reflects
+the final destination after <code>nx_ipc_send</code> returns — expected
+behaviour; document if you care.</p>
+<hr />
+<h2 id="draining-async">Draining (async)</h2>
+<div class="sourceCode" id="cb5"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> nx_ipc_dispatch<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>slot<span class="op">,</span> <span class="dt">size_t</span> max<span class="op">);</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> nx_ipc_inbox_depth<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>slot<span class="op">);</span></span></code></pre></div>
+<p><code>nx_ipc_dispatch(slot, max)</code> drains up to <code>max</code>
+messages from <code>slot</code>’s inbox. For each:</p>
+<ol type="1">
+<li><p>Dispatch <code>NX_HOOK_IPC_RECV</code> (pre-handler,
+<code>ctx.edge</code> looked up from <code>msg-&gt;src_slot</code> to
+<code>slot</code>). <code>ABORT</code> drops the message and still
+counts it as dispatched (the queue makes progress).</p></li>
+<li><p>Otherwise invoke <code>handle_msg(impl, msg)</code> on the active
+component. Run the recv-cap sweep regardless of handler rc.</p></li>
+<li><p>If handler returned non-zero, stop the drain (don’t drain the
+next message either).</p></li>
+</ol>
+<p>Returns the number dispatched (including ABORT-dropped ones).</p>
+<ul>
+<li><code>max = 0</code> returns 0 without touching the inbox.</li>
+<li>If <code>slot</code> is NULL or has no inbox, returns 0.</li>
+<li>Empty inbox returns 0 without error.</li>
+</ul>
+<p><code>nx_ipc_inbox_depth(slot)</code> — number of messages currently
+queued on <code>slot</code>’s inbox. For tests / instrumentation.</p>
+<p><strong>Host vs kernel.</strong> Host tests call
+<code>nx_ipc_dispatch</code> explicitly to drain. The kernel boot path
+(slice 3.9) hands dispatch ownership to a pinned per-CPU thread;
+components never call <code>nx_ipc_dispatch</code> directly in that
+world. The contract is unchanged.</p>
+<hr />
+<h2 id="pause-policy-inspection">Pause policy inspection</h2>
+<div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> nx_ipc_hold_queue_depth<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>src<span class="op">,</span> <span class="kw">struct</span> nx_slot <span class="op">*</span>dst<span class="op">);</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span>   nx_ipc_flush_hold_queue<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>dst<span class="op">);</span></span></code></pre></div>
+<ul>
+<li><p><code>nx_ipc_hold_queue_depth(src, dst)</code> — number of
+messages currently held for the <code>(src, dst)</code> edge.
+<code>src</code> may be NULL for boot / external edges. Zero for
+non-existent entries.</p></li>
+<li><p><code>nx_ipc_flush_hold_queue(dst)</code> — called by the
+pause-protocol resume path after <code>dst-&gt;pause_state</code>
+returns to <code>NONE</code>. Walks <code>g_holds</code>, detaches every
+entry with <code>dst == dst</code>, replays each message via
+<code>nx_ipc_send</code> so they route normally (hooks + pause-policy +
+cap-scan all run). Safe to call on a slot with no held messages (no-op).
+Replay errors are silently consumed — they’re observable via
+<code>NX_HOOK_IPC_SEND</code> for callers that need feedback.</p></li>
+</ul>
+<hr />
+<h2 id="reset-test-only">Reset (test-only)</h2>
+<div class="sourceCode" id="cb7"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_ipc_reset<span class="op">(</span><span class="dt">void</span><span class="op">);</span></span></code></pre></div>
+<p>Drops every per-slot inbox and every <code>(src, dst)</code> hold
+entry; frees their internal bookkeeping. Caller-owned message storage is
+untouched (the router doesn’t own it). Always safe to call at the top of
+a test.</p>
+<p>Production kernel code never calls this.</p>
+<hr />
+<h2 id="cap-scanning">Cap scanning</h2>
+<div class="sourceCode" id="cb8"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>    nx_ipc_scan_send_caps<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>sender<span class="op">,</span> <span class="kw">struct</span> nx_ipc_message <span class="op">*</span>msg<span class="op">);</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> nx_ipc_scan_recv_caps<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>recv<span class="op">,</span>   <span class="kw">struct</span> nx_ipc_message <span class="op">*</span>msg<span class="op">);</span></span></code></pre></div>
+<h3 id="send-side-scan_send_caps">Send-side
+(<code>scan_send_caps</code>)</h3>
+<p>Runs automatically from <code>nx_ipc_send</code>. Validates that the
+sender legitimately holds every slot-ref cap it passes: there must be a
+registered connection edge <code>sender → cap-&gt;u.slot_ref</code> in
+the graph for each <code>NX_CAP_SLOT_REF</code> cap. Any missing edge is
+a forgery and the function returns <code>NX_EINVAL</code> on the first
+one. Non-SLOT_REF caps are ignored in this slice.</p>
+<p>Pure function — can be called repeatedly; no side effects.</p>
+<table>
+<thead>
+<tr class="header">
+<th>Return</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>NX_OK</code></td>
+<td>Every cap is a legit reference the sender holds.</td>
+</tr>
+<tr class="even">
+<td><code>NX_EINVAL</code></td>
+<td>NULL args; null <code>slot_ref</code>; no edge to a passed
+slot.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="receive-side-scan_recv_caps">Receive-side
+(<code>scan_recv_caps</code>)</h3>
+<p>Runs automatically from <code>invoke_handler</code> after the handler
+returns, regardless of handler rc. Counts unclaimed
+<code>NX_CAP_TRANSFER</code> caps — caps the sender promised to transfer
+ownership of but that the receiver never claimed via
+<code>nx_slot_ref_retain</code>. <code>BORROW</code> caps that end up
+unclaimed are expected and silently dropped. Claimed caps
+(<code>cap-&gt;claimed == true</code>) are not counted.</p>
+<p>Returns the number of unclaimed TRANSFER caps. Zero means clean
+sweep. Non-zero indicates a protocol bug — the sender gave up ownership
+but no one took it.</p>
+<p><code>recv</code> is currently unused (reserved for future
+per-component logging); callers may pass NULL.</p>
+<hr />
+<h2 id="slot_ref_retain-_release"><code>slot_ref_retain</code> /
+<code>_release</code></h2>
+<p>Promote a received slot-ref cap into a registered connection edge
+owned by the receiving slot. This is how a component that received a
+slot reference as part of a message turns that transient cap into a
+durable dependency.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span>  nx_slot_ref_retain <span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>self<span class="op">,</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>                         <span class="kw">struct</span> nx_ipc_cap <span class="op">*</span>cap<span class="op">,</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>                         <span class="dt">const</span> <span class="dt">char</span> <span class="op">*</span>purpose<span class="op">,</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>                         <span class="kw">struct</span> nx_connection <span class="op">**</span>out_conn<span class="op">);</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a><span class="dt">void</span> nx_slot_ref_release<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>self<span class="op">,</span> <span class="kw">struct</span> nx_slot <span class="op">*</span>target<span class="op">);</span></span></code></pre></div>
+<p><strong><code>nx_slot_ref_retain(self, cap, purpose, out_conn)</code>:</strong></p>
+<ul>
+<li><p>Must be called from inside the handler (before it
+returns).</p></li>
+<li><p>Registers a new connection edge
+<code>self → cap-&gt;u.slot_ref</code> with <code>NX_CONN_ASYNC</code>,
+<code>stateful = false</code>, <code>NX_PAUSE_QUEUE</code>. (Retain
+doesn’t carry mode metadata — the receiver’s manifest declares how it
+uses the dep.)</p></li>
+<li><p>Marks <code>cap-&gt;claimed = true</code>. The recv-cap sweep
+will ignore the cap after this.</p></li>
+<li><p><code>purpose</code> is a diagnostic tag for logs / change-log
+annotations; may be NULL.</p></li>
+<li><p><code>out_conn</code> receives the new connection pointer (may be
+NULL if the caller doesn’t need it).</p></li>
+</ul>
+<table>
+<colgroup>
+<col style="width: 17%" />
+<col style="width: 82%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Return</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>NX_OK</code></td>
+<td>Claimed; new edge registered.</td>
+</tr>
+<tr class="even">
+<td><code>NX_EINVAL</code></td>
+<td>Bad args — NULL <code>self</code> / <code>cap</code>, wrong kind,
+already claimed, NULL slot ref.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_ENOENT</code></td>
+<td><code>self</code> or target is not registered.</td>
+</tr>
+<tr class="even">
+<td><code>NX_ENOMEM</code></td>
+<td>Connection registration failed.</td>
+</tr>
+</tbody>
+</table>
+<p><strong><code>nx_slot_ref_release(self, target)</code>:</strong></p>
+<p>Walks <code>self</code>’s outgoing connections, finds the edge to
+<code>target</code>, and <code>nx_connection_unregister</code>s it.
+No-op if the edge is already gone. Pairs with <code>retain</code> for
+<code>NX_CAP_TRANSFER</code> flows; components typically release in
+<code>disable</code> or <code>destroy</code>.</p>
+<hr />
+<h2 id="interaction-with-the-pause-protocol">Interaction with the pause
+protocol</h2>
+<p>The pause protocol in <code>framework/component.c</code> owns the
+slot <code>pause_state</code> transitions; the router reads them.
+Summary of who writes / reads what:</p>
+<table>
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 38%" />
+<col style="width: 48%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>State</th>
+<th>Written by</th>
+<th>Router behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>NX_SLOT_PAUSE_NONE</code></td>
+<td>Initial value; resume path</td>
+<td>Fast path — no policy branch, direct route.</td>
+</tr>
+<tr class="even">
+<td><code>NX_SLOT_PAUSE_CUTTING</code></td>
+<td>Pause protocol, step 2</td>
+<td>Apply edge’s <code>policy</code> to every new send.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_SLOT_PAUSE_DRAINING</code></td>
+<td>Pause protocol, step 3 (just before inbox drain)</td>
+<td>Still apply <code>policy</code> — new sends during drain go to hold
+/ reject / redirect.</td>
+</tr>
+<tr class="even">
+<td><code>NX_SLOT_PAUSE_DONE</code></td>
+<td>Pause protocol, step 6</td>
+<td>Same as CUTTING/DRAINING — policy applies to every send.</td>
+</tr>
+</tbody>
+</table>
+<p>Once <code>resume</code> flips the state back to <code>NONE</code>,
+hold-queue replay routes messages normally.</p>
+<hr />
+<h2 id="example-synchronous-request-reply">Example — synchronous request
+/ reply</h2>
+<div class="sourceCode" id="cb10"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_ipc_message req <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>src_slot <span class="op">=</span> <span class="op">&amp;</span>posix_shim_slot<span class="op">,</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>dst_slot <span class="op">=</span> <span class="op">&amp;</span>scheduler_slot<span class="op">,</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>msg_type <span class="op">=</span> SCHED_MSG_YIELD<span class="op">,</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> rc <span class="op">=</span> nx_ipc_send<span class="op">(&amp;</span>req<span class="op">);</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="cf">if</span> <span class="op">(</span>rc <span class="op">!=</span> NX_OK<span class="op">)</span> log_send_failure<span class="op">(</span>rc<span class="op">);</span></span></code></pre></div>
+<p>Handler signature (<code>sched_rr_ops.handle_msg</code>):</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> sched_rr_handle<span class="op">(</span><span class="dt">void</span> <span class="op">*</span>self<span class="op">,</span> <span class="kw">struct</span> nx_ipc_message <span class="op">*</span>msg<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> sched_rr_state <span class="op">*</span>s <span class="op">=</span> self<span class="op">;</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    <span class="cf">switch</span> <span class="op">(</span>msg<span class="op">-&gt;</span>msg_type<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    <span class="cf">case</span> SCHED_MSG_YIELD<span class="op">:</span> <span class="cf">return</span> sched_rr_yield<span class="op">(</span>s<span class="op">);</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">default</span><span class="op">:</span>              <span class="cf">return</span> NX_ENOENT<span class="op">;</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<h2 id="example-async-send-explicit-drain-host-test-shape">Example —
+async send + explicit drain (host test shape)</h2>
+<div class="sourceCode" id="cb12"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_ipc_message m <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>src_slot <span class="op">=</span> <span class="op">&amp;</span>producer<span class="op">,</span> <span class="op">.</span>dst_slot <span class="op">=</span> <span class="op">&amp;</span>consumer<span class="op">,</span> <span class="op">.</span>msg_type <span class="op">=</span> <span class="dv">42</span><span class="op">,</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>nx_ipc_send<span class="op">(&amp;</span>m<span class="op">);</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="co">/* ...more sends... */</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> drained <span class="op">=</span> nx_ipc_dispatch<span class="op">(&amp;</span>consumer<span class="op">,</span> <span class="dv">100</span><span class="op">);</span></span></code></pre></div>
+<h2 id="example-capability-transfer">Example — capability transfer</h2>
+<div class="sourceCode" id="cb13"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">/* Sender side */</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_ipc_cap caps<span class="op">[</span><span class="dv">1</span><span class="op">]</span> <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    <span class="op">{</span> <span class="op">.</span>kind <span class="op">=</span> NX_CAP_SLOT_REF<span class="op">,</span> <span class="op">.</span>ownership <span class="op">=</span> NX_CAP_TRANSFER<span class="op">,</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>      <span class="op">.</span>u<span class="op">.</span>slot_ref <span class="op">=</span> <span class="op">&amp;</span>storage_slot <span class="op">},</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="kw">struct</span> nx_ipc_message m <span class="op">=</span> <span class="op">{</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>src_slot <span class="op">=</span> <span class="op">&amp;</span>registrar_slot<span class="op">,</span> <span class="op">.</span>dst_slot <span class="op">=</span> <span class="op">&amp;</span>consumer_slot<span class="op">,</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>    <span class="op">.</span>n_caps <span class="op">=</span> <span class="dv">1</span><span class="op">,</span> <span class="op">.</span>caps <span class="op">=</span> caps<span class="op">,</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>nx_ipc_send<span class="op">(&amp;</span>m<span class="op">);</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a><span class="co">/* Receiver side — inside handler */</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a><span class="dt">static</span> <span class="dt">int</span> consumer_handle<span class="op">(</span><span class="dt">void</span> <span class="op">*</span>self<span class="op">,</span> <span class="kw">struct</span> nx_ipc_message <span class="op">*</span>msg<span class="op">)</span> <span class="op">{</span></span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>    <span class="kw">struct</span> consumer_state <span class="op">*</span>s <span class="op">=</span> self<span class="op">;</span></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> <span class="op">(</span><span class="dt">uint32_t</span> i <span class="op">=</span> <span class="dv">0</span><span class="op">;</span> i <span class="op">&lt;</span> msg<span class="op">-&gt;</span>n_caps<span class="op">;</span> i<span class="op">++)</span> <span class="op">{</span></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>msg<span class="op">-&gt;</span>caps<span class="op">[</span>i<span class="op">].</span>kind <span class="op">!=</span> NX_CAP_SLOT_REF<span class="op">)</span> <span class="cf">continue</span><span class="op">;</span></span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">struct</span> nx_connection <span class="op">*</span>c <span class="op">=</span> NULL<span class="op">;</span></span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>        <span class="dt">int</span> rc <span class="op">=</span> nx_slot_ref_retain<span class="op">(&amp;</span>consumer_slot<span class="op">,</span> <span class="op">&amp;</span>msg<span class="op">-&gt;</span>caps<span class="op">[</span>i<span class="op">],</span></span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>                                    <span class="st">&quot;storage&quot;</span><span class="op">,</span> <span class="op">&amp;</span>c<span class="op">);</span></span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>        <span class="cf">if</span> <span class="op">(</span>rc <span class="op">==</span> NX_OK<span class="op">)</span> s<span class="op">-&gt;</span>storage <span class="op">=</span> msg<span class="op">-&gt;</span>caps<span class="op">[</span>i<span class="op">].</span>u<span class="op">.</span>slot_ref<span class="op">;</span></span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> NX_OK<span class="op">;</span></span>
+<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>Later, when the consumer is torn down:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>nx_slot_ref_release<span class="op">(&amp;</span>consumer_slot<span class="op">,</span> s<span class="op">-&gt;</span>storage<span class="op">);</span></span></code></pre></div>
+<hr />
+<h2 id="invariants">Invariants</h2>
+<ol type="1">
+<li><p><strong>Caller owns message storage.</strong> The router stores
+pointers into queues but never frees messages. Double-use (enqueuing the
+same <code>nx_ipc_message</code> twice simultaneously) is
+undefined.</p></li>
+<li><p><strong>No forged caps.</strong> Every SLOT_REF cap on a send
+must correspond to a registered connection the sender holds. Sending
+with a forged cap returns <code>NX_EINVAL</code>, the handler never
+runs.</p></li>
+<li><p><strong>Recv-cap sweep runs regardless of handler rc.</strong>
+Even a failing handler is responsible for BORROW caps being dropped and
+TRANSFER caps being accounted for.</p></li>
+<li><p><strong><code>msg-&gt;_next</code> is framework-only.</strong>
+Callers must not touch it.</p></li>
+<li><p><strong>REDIRECT retargets in place.</strong> After a
+REDIRECT-resolved send, <code>msg-&gt;dst_slot</code> points at the
+final destination, not the original target. Intentional — see the
+“REDIRECT mutation warning” above.</p></li>
+<li><p><strong>IPC hooks run on the dispatcher.</strong>
+<code>NX_HOOK_IPC_SEND</code> / <code>_IPC_RECV</code> handlers must
+obey the slot-resolve locality rule if they read
+<code>slot-&gt;active</code>.</p></li>
+<li><p><strong><code>NX_PAUSE_REJECT</code> returns
+<code>NX_EBUSY</code>, never silently drops.</strong> Callers that need
+fire-and-forget on a paused destination should declare the edge as
+<code>NX_PAUSE_QUEUE</code> instead.</p></li>
+</ol>
+<hr />
+<h2 id="see-also">See also</h2>
+<ul>
+<li><p><a href="framework-registry.html">Registry</a> — slot / connection
+definitions, pause-state / fallback fields.</p></li>
+<li><p><a href="framework-components.html">Component lifecycle</a> — pause
+protocol that drives <code>pause_state</code> through
+<code>CUTTING → DRAINING → DONE</code>, and the <code>handle_msg</code>
+callback.</p></li>
+<li><p><a href="framework-hooks.html">Hook framework</a> — IPC_SEND /
+IPC_RECV hook points and ABORT semantics.</p></li>
+</ul>
+</body>
+</html>

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>README – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#nonux-framework-documentation"
+id="toc-nonux-framework-documentation">nonux framework documentation</a>
+<ul>
+<li><a href="#modules" id="toc-modules">Modules</a></li>
+<li><a href="#error-codes" id="toc-error-codes">Error codes</a></li>
+<li><a href="#caller-owned-storage"
+id="toc-caller-owned-storage">Caller-owned storage</a></li>
+<li><a href="#reset-helpers-testing"
+id="toc-reset-helpers-testing">Reset helpers (testing)</a></li>
+<li><a href="#thread-model" id="toc-thread-model">Thread model</a></li>
+<li><a href="#see-also" id="toc-see-also">See also</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="nonux-framework-documentation">nonux framework
+documentation</h1>
+<p>Reference docs for the framework modules under
+<code>framework/</code>. Each doc is self-contained — types, functions,
+return codes, invariants, example usage — and is kept in sync with the
+real headers. Headers are the normative source; docs track them.</p>
+<h2 id="modules">Modules</h2>
+<table>
+<colgroup>
+<col style="width: 31%" />
+<col style="width: 14%" />
+<col style="width: 54%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Doc</th>
+<th>Header</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><a href="framework-registry.html">Registry</a></td>
+<td><code>framework/registry.h</code></td>
+<td>Slots, components, connections; events, change log, snapshots, JSON.
+The source of truth for the running composition.</td>
+</tr>
+<tr class="even">
+<td><a href="framework-components.html">Component lifecycle</a></td>
+<td><code>framework/component.h</code></td>
+<td>Six-verb lifecycle state machine,
+<code>struct nx_component_ops</code>, dependency resolver,
+<code>NX_COMPONENT_REGISTER</code> macro.</td>
+</tr>
+<tr class="odd">
+<td><a href="framework-ipc.html">IPC router</a></td>
+<td><code>framework/ipc.h</code></td>
+<td><code>nx_ipc_send</code> / dispatch, per-slot inbox, per-edge hold
+queue, pause-policy routing, capabilities,
+<code>slot_ref_retain/release</code>.</td>
+</tr>
+<tr class="even">
+<td><a href="framework-hooks.html">Hook framework</a></td>
+<td><code>framework/hook.h</code></td>
+<td>Per-hook-point chains, priority-sorted insert, typed context union,
+mark-then-sweep unregister.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="error-codes">Error codes</h2>
+<p>All four modules share the codes defined in
+<code>framework/registry.h</code>:</p>
+<table>
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 7%" />
+<col style="width: 76%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Code</th>
+<th style="text-align: right;">Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>NX_OK</code></td>
+<td style="text-align: right;"><code>0</code></td>
+<td>Success.</td>
+</tr>
+<tr class="even">
+<td><code>NX_EINVAL</code></td>
+<td style="text-align: right;"><code>-1</code></td>
+<td>Bad argument (NULL pointer, out-of-range enum, etc.).</td>
+</tr>
+<tr class="odd">
+<td><code>NX_ENOMEM</code></td>
+<td style="text-align: right;"><code>-2</code></td>
+<td>Internal allocation failed.</td>
+</tr>
+<tr class="even">
+<td><code>NX_EEXIST</code></td>
+<td style="text-align: right;"><code>-3</code></td>
+<td>Duplicate registration.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_ENOENT</code></td>
+<td style="text-align: right;"><code>-4</code></td>
+<td>Target not found (slot, component, fallback, etc.).</td>
+</tr>
+<tr class="even">
+<td><code>NX_EBUSY</code></td>
+<td style="text-align: right;"><code>-5</code></td>
+<td>Operation would leave dangling references, or destination is paused
+with <code>NX_PAUSE_REJECT</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>NX_ESTATE</code></td>
+<td style="text-align: right;"><code>-6</code></td>
+<td>Lifecycle state machine violation.</td>
+</tr>
+<tr class="even">
+<td><code>NX_ELOOP</code></td>
+<td style="text-align: right;"><code>-7</code></td>
+<td>Redirect fallback chain exceeded
+<code>NX_IPC_REDIRECT_DEPTH_MAX</code> (= 4).</td>
+</tr>
+<tr class="odd">
+<td><code>NX_EABORT</code></td>
+<td style="text-align: right;"><code>-8</code></td>
+<td>A hook returned <code>NX_HOOK_ABORT</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="caller-owned-storage">Caller-owned storage</h2>
+<p>Most framework objects (<code>struct nx_slot</code>,
+<code>struct nx_component</code>, <code>struct nx_hook</code>) are
+<strong>caller-owned</strong>: the framework bookkeeps pointers to them
+but never allocates or frees the struct itself. This keeps the kernel
+boot path allocator-free — descriptors and slot structs live in static
+storage emitted into the <code>nx_components</code> linker section.</p>
+<p>Every <code>_register</code> call simply records the pointer; every
+<code>_unregister</code> drops the pointer. The caller is responsible
+for the struct’s lifetime being at least as long as the
+registration.</p>
+<p>Internal bookkeeping nodes (the per-slot / per-component entries the
+registry keeps in linked lists) <strong>are</strong> allocated by the
+framework via <code>malloc</code>, because the registry’s own size is a
+function of composition, not compile-time. The kernel side will route
+these through <code>kmalloc</code> / <code>kfree</code> in slice
+3.9.</p>
+<h2 id="reset-helpers-testing">Reset helpers (testing)</h2>
+<p>Each module exposes a reset function used by the test harness:</p>
+<table>
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 73%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Function</th>
+<th>Clears</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>nx_graph_reset()</code></td>
+<td>Every registry node, subscriber, change log entry, generation
+counter.</td>
+</tr>
+<tr class="even">
+<td><code>nx_ipc_reset()</code></td>
+<td>Every per-slot inbox and every per-<code>(src,dst)</code> hold
+queue.</td>
+</tr>
+<tr class="odd">
+<td><code>nx_hook_reset()</code></td>
+<td>Every hook chain and the in-dispatch counter.</td>
+</tr>
+</tbody>
+</table>
+<p>These are test-only in kernel builds — real kernels never reset the
+framework state. On the host build, tests call them at the top of every
+case so state from previous tests is gone.</p>
+<h2 id="thread-model">Thread model</h2>
+<p>Slice 3.6–3.8 runs on a single-threaded host build. The kernel boot
+path (slice 3.9) upgrades the inbox to an MPSC lock-free queue with a
+per-CPU dispatcher thread. The public APIs in the docs below don’t
+change across that upgrade — the synchronisation primitives inside
+<code>registry.c</code> / <code>ipc.c</code> do.</p>
+<p><code>pause_state</code> on <code>struct nx_slot</code> is already
+<code>_Atomic</code> so the SMP upgrade is a barrier swap, not a
+restructure.</p>
+<h2 id="see-also">See also</h2>
+<ul>
+<li><a href="../README.html"><code>../README.md</code></a> — project-level
+overview and quick-start.</li>
+<li><a href="../tools/README.html"><code>../tools/README.md</code></a> —
+build tooling (<code>gen-config.py</code>,
+<code>validate-config.py</code>, <code>verify-registry.py</code>).</li>
+</ul>
+</body>
+</html>
