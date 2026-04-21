@@ -23,13 +23,14 @@ struct sample_state {
     int                scratch; /* rest of the state struct */
 };
 
-/* ops is opaque in 3.4 — slice 3.6 types this properly. */
-static const int SAMPLE_OPS_SENTINEL = 0;
+/* All-NULL ops table — this test exercises only the descriptor shape
+ * and resolve_deps, not any ops-driven behaviour. */
+static const struct nx_component_ops sample_ops = { 0 };
 
 NX_COMPONENT_REGISTER(sample,
                       struct sample_state,
                       deps,
-                      &SAMPLE_OPS_SENTINEL,
+                      &sample_ops,
                       SAMPLE_DEPS_TABLE);
 
 extern const struct nx_component_descriptor sample_descriptor;
@@ -41,12 +42,12 @@ struct trivial_state {
     int                 whatever;
 };
 
-static const int TRIVIAL_OPS_SENTINEL = 0;
+static const struct nx_component_ops trivial_ops = { 0 };
 
 NX_COMPONENT_REGISTER_NO_DEPS(trivial,
                               struct trivial_state,
                               deps,
-                              &TRIVIAL_OPS_SENTINEL);
+                              &trivial_ops);
 
 extern const struct nx_component_descriptor trivial_descriptor;
 
@@ -59,7 +60,7 @@ TEST(descriptor_fields_match_manifest)
     ASSERT_EQ_U(sample_descriptor.deps_offset,
                 offsetof(struct sample_state, deps));
     ASSERT_EQ_U(sample_descriptor.n_deps, 2);
-    ASSERT_EQ_PTR(sample_descriptor.ops, &SAMPLE_OPS_SENTINEL);
+    ASSERT_EQ_PTR(sample_descriptor.ops, &sample_ops);
 
     /* Deps are emitted in sorted order: "stats" after "timer" would be
      * alphabetical except that requires come before optionals. */

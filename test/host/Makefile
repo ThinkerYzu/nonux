@@ -14,13 +14,15 @@ SRCS := main.c \
         pmm_test.c \
         registry_test.c \
         component_test.c \
-        component_deps_test.c
+        component_deps_test.c \
+        component_ipc_test.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
         ../../core/lib/string.c \
         ../../framework/registry.c \
-        ../../framework/component.c
+        ../../framework/component.c \
+        ../../framework/ipc.c
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.

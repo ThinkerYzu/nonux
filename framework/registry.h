@@ -82,11 +82,21 @@ struct nx_slot {
     struct nx_component     *active;      /* NULL until a component is bound */
 };
 
+/* Forward declaration — full type in framework/component.h.  Kept here
+ * as a pointer field so `nx_component` can link back to its descriptor
+ * without pulling component.h into every registry consumer. */
+struct nx_component_descriptor;
+
 /* A component is a registered implementation instance. */
 struct nx_component {
     const char              *manifest_id; /* e.g. "sched_rr" */
     const char              *instance_id; /* unique within manifest_id */
     enum nx_lifecycle_state  state;
+
+    /* Caller-owned (not touched by the registry).  Set by the framework
+     * bring-up path in slice 3.9 — the IPC router in 3.6 reads both. */
+    void                                   *impl;        /* `self` for ops */
+    const struct nx_component_descriptor   *descriptor;  /* ops / state_size */
 };
 
 /* A connection is a directed edge from one slot's active impl to another slot.

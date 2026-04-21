@@ -65,6 +65,31 @@ int nx_component_disable(struct nx_component *c);  /* ACTIVE|PAUSED → READY */
 int nx_component_destroy(struct nx_component *c);  /* READY  → DESTROYED */
 
 /* ======================================================================
+ *  Component ops — typed callback table (slice 3.6).
+ *
+ *  Every callback receives `self` = the component's state pointer
+ *  (`struct nx_component.impl`).  All ops are optional — a NULL entry
+ *  is a no-op as far as the framework is concerned.
+ *
+ *  In slice 3.6 only `handle_msg` is exercised (by the IPC router).
+ *  The lifecycle callbacks are typed here so slice 3.9 can plumb them
+ *  through `nx_component_init / enable / ...` without changing the
+ *  descriptor's shape.
+ */
+
+struct nx_ipc_message;  /* forward — full def in framework/ipc.h */
+
+struct nx_component_ops {
+    int  (*init)   (void *self);
+    int  (*enable) (void *self);
+    int  (*pause)  (void *self);
+    int  (*resume) (void *self);
+    int  (*disable)(void *self);
+    void (*destroy)(void *self);
+    int  (*handle_msg)(void *self, struct nx_ipc_message *msg);
+};
+
+/* ======================================================================
  *  Dependency injection — Phase 3 slice 3.4.
  *
  *  A component declares its dependencies in `manifest.json`.  The build
@@ -116,7 +141,7 @@ struct nx_component_descriptor {
     size_t                            deps_offset;  /* offsetof(container, deps) */
     const struct nx_dep_descriptor   *deps;
     size_t                            n_deps;
-    const void                       *ops;          /* typed in slice 3.6 */
+    const struct nx_component_ops    *ops;
 };
 
 /* Resolve every dep in `d`, writing slot pointers into `state` at the
