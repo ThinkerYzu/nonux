@@ -2,6 +2,11 @@
 #include "framework/component.h"
 #include "framework/registry.h"
 
+#if !__STDC_HOSTED__
+#include "core/sched/sched.h"
+#include "interfaces/scheduler.h"
+#endif
+
 #if __STDC_HOSTED__
 #include <stdlib.h>
 #include <string.h>
@@ -166,6 +171,25 @@ int nx_framework_bootstrap(void)
             return NX_ELOOP;
         }
     }
+
+#if !__STDC_HOSTED__
+    /* Slice 4.4: if the composition includes a `scheduler` slot and
+     * its bound component exports an iface_ops table, hand it to the
+     * core scheduler driver.  This is the single non-slot scheduler-
+     * pointer publication the kernel makes — DESIGN.md §Scheduler:
+     * Core Driver + Component.  No-op (with no crash) for builds
+     * that don't wire up a scheduler. */
+    {
+        struct nx_slot *sched_slot = nx_slot_lookup("scheduler");
+        if (sched_slot && sched_slot->active &&
+            sched_slot->active->descriptor &&
+            sched_slot->active->descriptor->iface_ops) {
+            const struct nx_scheduler_ops *sops =
+                sched_slot->active->descriptor->iface_ops;
+            sched_init(sops, sched_slot->active->impl);
+        }
+    }
+#endif
 
     return NX_OK;
 }

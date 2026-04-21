@@ -158,6 +158,16 @@ struct nx_component_descriptor {
     const struct nx_dep_descriptor   *deps;
     size_t                            n_deps;
     const struct nx_component_ops    *ops;
+
+    /*
+     * Slice 4.4 — optional pointer to an interface-specific ops table
+     * (e.g. `struct nx_scheduler_ops *` for scheduler components).
+     * The framework doesn't interpret this; consumers cast based on
+     * the slot's iface.  Opaque `void *` so this header doesn't need
+     * to include every interface's header.  NULL for components that
+     * don't export an iface-specific op table (most of them).
+     */
+    const void                       *iface_ops;
 };
 
 /* Resolve every dep in `d`, writing slot pointers into `state` at the
@@ -194,6 +204,18 @@ int nx_resolve_deps(const struct nx_component_descriptor *d,
  *                a comma-separated list of nx_dep_descriptor initialisers
  */
 #define NX_COMPONENT_REGISTER(NAME, CONTAINER, DEPS_FIELD, OPS, DEPS_TABLE) \
+    NX_COMPONENT_REGISTER_IFACE(NAME, CONTAINER, DEPS_FIELD, OPS, NULL,      \
+                                DEPS_TABLE)
+
+/*
+ * Full form — same as NX_COMPONENT_REGISTER but explicitly takes an
+ * IFACE_OPS pointer for components that export an interface-specific
+ * op table alongside their framework lifecycle ops.  Pass NULL if not
+ * applicable.  Slice 4.4 introduced `iface_ops` for scheduler
+ * components; future interfaces will use the same slot.
+ */
+#define NX_COMPONENT_REGISTER_IFACE(NAME, CONTAINER, DEPS_FIELD, OPS,       \
+                                    IFACE_OPS, DEPS_TABLE)                   \
     static const struct nx_dep_descriptor NAME##_deps_tbl[] = {             \
         DEPS_TABLE(CONTAINER, DEPS_FIELD)                                   \
     };                                                                      \
@@ -206,6 +228,7 @@ int nx_resolve_deps(const struct nx_component_descriptor *d,
         .n_deps      = sizeof(NAME##_deps_tbl)                              \
                        / sizeof(NAME##_deps_tbl[0]),                        \
         .ops         = (OPS),                                               \
+        .iface_ops   = (IFACE_OPS),                                         \
     }
 
 /* Same as NX_COMPONENT_REGISTER but for a component with no
@@ -213,6 +236,14 @@ int nx_resolve_deps(const struct nx_component_descriptor *d,
  * read when `n_deps == 0`, so we pass 0 and the state struct stays
  * free of otherwise-useless placeholder fields. */
 #define NX_COMPONENT_REGISTER_NO_DEPS(NAME, CONTAINER, OPS)                 \
+    NX_COMPONENT_REGISTER_NO_DEPS_IFACE(NAME, CONTAINER, OPS, NULL)
+
+/*
+ * No-deps + iface_ops — for scheduler / other single-iface components
+ * that need the iface-specific op table but have no manifest
+ * dependencies (sched_rr is the first user).
+ */
+#define NX_COMPONENT_REGISTER_NO_DEPS_IFACE(NAME, CONTAINER, OPS, IFACE_OPS) \
     const struct nx_component_descriptor NAME##_descriptor                  \
         __attribute__((section("nx_components"), used)) = {                 \
         .name        = #NAME,                                               \
@@ -221,6 +252,7 @@ int nx_resolve_deps(const struct nx_component_descriptor *d,
         .deps        = NULL,                                                \
         .n_deps      = 0,                                                   \
         .ops         = (OPS),                                               \
+        .iface_ops   = (IFACE_OPS),                                         \
     }
 
 #endif /* NX_FRAMEWORK_COMPONENT_H */

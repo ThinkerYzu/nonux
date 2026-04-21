@@ -18,4 +18,21 @@ void timer_init(unsigned int hz);
 /* Total tick count since init.  Incremented by the IRQ handler. */
 uint64_t timer_ticks(void);
 
+/*
+ * Slice 4.4 — recomposition timer quiescence (DESIGN.md §Recomposition
+ * Protocol — Timer quiescence).
+ *
+ * `timer_pause` masks the timer PPI at the GIC; `timer_resume` unmasks
+ * it.  The pair is nested via an internal counter so overlapping pause
+ * windows compose cleanly — resume only unmasks when the nesting
+ * returns to zero.  While paused, no ticks fire (and therefore no
+ * `sched_tick` runs), closing the race window during which the
+ * recomposition path updates the stashed `g_sched` pointer.
+ *
+ * Calling `timer_resume` without a matching `timer_pause` is a no-op
+ * (saturates at zero rather than going negative).
+ */
+void timer_pause(void);
+void timer_resume(void);
+
 #endif /* NONUX_TIMER_H */

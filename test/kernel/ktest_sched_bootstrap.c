@@ -23,7 +23,6 @@
  * and the test fails loudly. */
 struct sched_rr_state_mirror {
     struct { struct { void *next, *prev; } n; } runqueue;
-    void     *current;
     unsigned  quantum_ticks;
     unsigned  remaining;
     unsigned  init_called;

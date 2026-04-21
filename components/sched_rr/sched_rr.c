@@ -44,7 +44,6 @@
 
 struct sched_rr_state {
     struct nx_list_head runqueue;
-    struct nx_task     *current;
     unsigned            quantum_ticks;
     unsigned            remaining;
 
@@ -123,13 +122,19 @@ static int sched_rr_set_priority(void *self, struct nx_task *task, int priority)
 static void sched_rr_tick(void *self)
 {
     struct sched_rr_state *s = self;
-    if (!s->current) return;
+    /* Read the current task from the core driver's TPIDR_EL1 stash.
+     * sched_rr doesn't track current separately — the core keeps the
+     * one source of truth, and the policy only cares about quantum
+     * accounting for whoever is actually running right now. */
+    struct nx_task *curr = nx_task_current();
+    if (!curr) return;
     if (s->remaining > 0) s->remaining--;
     if (s->remaining == 0) {
         /* Quantum expired.  Flag the current task for reschedule —
-         * the IRQ-return shim (slice 4.4) will consume need_resched
-         * and invoke pick_next. */
-        s->current->need_resched = 1;
+         * the IRQ-return shim in core/sched/sched.c consumes
+         * need_resched and invokes pick_next on this task's kernel
+         * stack before ERET. */
+        curr->need_resched = 1;
         s->remaining = s->quantum_ticks;
     }
 }
@@ -154,7 +159,6 @@ static int sched_rr_init(void *self)
 {
     struct sched_rr_state *s = self;
     nx_list_init(&s->runqueue);
-    s->current        = NULL;
     s->quantum_ticks  = SCHED_RR_DEFAULT_QUANTUM_TICKS;
     s->remaining      = s->quantum_ticks;
     s->init_called++;
@@ -196,6 +200,7 @@ const struct nx_component_ops sched_rr_component_ops = {
      * No handle_msg: the scheduler is not IPC-driven in Phase 4. */
 };
 
-NX_COMPONENT_REGISTER_NO_DEPS(sched_rr,
-                              struct sched_rr_state,
-                              &sched_rr_component_ops);
+NX_COMPONENT_REGISTER_NO_DEPS_IFACE(sched_rr,
+                                    struct sched_rr_state,
+                                    &sched_rr_component_ops,
+                                    &sched_rr_scheduler_ops);

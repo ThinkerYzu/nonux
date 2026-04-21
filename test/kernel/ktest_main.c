@@ -1,8 +1,22 @@
 #include "ktest.h"
 
+#include "core/sched/task.h"
+
 /* Linker-generated markers for the kernel_test_registry section. */
 extern const struct ktest_entry __start_kernel_test_registry[];
 extern const struct ktest_entry __stop_kernel_test_registry[];
+
+/* The core scheduler driver's idle task (slice 4.4).  Exposed so that
+ * ktest_main can reset TPIDR_EL1 between tests — a test that set
+ * TPIDR_EL1 to its own ad-hoc task (e.g. ktest_context's static
+ * boot_task) would otherwise leak that pointer into subsequent tests
+ * that call nx_task_current() and assume the idle task is current. */
+extern struct nx_task g_idle_task;
+
+static inline void reset_current_to_idle(void)
+{
+    asm volatile("msr tpidr_el1, %0" :: "r"(&g_idle_task) : "memory");
+}
 
 int ktest_current_failed;
 
@@ -38,6 +52,14 @@ void ktest_main(void)
     for (size_t i = 0; i < n; i++) {
         const struct ktest_entry *t = &__start_kernel_test_registry[i];
         ktest_current_failed = 0;
+
+        /* Reset per-test state that tests may have mutated:
+         *   - TPIDR_EL1 → idle task.  Without this, ktest_context's
+         *     tests leak their own boot_task.X struct into TPIDR_EL1
+         *     and subsequent tests that call nx_task_current()
+         *     operate on a stale pointer.
+         */
+        reset_current_to_idle();
 
         kprintf("  %s", t->name);
         /* kprintf lacks width specifiers; pad manually so pass/fail

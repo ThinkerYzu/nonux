@@ -3,6 +3,7 @@
 #include "core/cpu/exception.h"
 #include "core/irq/irq.h"
 #include "core/timer/timer.h"
+#include "core/sched/sched.h"
 #include "framework/bootstrap.h"
 #include "framework/registry.h"
 
@@ -88,15 +89,26 @@ void boot_main(void)
         kprintf("[fw]   bootstrap failed (rc=%d)\n", fw_rc);
     }
 
+    /* Slice 4.4: transition the boot context into the idle task and
+     * enqueue it as the scheduler's runqueue fallback BEFORE enabling
+     * IRQs.  Doing it in this order means the very first tick after
+     * irq_enable_local can drive sched_tick/sched_check_resched
+     * against a well-formed current.  No-op if sched_init hasn't
+     * run (e.g. the composition doesn't wire up a scheduler slot). */
+    sched_start();
+
     irq_enable_local();
 
 #ifdef NX_KTEST
     /* When built with -DNX_KTEST, run the in-kernel test suite instead
-     * of the idle loop.  ktest_main exits via semihosting. */
+     * of the idle loop.  ktest_main runs in the idle-task context
+     * (TPIDR_EL1 now points at the core driver's idle_task); tests
+     * can spawn kthreads that preempt ktest_main via timer ticks and
+     * yield back cooperatively.  ktest_main exits via semihosting. */
     extern void ktest_main(void) __attribute__((noreturn));
     ktest_main();
 #else
-    kprintf("[boot] Phase 2 ready — tick prints once/sec.\n\n");
+    kprintf("[boot] idle: waiting for work.\n\n");
 
     for (;;)
         asm volatile("wfi");

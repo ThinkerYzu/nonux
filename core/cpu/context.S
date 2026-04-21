@@ -46,6 +46,8 @@ cpu_switch_to:
     stp     x29, x30, [x0, #0x50]
     mov     x2, sp
     str     x2,       [x0, #0x60]
+    mrs     x2, daif
+    str     x2,       [x0, #0x68]
 
     /* Load next's context. */
     ldp     x19, x20, [x1, #0x00]
@@ -56,6 +58,8 @@ cpu_switch_to:
     ldp     x29, x30, [x1, #0x50]
     ldr     x2,       [x1, #0x60]
     mov     sp, x2
+    ldr     x2,       [x1, #0x68]
+    msr     daif, x2
 
     /* Publish the new "current task" via TPIDR_EL1.  nx_task_current()
      * reads this from both C and future exception-return paths. */

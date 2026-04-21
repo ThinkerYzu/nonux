@@ -25,11 +25,18 @@
  *   offset 0x40:  x27 / x28
  *   offset 0x50:  x29 / x30     (FP / LR)
  *   offset 0x60:  sp
+ *   offset 0x68:  daif (exception mask — I/F/A/D bits)
  *
  * The caller-saved regs (x0..x18) are not saved here: `cpu_switch_to` is a
  * plain C call from the scheduler driver, so AAPCS lets the compiler treat
  * them as clobbered across the call.  No FP state because the kernel builds
  * with `-mgeneral-regs-only`.
+ *
+ * DAIF (the IRQ/FIQ/SError/debug mask bits) is saved and restored per-task
+ * so that a task interrupted mid-IRQ-handler (DAIF-I masked) can coexist
+ * with a task that yielded voluntarily (DAIF-I enabled).  Without this the
+ * first involuntary switch at IRQ-return would carry the ISR's masked state
+ * into a yielding task, and the CPU would never take another tick.
  *
  * `__attribute__((aligned(16)))` keeps every stp/ldp pair on a 16-byte
  * boundary so `-mstrict-align` stays happy while MMU is off.
@@ -42,7 +49,7 @@ struct nx_cpu_ctx {
     uint64_t x27, x28;
     uint64_t x29, x30;   /* fp, lr */
     uint64_t sp;
-    uint64_t _pad;       /* 16-byte tail align for the whole struct */
+    uint64_t daif;
 } __attribute__((aligned(16)));
 
 enum nx_task_state {

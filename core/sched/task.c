@@ -33,6 +33,23 @@
  * when the thunk runs it can restore them and jump to entry(arg). */
 extern void nx_task_bootstrap(void);
 
+#if __STDC_HOSTED__
+/*
+ * Host-build stub for cpu_switch_to.  The real implementation lives in
+ * core/cpu/context.S (ARM64 assembly) which cannot be linked into a
+ * host x86-64 build.  Host tests never drive the scheduler into an
+ * actual context switch — sched_check_resched's precondition
+ * (current->need_resched && !preempt_count) is never reached from
+ * host tests — but sched.c references the symbol unconditionally so
+ * the linker needs a definition.  Abort if anything does reach it.
+ */
+void cpu_switch_to(struct nx_task *prev, struct nx_task *next)
+{
+    (void)prev; (void)next;
+    abort();
+}
+#endif
+
 /* 0 is reserved for "no task" so preempt accounting and TPIDR_EL1 can both
  * use NULL-as-none without colliding. */
 static _Atomic uint32_t g_task_id_seq = 1;
@@ -151,7 +168,8 @@ struct nx_task *nx_task_create(const char *name,
 #else
     t->cpu_ctx.x30 = (uint64_t)(uintptr_t)&nx_task_bootstrap;
 #endif
-    t->cpu_ctx.sp  = (uint64_t)sp_top;
+    t->cpu_ctx.sp   = (uint64_t)sp_top;
+    t->cpu_ctx.daif = 0;  /* IRQs enabled for a fresh kthread */
 
     return t;
 }

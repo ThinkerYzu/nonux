@@ -117,6 +117,14 @@ _irq_stub:
     SAVE_TRAPFRAME
     mov     x0, sp
     bl      on_irq
+    /* Slice 4.4: consult the reschedule shim before returning to the
+     * interrupted context.  sched_check_resched reads
+     * current->need_resched and, if set and preempt_count == 0, calls
+     * pick_next + cpu_switch_to on this stack — that call may not
+     * return here until the interrupted task is picked again in a
+     * future reschedule.  Harmless no-op until sched_init has been
+     * called. */
+    bl      sched_check_resched
     RESTORE_TRAPFRAME
     eret
 
