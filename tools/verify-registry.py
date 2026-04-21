@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
 """
-verify-registry.py — static checker for the registry rules described
-in DESIGN.md §AI Verification (R1–R8).
+verify-registry.py — Layer-1 machine checker for the registry rules
+described in DESIGN.md §AI Verification (R1–R8).
 
-Scope in slice 3.7 is deliberately narrow: only rules that can be
-checked honestly with regex-level analysis. R1/R3/R5/R6/R8 require
-symbolic reasoning over C source and call-graphs (clang / pycparser)
-and are marked `deferred` in the output rather than silently passing.
-R7's "regenerate and diff" assumes gen/ is a checked-in tree, which
-our gitignore contradicts; the underlying intent (deterministic
-generator output) is covered by the `test_deterministic_output*` tests
-under tools/tests/, so R7 is also marked deferred here.
+Two enforcement layers cover the eight rules:
 
-Implemented checks:
+  Layer 1 (this tool)     — regex-decidable subset, run by `make
+                            verify-registry` before `make` and
+                            `make test`. Violations fail the build.
+  Layer 2 (AI rubric)     — rules that need reasoning beyond regex
+                            (slot-pointer dataflow, interface-schema
+                            awareness, held-refs tracking, borrowed-cap
+                            lifetime, generator identity, ISR/kthread
+                            call-graph). Authoring and reviewing agents
+                            consult the rubric documented in the
+                            project's docs and report pass/fail per
+                            rule.
+
+"ai-verified" in this tool's output means "Layer-2 applies — the
+agent is responsible for the check" — it is NOT a synonym for
+"deferred" or "skipped."
+
+Machine checks implemented here:
 
   R2 — Every `struct nx_slot *` field inside a component's state
        struct corresponds to a manifest `requires` / `optional` entry.
@@ -25,8 +34,9 @@ Implemented checks:
 
   R4 — Every `nx_slot_ref_retain(` call in a component's C source
        has a matching `nx_slot_ref_release(` call. Regex count match.
-       Doesn't prove the release is reachable from disable/destroy,
-       but catches the common "forgot to release at all" case.
+       Doesn't prove the release is reachable from disable/destroy
+       (Layer 2 covers reachability), but catches the common "forgot
+       to release at all" case.
 
 CLI:
 
@@ -42,8 +52,8 @@ Output: one finding per line, formatted as
     <path>:<line> R<n>: <message>
 or just
     <path> R<n>: <message>
-when line info isn't applicable. Trailing summary line reports totals
-and which rules were deferred.
+when line info isn't applicable. Trailing summary line reports totals,
+which rules ran as machine checks, and which are handed to Layer 2.
 """
 
 from __future__ import annotations
@@ -64,26 +74,32 @@ from dataclasses import dataclass
 class Rule:
     tag: str
     description: str
-    status: str         # "implemented" or "deferred"
-    deferred_reason: str = ""
+    status: str         # "machine" (this tool enforces it) or
+                        # "ai-verified" (Layer-2 rubric; agents enforce)
+    ai_reason: str = "" # why the machine layer can't check it today
 
 
 RULES: list[Rule] = [
-    Rule("R1", "No fabricated slot pointers",      "deferred",
-         "needs symbolic slot-pointer dataflow (clang/pycparser)"),
-    Rule("R2", "Slot fields match manifest",       "implemented"),
-    Rule("R3", "Cap-only slot transfer",           "deferred",
-         "needs interface message schemas (not defined until 3.8+)"),
-    Rule("R4", "Retain/release pairing",           "implemented"),
-    Rule("R5", "Sender owns what it passes",       "deferred",
-         "needs symbolic held-refs tracking"),
-    Rule("R6", "Handler doesn't stash borrowed caps", "deferred",
-         "needs borrowed-cap dataflow-to-assignment-sink analysis"),
-    Rule("R7", "Manifest is source of truth",      "deferred",
-         "presupposes gen/ is checked in; generator determinism is "
-         "covered by tools/tests/test_gen_config.py::*determinism*"),
-    Rule("R8", "Slot-resolve locality",            "deferred",
-         "needs ISR/kthread-root call-graph analysis"),
+    Rule("R1", "No fabricated slot pointers",      "ai-verified",
+         "slot-pointer dataflow is outside regex scope "
+         "(needs clang/pycparser)"),
+    Rule("R2", "Slot fields match manifest",       "machine"),
+    Rule("R3", "Cap-only slot transfer",           "ai-verified",
+         "interface message schemas aren't defined until slice 3.8+; "
+         "until then the rule is rubric-enforced"),
+    Rule("R4", "Retain/release pairing",           "machine"),
+    Rule("R5", "Sender owns what it passes",       "ai-verified",
+         "held-refs tracking across send sites needs symbolic state"),
+    Rule("R6", "Handler doesn't stash borrowed caps", "ai-verified",
+         "borrowed-cap dataflow to assignment sinks needs real AST"),
+    Rule("R7", "Manifest is source of truth",      "ai-verified",
+         "gen/ is gitignored so regenerate-and-diff has no on-disk "
+         "target; determinism is covered by "
+         "tools/tests/test_gen_config.py::*determinism*"),
+    Rule("R8", "Slot-resolve locality",            "ai-verified",
+         "ISR/kthread call-graph needs an entry-point tagging "
+         "convention (slice 3.8+/3.9); runtime harness also asserts "
+         "dispatcher-context at each slot-resolve"),
 ]
 
 
@@ -247,16 +263,16 @@ CHECK_FNS = {
 def run_checks(components_dir: pathlib.Path,
                rules: list[str]) -> tuple[list[Finding], list[Rule]]:
     findings: list[Finding] = []
-    deferred: list[Rule] = []
-    impl_tags: set[str] = set()
+    ai_verified: list[Rule] = []
+    machine_tags: set[str] = set()
 
     for r in RULES:
         if r.tag not in rules:
             continue
-        if r.status == "deferred":
-            deferred.append(r)
+        if r.status == "ai-verified":
+            ai_verified.append(r)
         else:
-            impl_tags.add(r.tag)
+            machine_tags.add(r.tag)
 
     for comp_dir, manifest_path in iter_component_dirs(components_dir):
         manifest = load_manifest(manifest_path)
@@ -265,25 +281,31 @@ def run_checks(components_dir: pathlib.Path,
                 "meta", manifest_path, None,
                 "invalid or unreadable manifest.json"))
             continue
-        for tag in sorted(impl_tags):
+        for tag in sorted(machine_tags):
             findings.extend(CHECK_FNS[tag](comp_dir, manifest))
 
-    return findings, deferred
+    return findings, ai_verified
 
 
 def cmd_list() -> int:
     for r in RULES:
-        marker = "✓" if r.status == "implemented" else "·"
-        line = f"  {marker} {r.tag} — {r.description}"
-        if r.status == "deferred":
-            line += f"  [deferred: {r.deferred_reason}]"
+        if r.status == "machine":
+            marker, tag = "✓", "machine"
+        else:
+            marker, tag = "○", "ai-verified"
+        line = f"  {marker} {r.tag} — {r.description}  [{tag}"
+        if r.status == "ai-verified":
+            line += f": {r.ai_reason}"
+        line += "]"
         print(line)
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Static checker for DESIGN.md §AI Verification rules")
+        description="Layer-1 machine checker for DESIGN.md §AI Verification "
+                    "rules. Rules marked ai-verified are enforced by Layer 2 "
+                    "(authoring/reviewing agents), not deferred.")
     parser.add_argument("components_dir", nargs="?",
                         type=pathlib.Path, default=pathlib.Path("components"))
     parser.add_argument("--rule", action="append", default=None,
@@ -303,18 +325,18 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
-    findings, deferred = run_checks(args.components_dir, rules)
+    findings, ai_verified = run_checks(args.components_dir, rules)
 
     cwd = pathlib.Path.cwd()
     for f in findings:
         print(f.format(cwd), file=sys.stderr)
 
     # Summary line on stdout so CI can still grep it.
-    impl_ran = [r.tag for r in RULES
-                if r.tag in rules and r.status == "implemented"]
+    machine_ran = [r.tag for r in RULES
+                   if r.tag in rules and r.status == "machine"]
     summary = (f"verify-registry: {len(findings)} finding(s); "
-               f"ran {','.join(impl_ran) or 'none'}; "
-               f"deferred {','.join(r.tag for r in deferred) or 'none'}")
+               f"ran {','.join(machine_ran) or 'none'}; "
+               f"ai-verified {','.join(r.tag for r in ai_verified) or 'none'}")
     print(summary)
 
     return 2 if findings else 0

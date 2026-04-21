@@ -35,8 +35,8 @@ class TestListCommand(unittest.TestCase):
         self.assertEqual(rc, 0)
         for tag in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"):
             self.assertIn(tag, out)
-        self.assertIn("implemented", "deferred implemented deferred")
-        self.assertIn("[deferred:", out)
+        self.assertIn("[machine]", out)
+        self.assertIn("[ai-verified:", out)
 
 
 class TestEmptyTree(unittest.TestCase):
@@ -217,22 +217,22 @@ class TestInvalidInputs(unittest.TestCase):
 
 class TestSummaryOutput(unittest.TestCase):
 
-    def test_summary_reports_ran_and_deferred(self):
+    def test_summary_reports_ran_and_ai_verified(self):
         with tempfile.TemporaryDirectory() as d:
             rc, out, _ = _run(str(pathlib.Path(d) / "components"))
             self.assertEqual(rc, 0)
-            # R2+R4 ran; others deferred.
+            # R2+R4 ran as machine checks; others go to Layer-2 AI rubric.
             self.assertIn("ran R2,R4", out)
-            self.assertIn("deferred R1,R3,R5,R6,R7,R8", out)
+            self.assertIn("ai-verified R1,R3,R5,R6,R7,R8", out)
 
     def test_filter_to_single_rule_changes_summary(self):
         with tempfile.TemporaryDirectory() as d:
             rc, out, _ = _run(str(pathlib.Path(d) / "components"),
                               "--rule", "R2")
-            # When the user asks for R2 only, no other rule is "deferred" —
-            # they just weren't requested. Summary should reflect that.
+            # When the user asks for R2 only, no other rule is ai-verified
+            # — they just weren't requested. Summary should reflect that.
             self.assertIn("ran R2;", out)
-            self.assertIn("deferred none", out)
+            self.assertIn("ai-verified none", out)
 
 
 if __name__ == "__main__":

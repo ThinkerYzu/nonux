@@ -6,9 +6,9 @@ Small Python tool chain that drives the nonux build. Three scripts:
   artefacts from JSON inputs.
 - **`validate-config.py`** — whole-tree validator. Needs the venv
   (depends on `jsonschema`).
-- **`verify-registry.py`** — static checker for DESIGN.md's R1–R8
-  registry rules. Stdlib-only; wired as a build gate for `make` and
-  `make test`.
+- **`verify-registry.py`** — Layer-1 machine checker for DESIGN.md's
+  R1–R8 registry rules (R2, R4 today; the rest are Layer-2 AI-verified).
+  Stdlib-only; wired as a build gate for `make` and `make test`.
 
 Plus a shell runner:
 
@@ -16,9 +16,10 @@ Plus a shell runner:
   header for flag reference.
 
 Output is **deterministic** — sorted keys everywhere, so regenerating
-from an unchanged input produces byte-identical output. Slice 3.7's
-`verify-registry.py` will rely on this for its R7 regenerate-and-diff
-gate.
+from an unchanged input produces byte-identical output. That
+determinism is what R7 (manifest is source of truth) rests on today;
+it's asserted by `test_gen_config.py::*determinism*` and will become a
+regenerate-and-diff machine check when the workflow commits `gen/`.
 
 ---
 
@@ -208,31 +209,37 @@ make deps-dot           # checks + --deps-dot
 
 ## `verify-registry.py`
 
-Static checker for DESIGN.md §AI Verification (R1–R8). Walks every
-`components/<name>/` with a `manifest.json` and runs the implemented
-rule checks. Exits non-zero on any finding; wired as a prerequisite
-of `make` (for `kernel.bin`) and `make test`, so violations block
-the build.
+Layer-1 machine checker for the registry rules described in
+DESIGN.md §AI Verification (R1–R8). Walks every `components/<name>/`
+with a `manifest.json` and runs the rules it can check deterministically
+by regex. Exits non-zero on any finding; wired as a prerequisite of
+`make` (for `kernel.bin`) and `make test`, so violations block the
+build.
 
-Scope in slice 3.7 is deliberately narrow — only rules that can be
-honestly checked with regex-level analysis. The rest are marked
-`deferred` in the tool output rather than silently passing.
+Two enforcement layers cover the eight rules together:
+
+- **Layer 1 (this tool)** — regex-decidable subset (R2, R4 today).
+- **Layer 2 (AI rubric)** — rules that need reasoning beyond regex
+  (R1, R3, R5, R6, R7, R8). Authoring and reviewing agents apply
+  the rubric documented in the project's docs. The tool tags these
+  `ai-verified` in its output — that is an enforcement layer, not
+  "deferred" or "skipped."
 
 ### Rules
 
 Run `verify-registry.py --list` for the current status summary. A
 snapshot:
 
-| Rule | Status        | Check                                     |
-|------|---------------|-------------------------------------------|
-| R1   | deferred      | fabricated slot pointers (needs clang/pycparser) |
-| R2   | **implemented** | every `struct nx_slot *<field>;` in component `.c` matches a `requires` / `optional` entry in `manifest.json` (both drift directions) |
-| R3   | deferred      | cap-only slot transfer (needs interface schemas) |
-| R4   | **implemented** | `nx_slot_ref_retain(` and `nx_slot_ref_release(` call counts match per component |
-| R5   | deferred      | sender owns slot caps it passes (needs held-refs tracking) |
-| R6   | deferred      | handler doesn't stash borrowed caps (needs dataflow) |
-| R7   | deferred      | regenerate-and-diff presupposes `gen/` is checked in; generator determinism is already covered by `test_gen_config.py::*determinism*` |
-| R8   | deferred      | slot-resolve locality (needs ISR/kthread call-graph) |
+| Rule | Status          | Check                                   |
+|------|-----------------|-----------------------------------------|
+| R1   | ai-verified     | fabricated slot pointers — regex would false-positive on legit casts; AI traces each slot-pointer RHS to an approved source |
+| R2   | **machine**     | every `struct nx_slot *<field>;` in component `.c` matches a `requires` / `optional` entry in `manifest.json` (both drift directions) |
+| R3   | ai-verified     | cap-only slot transfer — machine check needs interface message schemas (slice 3.8+) |
+| R4   | **machine**     | `nx_slot_ref_retain(` and `nx_slot_ref_release(` call counts match per component (AI checks reachability from `disable`/`destroy`) |
+| R5   | ai-verified     | sender owns slot caps it passes — AI tracks the held-refs set at each send site |
+| R6   | ai-verified     | handler doesn't stash borrowed caps — AI walks borrowed-cap dataflow to every assignment sink |
+| R7   | ai-verified     | manifest is source of truth — `gen/` is gitignored so no regenerate-and-diff target exists; generator determinism is covered by `test_gen_config.py::*determinism*`; flips to machine when the workflow commits generated headers |
+| R8   | ai-verified     | slot-resolve locality — AI walks ISR/kthread call-graphs and cross-thread handoffs; runtime harness asserts dispatcher-context at each resolve as a backstop |
 
 ### CLI
 
@@ -257,7 +264,7 @@ One finding per line on stderr:
 Trailing summary on stdout:
 
 ```
-verify-registry: N finding(s); ran R2,R4; deferred R1,R3,R5,R6,R7,R8
+verify-registry: N finding(s); ran R2,R4; ai-verified R1,R3,R5,R6,R7,R8
 ```
 
 ### Makefile target
