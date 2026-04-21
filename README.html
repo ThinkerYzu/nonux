@@ -103,22 +103,35 @@ id="toc-documentation">Documentation</a></li>
 <h1 id="nonux">nonux</h1>
 <p>A composable, Lego-like microkernel for ARM64. Swap components,
 benchmark designs, let AI build your kernel.</p>
+<p><strong>Status (2026-04-22):</strong> Phase 4 complete — preemptive
+multitasking is live under QEMU. <code>make test</code> runs 226 tests
+(51 python + 153 host + 22 kernel) green. The kernel boots, brings up
+<code>uart_pl011</code> + <code>sched_rr</code> through the framework
+bootstrap, promotes the boot context into an idle task, and drives
+preemption through the timer tick. Framework API reference lives under
+<a href="docs/"><code>docs/</code></a>; git history
+(<code>git log</code>) is the per-slice narrative, with each commit
+covering one slice end-to-end.</p>
 <h2 id="quick-start">Quick Start</h2>
 <div class="sourceCode" id="cb1"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Prerequisites (Ubuntu/Debian)</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu <span class="dt">\</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>                 qemu-system-arm make python3</span>
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Clone</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone git@github.com:ThinkerYzu/nonux.git</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> nonux</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Build and run</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> run                  <span class="co"># interactive — Ctrl-A X to exit</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="ex">tools/run-qemu.sh</span> <span class="at">-t</span> 5    <span class="co"># timed run (the kernel halts in wfe)</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="co"># Test</span></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test</span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Validate config</span></span>
-<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> validate-config</span></code></pre></div>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Prerequisites (Ubuntu/Debian)</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu <span class="dt">\</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>                 qemu-system-arm make python3</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Build and run</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> run                  <span class="co"># interactive — Ctrl-A X to exit</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="ex">tools/run-qemu.sh</span> <span class="at">-t</span> 5    <span class="co"># timed run (the kernel halts in wfe)</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Test</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test</span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a><span class="co"># Validate config</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> validate-config</span></code></pre></div>
 <h2 id="what-is-this">What is this?</h2>
 <p>nonux is a microkernel where every subsystem (scheduler, memory
 manager, filesystem, drivers) is a swappable component with a clean

@@ -2,9 +2,15 @@
 
 A composable, Lego-like microkernel for ARM64. Swap components, benchmark designs, let AI build your kernel.
 
+**Status (2026-04-22):** Phase 4 complete — preemptive multitasking is live under QEMU. `make test` runs 226 tests (51 python + 153 host + 22 kernel) green. The kernel boots, brings up `uart_pl011` + `sched_rr` through the framework bootstrap, promotes the boot context into an idle task, and drives preemption through the timer tick. Framework API reference lives under [`docs/`](docs/); git history (`git log`) is the per-slice narrative, with each commit covering one slice end-to-end.
+
 ## Quick Start
 
 ```bash
+# Clone
+git clone git@github.com:ThinkerYzu/nonux.git
+cd nonux
+
 # Prerequisites (Ubuntu/Debian)
 sudo apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
                  qemu-system-arm make python3
