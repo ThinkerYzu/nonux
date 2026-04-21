@@ -24,12 +24,18 @@ extern const struct nx_component_descriptor __start_nx_components[];
 extern const struct nx_component_descriptor __stop_nx_components[];
 
 /*
- * Weak fallbacks for gen/slot_table.c.  A trivial build (e.g. a host
- * test that doesn't generate a slot table) sees an empty table rather
- * than an unresolved reference.
+ * nx_boot_slots[] / nx_boot_slots_count live in gen/slot_table.c, which
+ * is always present in the kernel build (the Makefile cascades
+ * gen/slot_table.c off gen/sources.mk).  Slice 3.9a carried a weak
+ * fallback here to make trivial test builds link without a generated
+ * table, but slice 4.3 hit a nasty `const` + weak-tentative
+ * constant-folding bug under `-O2`: the compiler saw the weak
+ * `const unsigned nx_boot_slots_count;` as 0 and folded the
+ * slot-register loop below into dead code, silently dropping every
+ * slot past the first.  Removing the fallbacks makes the extern
+ * decls in framework/bootstrap.h authoritative and forces a real
+ * runtime load on every read.
  */
-__attribute__((weak)) struct nx_boot_slot nx_boot_slots[1];
-__attribute__((weak)) const unsigned      nx_boot_slots_count;
 
 /* ---- Scratch state -------------------------------------------------- */
 

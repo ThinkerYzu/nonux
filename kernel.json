@@ -7,6 +7,10 @@
       "config": {
         "base_addr": "0x09000000"
       }
+    },
+    "scheduler": {
+      "impl": "sched_rr",
+      "config": {}
     }
   },
 

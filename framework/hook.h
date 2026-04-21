@@ -36,6 +36,8 @@ enum nx_hook_point {
     NX_HOOK_COMPONENT_PAUSE,        /* around nx_component_pause */
     NX_HOOK_COMPONENT_RESUME,       /* around nx_component_resume */
     NX_HOOK_SLOT_SWAPPED,           /* piggy-back on NX_EV_SLOT_SWAPPED */
+    NX_HOOK_CONTEXT_SWITCH,         /* reschedule shim, post-pick_next pre-cpu_switch_to
+                                     * — enum added in slice 4.3; dispatched live in 4.4 */
 
     NX_HOOK_POINT_COUNT,            /* sentinel — keep last */
 };
@@ -77,11 +79,23 @@ struct nx_hook_context {
             struct nx_component *old_impl;
             struct nx_component *new_impl;
         } swap;
+
+        /* CONTEXT_SWITCH — populated by the core scheduler driver's
+         * reschedule shim after pick_next and before cpu_switch_to.
+         * Hooks run with preemption disabled on the outgoing task's
+         * kernel stack.  Enum + arm added in slice 4.3; dispatched
+         * live in 4.4. */
+        struct {
+            struct nx_task *prev;
+            struct nx_task *next;
+        } csw;
     } u;
 };
 
 /* Forward decl — defined in framework/ipc.h. */
 struct nx_ipc_message;
+/* Forward decl — defined in core/sched/task.h. */
+struct nx_task;
 
 /* ---------- Hook nodes ---------------------------------------------------- */
 

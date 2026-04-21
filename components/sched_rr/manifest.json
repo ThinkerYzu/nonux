@@ -1,0 +1,5 @@
+{
+  "name": "sched_rr",
+  "version": "0.1.0",
+  "iface": "scheduler"
+}
