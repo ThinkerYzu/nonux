@@ -1,66 +1,84 @@
 #!/usr/bin/env python3
 """
-gen-config.py — Phase 3 slice 3.4 minimum.
+gen-config.py — code generator for nonux build artefacts.
 
-Read a single component manifest.json and emit `gen/<name>_deps.h`.
-This header contains:
+Two subcommands:
 
-  1. `struct <name>_deps` — one `struct nx_slot *` field per manifest
-     entry (required + optional).
-  2. `<NAME>_DEPS_TABLE(CONTAINER, FIELD)` — macro that expands to a
-     comma-separated list of `nx_dep_descriptor` initialisers, using
-     `offsetof()` into the caller-supplied container type.
+  manifest <manifest.json> <outdir>
+      Emit <outdir>/<name>_deps.h containing:
+        - struct <name>_deps     (one `struct nx_slot *` per manifest entry)
+        - <NAME>_DEPS_TABLE      (macro expanding to nx_dep_descriptor
+                                  initialisers using offsetof() into the
+                                  caller-supplied container type)
+      Used by every component's build and by the host test fixtures.
 
-Output is deterministic: dependencies are emitted in sorted order so the
-regenerate-and-diff check planned for `verify-registry.py` (R7) produces
-byte-identical output across runs.
+  kernel <kernel.json> <components_dir> <outdir>
+      Emit two files derived from the top-level kernel config:
+        <outdir>/config.h   — #define NX_TARGET, per-slot NX_SLOT_*_IMPL,
+                              per-component NX_CONFIG_* values from each
+                              binding's "config" block
+        <outdir>/sources.mk — COMPONENT_SRCS list of components/<impl>/<impl>.c
+                              paths, one per kernel.json binding
+      Consumed by the top-level Makefile via `-include gen/sources.mk`
+      and by core/framework code via `#include "gen/config.h"`.
 
-Slice 3.5 will extend this tool to consume a full `kernel.json`, emit
-`gen/config.h` and `gen/sources.mk`, and add real schema validation.
-For 3.4 the scope is intentionally narrow: one manifest → one deps.h.
+Both modes are stdlib-only (no jsonschema). Schema + cross-file
+validation is tools/validate-config.py's job.
 
-Manifest schema (minimum):
-
-  {
-    "name":    "sched_rr",               # required
-    "version": "0.1.0",                  # optional, unused in 3.4
-    "requires": {                        # optional — required deps
-      "timer": {
-        "version":  ">=0.1.0",           # optional
-        "mode":     "async" | "sync",    # optional, default "async"
-        "stateful": true | false,        # optional, default false
-        "policy":   "queue" | "reject" | "redirect"  # optional, default "queue"
-      }
-    },
-    "optional": {                        # optional — optional deps
-      "stats": { ... same shape ... }
-    }
-  }
+Output is deterministic: dict keys are always sorted before emission so
+the regenerate-and-diff gate planned for slice 3.7 produces byte-
+identical output across runs.
 """
 
 import argparse
 import json
 import pathlib
+import re
 import sys
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 MODE_MAP = {
     "async": "NX_CONN_ASYNC",
     "sync":  "NX_CONN_SYNC",
 }
-
 POLICY_MAP = {
     "queue":    "NX_PAUSE_QUEUE",
     "reject":   "NX_PAUSE_REJECT",
     "redirect": "NX_PAUSE_REDIRECT",
 }
 
+C_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class ManifestError(Exception):
-    """Raised when a manifest fails validation."""
+    """Structural / type error in a manifest.json or kernel.json."""
 
+
+def c_ident(name: str) -> str:
+    if not C_IDENT_RE.match(name):
+        raise ManifestError(f"{name!r} is not a valid C identifier")
+    return name
+
+
+def slot_name_to_macro(slot: str) -> str:
+    """
+    kernel.json slot names may contain dots as namespacing
+    (e.g. "char_device.serial"). Collapse to upper-case underscore form
+    for use in #define macro names.
+    """
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_.]*$", slot):
+        raise ManifestError(f"slot name {slot!r} contains invalid characters")
+    return slot.replace(".", "_").upper()
+
+
+# ---------------------------------------------------------------------------
+# Per-component manifest → deps.h  (unchanged from slice 3.4)
+# ---------------------------------------------------------------------------
 
 def parse_dep(dep_name: str, spec: dict, required: bool) -> dict:
-    """Normalise one requires/optional entry into a fully-populated dict."""
     if not isinstance(spec, dict):
         raise ManifestError(
             f"dep {dep_name!r}: expected object, got {type(spec).__name__}")
@@ -102,7 +120,6 @@ def load_manifest(path: pathlib.Path) -> dict:
         raw = json.loads(path.read_text())
     except json.JSONDecodeError as e:
         raise ManifestError(f"{path}: invalid JSON: {e}") from e
-
     if not isinstance(raw, dict):
         raise ManifestError(f"{path}: top-level must be an object")
     if "name" not in raw:
@@ -110,18 +127,13 @@ def load_manifest(path: pathlib.Path) -> dict:
     if not isinstance(raw["name"], str) or not raw["name"]:
         raise ManifestError(f"{path}: 'name' must be a non-empty string")
 
-    # Deterministic ordering: sorted by dep name, required before optional
-    # on name collision (which validate-config.py in slice 3.5 will
-    # flag — for 3.4 we just emit required first).
     deps: list[dict] = []
     seen: set[str] = set()
-
     for dep_name in sorted(raw.get("requires", {}).keys()):
         if dep_name in seen:
             raise ManifestError(f"duplicate dep name: {dep_name!r}")
         seen.add(dep_name)
         deps.append(parse_dep(dep_name, raw["requires"][dep_name], True))
-
     for dep_name in sorted(raw.get("optional", {}).keys()):
         if dep_name in seen:
             raise ManifestError(
@@ -129,17 +141,14 @@ def load_manifest(path: pathlib.Path) -> dict:
         seen.add(dep_name)
         deps.append(parse_dep(dep_name, raw["optional"][dep_name], False))
 
-    return {"name": raw["name"], "deps": deps}
+    return {
+        "name":    raw["name"],
+        "version": raw.get("version"),
+        "deps":    deps,
+    }
 
 
-def c_ident(name: str) -> str:
-    """Manifest names are already valid C identifiers; this is a sanity hook."""
-    if not name.replace("_", "").isalnum():
-        raise ManifestError(f"name {name!r} is not a valid C identifier")
-    return name
-
-
-def render_header(manifest: dict, manifest_path: pathlib.Path) -> str:
+def render_deps_header(manifest: dict, manifest_path: pathlib.Path) -> str:
     name  = c_ident(manifest["name"])
     upper = name.upper()
     guard = f"NX_GEN_{upper}_DEPS_H"
@@ -158,7 +167,6 @@ def render_header(manifest: dict, manifest_path: pathlib.Path) -> str:
     lines.append("#include <stddef.h>")
     lines.append("")
 
-    # Struct
     lines.append(f"struct {name}_deps {{")
     if deps:
         for d in deps:
@@ -168,14 +176,10 @@ def render_header(manifest: dict, manifest_path: pathlib.Path) -> str:
                 f"    struct nx_slot *{d['name']};"
                 f"   /* {tag}{ver} */")
     else:
-        # C forbids empty structs; emit a sentinel so the struct compiles
-        # and every component can uniformly embed a `_deps` field even
-        # when the manifest declares none.
         lines.append("    char _nx_no_deps;  /* placeholder — manifest has no deps */")
     lines.append("};")
     lines.append("")
 
-    # Macro
     if deps:
         lines.append(f"#define {upper}_DEPS_TABLE(CONTAINER, FIELD) \\")
         for idx, d in enumerate(deps):
@@ -194,8 +198,6 @@ def render_header(manifest: dict, manifest_path: pathlib.Path) -> str:
             lines.append(entry)
         lines.append("")
     else:
-        # No deps means no DEPS_TABLE macro — component uses
-        # NX_COMPONENT_REGISTER_NO_DEPS instead.
         lines.append(
             f"/* {name} has no deps — use NX_COMPONENT_REGISTER_NO_DEPS. */")
         lines.append("")
@@ -205,26 +207,174 @@ def render_header(manifest: dict, manifest_path: pathlib.Path) -> str:
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate <name>_deps.h from a component manifest.json")
-    parser.add_argument("manifest", type=pathlib.Path,
-                        help="path to manifest.json")
-    parser.add_argument("outdir", type=pathlib.Path,
-                        help="directory to write <name>_deps.h into "
-                             "(created if missing)")
-    args = parser.parse_args(argv)
-
+def cmd_manifest(args: argparse.Namespace) -> int:
     try:
         manifest = load_manifest(args.manifest)
     except ManifestError as e:
         print(f"gen-config.py: {e}", file=sys.stderr)
         return 2
-
     args.outdir.mkdir(parents=True, exist_ok=True)
-    out_path = args.outdir / f"{manifest['name']}_deps.h"
-    out_path.write_text(render_header(manifest, args.manifest))
+    out = args.outdir / f"{manifest['name']}_deps.h"
+    out.write_text(render_deps_header(manifest, args.manifest))
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Top-level kernel.json → config.h + sources.mk  (new in slice 3.5)
+# ---------------------------------------------------------------------------
+
+def load_kernel(path: pathlib.Path) -> dict:
+    try:
+        raw = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        raise ManifestError(f"{path}: invalid JSON: {e}") from e
+    if not isinstance(raw, dict):
+        raise ManifestError(f"{path}: top-level must be an object")
+    if "target" not in raw or not isinstance(raw["target"], str):
+        raise ManifestError(f"{path}: missing or non-string 'target'")
+    components = raw.get("components")
+    if not isinstance(components, dict) or not components:
+        raise ManifestError(
+            f"{path}: 'components' must be a non-empty object")
+
+    bindings: list[dict] = []
+    for slot in sorted(components.keys()):
+        entry = components[slot]
+        if not isinstance(entry, dict):
+            raise ManifestError(
+                f"components.{slot!r}: expected object, got "
+                f"{type(entry).__name__}")
+        impl = entry.get("impl")
+        if not isinstance(impl, str) or not impl:
+            raise ManifestError(
+                f"components.{slot!r}: missing or non-string 'impl'")
+        c_ident(impl)
+        slot_name_to_macro(slot)    # sanity-check slot name
+        config = entry.get("config", {})
+        if not isinstance(config, dict):
+            raise ManifestError(
+                f"components.{slot!r}.config: expected object")
+        bindings.append({"slot": slot, "impl": impl, "config": config})
+
+    return {"target": raw["target"], "bindings": bindings}
+
+
+def c_literal(value) -> str:
+    """Render a Python config value as a C token for #define."""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        # Treat numeric-looking strings (hex/decimal) as numeric tokens so
+        # kernel.json values like "0x09000000" land as literals, not strings.
+        if re.fullmatch(r"0[xX][0-9a-fA-F]+|[0-9]+", value):
+            return value
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    raise ManifestError(
+        f"unsupported config value type: {type(value).__name__}")
+
+
+def render_config_h(kernel: dict, kernel_path: pathlib.Path) -> str:
+    lines: list[str] = []
+    lines.append(
+        f"/* Auto-generated by tools/gen-config.py from "
+        f"{kernel_path.name}. Do not edit. */")
+    lines.append("#ifndef NX_GEN_CONFIG_H")
+    lines.append("#define NX_GEN_CONFIG_H")
+    lines.append("")
+    lines.append(f'#define NX_TARGET "{kernel["target"]}"')
+    lines.append("")
+    lines.append("/* Slot bindings. */")
+    for b in kernel["bindings"]:
+        macro = slot_name_to_macro(b["slot"])
+        lines.append(f'#define NX_SLOT_{macro}_IMPL "{b["impl"]}"')
+    lines.append("")
+    any_config = any(b["config"] for b in kernel["bindings"])
+    if any_config:
+        lines.append("/* Per-component config values. */")
+    for b in kernel["bindings"]:
+        if not b["config"]:
+            continue
+        comp_macro = b["impl"].upper()
+        for k in sorted(b["config"].keys()):
+            v = b["config"][k]
+            key_macro = k.upper()
+            lines.append(
+                f"#define NX_CONFIG_{comp_macro}_{key_macro} {c_literal(v)}")
+    lines.append("")
+    lines.append("#endif /* NX_GEN_CONFIG_H */")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_sources_mk(kernel: dict, kernel_path: pathlib.Path) -> str:
+    """
+    Emits COMPONENT_SRCS as a deterministic, deduplicated list. Multiple
+    slots bound to the same impl produce one source entry.
+    """
+    srcs = sorted({b["impl"] for b in kernel["bindings"]})
+    lines: list[str] = []
+    lines.append(
+        f"# Auto-generated by tools/gen-config.py from "
+        f"{kernel_path.name}. Do not edit.")
+    lines.append("")
+    lines.append("COMPONENT_SRCS := \\")
+    for idx, impl in enumerate(srcs):
+        entry = f"    components/{impl}/{impl}.c"
+        if idx + 1 < len(srcs):
+            entry += " \\"
+        lines.append(entry)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def cmd_kernel(args: argparse.Namespace) -> int:
+    try:
+        kernel = load_kernel(args.kernel)
+    except ManifestError as e:
+        print(f"gen-config.py: {e}", file=sys.stderr)
+        return 2
+    args.outdir.mkdir(parents=True, exist_ok=True)
+    (args.outdir / "config.h").write_text(render_config_h(kernel, args.kernel))
+    (args.outdir / "sources.mk").write_text(
+        render_sources_mk(kernel, args.kernel))
+    # components_dir is accepted for API parity with validate-config.py but
+    # not used in 3.5 — kernel mode only reads kernel.json. Cross-manifest
+    # resolution is validate-config.py's job.
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate nonux build artefacts "
+                    "(per-component deps.h or top-level config.h/sources.mk).")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    pm = sub.add_parser(
+        "manifest",
+        help="Emit <outdir>/<name>_deps.h from a per-component manifest.json")
+    pm.add_argument("manifest", type=pathlib.Path)
+    pm.add_argument("outdir",   type=pathlib.Path)
+    pm.set_defaults(fn=cmd_manifest)
+
+    pk = sub.add_parser(
+        "kernel",
+        help="Emit <outdir>/config.h and <outdir>/sources.mk from kernel.json")
+    pk.add_argument("kernel",         type=pathlib.Path)
+    pk.add_argument("components_dir", type=pathlib.Path,
+                    help="Root of the components/ tree "
+                         "(reserved for cross-manifest checks in 3.5+)")
+    pk.add_argument("outdir",         type=pathlib.Path)
+    pk.set_defaults(fn=cmd_kernel)
+
+    args = parser.parse_args(argv)
+    return args.fn(args)
 
 
 if __name__ == "__main__":

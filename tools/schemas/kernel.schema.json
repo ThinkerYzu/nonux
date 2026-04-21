@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nonux kernel composition",
+  "description": "kernel.json — declarative composition of the running kernel. Names every slot, picks an implementation per slot, supplies per-component config, and lists any static connection overrides.",
+  "type": "object",
+  "required": ["target", "components"],
+  "additionalProperties": false,
+  "properties": {
+    "target": {
+      "type": "string",
+      "description": "Build target triple / identifier, e.g. aarch64-qemu-virt."
+    },
+    "components": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/slot_binding" },
+      "description": "Map of slot name → binding. Slot names must be valid C identifier fragments; dots are allowed to namespace (e.g. char_device.serial)."
+    },
+    "connections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/connection_override" },
+      "description": "Static connection overrides — extra edges not derivable from component manifests. Optional."
+    },
+    "hooks": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Hook declarations. Shape finalised in slice 3.8."
+    },
+    "posix": {
+      "type": "object",
+      "description": "POSIX shim configuration. Shape finalised in Phase 7."
+    }
+  },
+  "$defs": {
+    "slot_binding": {
+      "type": "object",
+      "required": ["impl"],
+      "additionalProperties": false,
+      "properties": {
+        "impl": {
+          "type": "string",
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "description": "Component manifest name that fills this slot. Must match a component under components/<impl>/manifest.json."
+        },
+        "config": {
+          "type": "object",
+          "description": "Per-instance configuration values emitted into gen/config.h."
+        },
+        "iface": {
+          "type": "string",
+          "description": "Required interface for this slot. Optional in 3.5; validated in 3.7."
+        }
+      }
+    },
+    "connection_override": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": ["string", "null"] },
+        "to":   { "type": "string" },
+        "mode": { "type": "string", "enum": ["async", "sync"] },
+        "stateful": { "type": "boolean" },
+        "policy": { "type": "string", "enum": ["queue", "reject", "redirect"] }
+      }
+    }
+  }
+}

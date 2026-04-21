@@ -69,16 +69,52 @@ debug: kernel.bin
 	@echo "GDB server on :1234. Connect with:"
 	@echo "  aarch64-linux-gnu-gdb kernel.elf -ex 'target remote :1234'"
 
-# Validate kernel config
-validate-config: kernel.json
-	python3 tools/validate-config.py kernel.json components/
+# Python tooling — uses the project venv so jsonschema and other deps
+# don't have to be installed system-wide. `make venv` below creates it.
+VENV       ?= .venv
+VENV_PY    := $(VENV)/bin/python3
+VENV_STAMP := $(VENV)/.installed
+PYTHON     ?= $(VENV_PY)
+
+# Generator (no venv deps — stdlib only)
+GENCONFIG := tools/gen-config.py
+VALIDATE  := tools/validate-config.py
+
+# Generated build artefacts from kernel.json. Invoked explicitly as
+# `make kernel-config`. We deliberately do NOT write a rule that names
+# gen/config.h or gen/sources.mk as outputs — the top-level
+# `-include gen/sources.mk` would otherwise auto-trigger a rebuild
+# that fails until every component referenced in kernel.json actually
+# exists (Phase 4+). kernel-config is phony; it writes the files as a
+# side-effect. Tooling that needs them today (validate-config, deps)
+# reads kernel.json directly.
+kernel-config:
+	@mkdir -p gen
+	$(PYTHON) $(GENCONFIG) kernel kernel.json components/ gen/
+.PHONY: kernel-config
+
+# Validate kernel config (needs venv → jsonschema)
+validate-config: kernel.json $(VENV_STAMP)
+	$(PYTHON) $(VALIDATE) kernel.json components/
 
 # Dependency graph
-deps: kernel.json
-	python3 tools/validate-config.py kernel.json components/ --deps
+deps: kernel.json $(VENV_STAMP)
+	$(PYTHON) $(VALIDATE) kernel.json components/ --deps
 
-deps-dot: kernel.json
-	python3 tools/validate-config.py kernel.json components/ --deps-dot
+deps-dot: kernel.json $(VENV_STAMP)
+	$(PYTHON) $(VALIDATE) kernel.json components/ --deps-dot
+
+# One-shot venv setup: creates .venv/ and installs tools/requirements.txt.
+# The stamp file $(VENV_STAMP) is our "tools are installed" sentinel —
+# using `touch` on $(VENV_PY) directly is brittle because python3 is
+# usually a symlink to a system-owned interpreter.
+$(VENV_STAMP): tools/requirements.txt
+	@test -x $(VENV_PY) || python3 -m venv $(VENV)
+	$(VENV)/bin/pip install -q -r tools/requirements.txt
+	@touch $@
+
+venv: $(VENV_STAMP)
+.PHONY: venv
 
 # In-kernel test binary (kernel-test.bin).  Same objects as kernel.bin
 # except boot.o is replaced by boot-test.o (compiled with -DNX_KTEST so
@@ -103,10 +139,16 @@ kernel-test.bin: kernel-test.elf
 	$(OBJCOPY) -O binary $< $@
 
 # Tests
-test: test-host test-kernel
+test: test-tools test-host test-kernel
 
 test-host:
 	$(MAKE) -C test/host
+
+# Python tooling tests. Stdlib unittest + discover — no pytest dep.
+# No venv needed unless jsonschema is imported; unittest skips those
+# tests if the module is absent.
+test-tools:
+	$(PYTHON) -m unittest discover -s tools/tests -v
 
 # Runs the in-kernel suite under QEMU with semihosting.  ktest_main
 # exits via SYS_EXIT_EXTENDED, which QEMU propagates as its own exit
@@ -138,4 +180,4 @@ clean:
 	find . -name '*.o' -delete
 	rm -rf gen/ kernel.elf kernel.bin kernel-test.elf kernel-test.bin
 
-.PHONY: all run debug validate-config deps deps-dot test test-host test-kernel bench clean
+.PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean

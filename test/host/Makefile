@@ -42,7 +42,7 @@ component_deps_test.o: $(GEN_HEADERS)
 
 gen/%_deps.h: fixtures/%_deps.json $(GENCONF)
 	@mkdir -p gen
-	$(PYTHON) $(GENCONF) $< gen/
+	$(PYTHON) $(GENCONF) manifest $< gen/
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
