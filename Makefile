@@ -40,7 +40,8 @@ FW_C     := framework/registry.c \
             framework/ipc.c \
             framework/dispatcher.c \
             framework/bootstrap.c \
-            framework/handle.c
+            framework/handle.c \
+            framework/syscall.c
 
 # Component sources + the gen/slot_table.c binding table, both emitted
 # by `make kernel-config`.
@@ -160,7 +161,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_sched.c \
                  test/kernel/ktest_dispatcher.c \
                  test/kernel/ktest_mm_buddy.c \
-                 test/kernel/ktest_handle.c
+                 test/kernel/ktest_handle.c \
+                 test/kernel/ktest_syscall.c
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
 core/boot/boot-test.o: core/boot/boot.c

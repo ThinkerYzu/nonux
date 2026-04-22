@@ -27,6 +27,7 @@ SRCS := main.c \
         component_mm_buddy_test.c \
         dispatcher_test.c \
         handle_test.c \
+        syscall_test.c \
         ../../components/sched_rr/sched_rr.c \
         ../../components/mm_buddy/mm_buddy.c
 
@@ -39,6 +40,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/hook.c \
         ../../framework/dispatcher.c \
         ../../framework/handle.c \
+        ../../framework/syscall.c \
         ../../core/sched/task.c \
         ../../core/sched/sched.c
 
