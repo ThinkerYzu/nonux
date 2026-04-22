@@ -39,6 +39,7 @@
 #define NX_ELOOP     -7    /* redirect loop depth exceeded */
 #define NX_EABORT    -8    /* hook chain returned ABORT */
 #define NX_EDEADLINE -9    /* pause_hook (or similar) exceeded its wall-clock budget */
+#define NX_EPERM    -10    /* caller attempted an operation it lacks rights for */
 
 /* ---------- Enums --------------------------------------------------------- */
 

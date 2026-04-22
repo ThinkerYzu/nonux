@@ -61,7 +61,7 @@ void test_fail(const char *file, int line, const char *msg);
         unsigned long long _a = (unsigned long long)(a);                 \
         unsigned long long _b = (unsigned long long)(b);                 \
         if (_a != _b) {                                                  \
-            char _buf[128];                                              \
+            char _buf[256];                                              \
             snprintf(_buf, sizeof _buf,                                  \
                      "ASSERT_EQ_U(" #a ", " #b "): %llu != %llu",        \
                      _a, _b);                                            \
@@ -75,7 +75,7 @@ void test_fail(const char *file, int line, const char *msg);
         const void *_a = (a);                                            \
         const void *_b = (b);                                            \
         if (_a != _b) {                                                  \
-            char _buf[128];                                              \
+            char _buf[256];                                              \
             snprintf(_buf, sizeof _buf,                                  \
                      "ASSERT_EQ_PTR(" #a ", " #b "): %p != %p",          \
                      _a, _b);                                            \
