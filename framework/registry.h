@@ -38,6 +38,7 @@
 #define NX_ESTATE    -6    /* lifecycle / state-machine violation */
 #define NX_ELOOP     -7    /* redirect loop depth exceeded */
 #define NX_EABORT    -8    /* hook chain returned ABORT */
+#define NX_EDEADLINE -9    /* pause_hook (or similar) exceeded its wall-clock budget */
 
 /* ---------- Enums --------------------------------------------------------- */
 

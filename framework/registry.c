@@ -1,4 +1,5 @@
 #include "framework/registry.h"
+#include "framework/hook.h"
 
 #include <stdatomic.h>
 
@@ -345,6 +346,17 @@ int nx_slot_swap(struct nx_slot *s, struct nx_component *new_impl)
         },
     };
     emit_event(&ev);
+
+    /* Slice 3.9b.2: also fan out to the NX_HOOK_SLOT_SWAPPED chain so
+     * hook subscribers (not just change-log readers) observe binding
+     * changes.  The hook runs AFTER `s->active` has been updated — this
+     * is a notification, not a veto point; hooks returning ABORT here
+     * are treated as observational and their return is ignored. */
+    struct nx_hook_context hctx = {
+        .point = NX_HOOK_SLOT_SWAPPED,
+        .u.swap = { .slot = s, .old_impl = old_impl, .new_impl = new_impl },
+    };
+    (void)nx_hook_dispatch(&hctx);
     return NX_OK;
 }
 

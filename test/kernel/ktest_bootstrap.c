@@ -1,6 +1,7 @@
 #include "ktest.h"
 #include "framework/bootstrap.h"
 #include "framework/component.h"
+#include "framework/hook.h"
 #include "framework/registry.h"
 
 /*
@@ -82,4 +83,64 @@ KTEST(bootstrap_snapshot_json_contains_bound_impl)
     KASSERT(found_impl);
 
     nx_graph_snapshot_put(snap);
+}
+
+/* ---- slice 3.9b.2: NX_HOOK_SLOT_SWAPPED runs end-to-end on kernel --- */
+
+struct swap_capture {
+    int                  fires;
+    struct nx_slot      *slot;
+    struct nx_component *old_impl;
+    struct nx_component *new_impl;
+};
+
+static enum nx_hook_action capture_swap_hook(struct nx_hook_context *ctx,
+                                             void                   *user)
+{
+    struct swap_capture *cap = user;
+    cap->fires++;
+    cap->slot     = ctx->u.swap.slot;
+    cap->old_impl = ctx->u.swap.old_impl;
+    cap->new_impl = ctx->u.swap.new_impl;
+    return NX_HOOK_CONTINUE;
+}
+
+KTEST(slot_swap_fans_out_to_hook_chain_on_kernel)
+{
+    /* Register a fresh test-only slot so we don't perturb the live
+     * bootstrap composition.  Pick something the dispatcher won't
+     * also touch. */
+    static struct nx_slot      s = { .name = "ktest.swap_probe", .iface = "x" };
+    static struct nx_component a = { .manifest_id = "ktest_swap", .instance_id = "a" };
+    static struct nx_component b = { .manifest_id = "ktest_swap", .instance_id = "b" };
+    KASSERT_EQ_U(nx_slot_register(&s), NX_OK);
+    KASSERT_EQ_U(nx_component_register(&a), NX_OK);
+    KASSERT_EQ_U(nx_component_register(&b), NX_OK);
+
+    static struct swap_capture cap;
+    cap = (struct swap_capture){ 0 };
+    static struct nx_hook h;
+    h = (struct nx_hook){
+        .point = NX_HOOK_SLOT_SWAPPED,
+        .fn    = capture_swap_hook,
+        .user  = &cap,
+    };
+    KASSERT_EQ_U(nx_hook_register(&h), NX_OK);
+
+    KASSERT_EQ_U(nx_slot_swap(&s, &a), NX_OK);
+    KASSERT_EQ_U(cap.fires, 1);
+    KASSERT(cap.slot == &s);
+    KASSERT(cap.old_impl == 0);
+    KASSERT(cap.new_impl == &a);
+
+    KASSERT_EQ_U(nx_slot_swap(&s, &b), NX_OK);
+    KASSERT_EQ_U(cap.fires, 2);
+    KASSERT(cap.old_impl == &a);
+    KASSERT(cap.new_impl == &b);
+
+    /* Tear down: hook off, slot back to NULL active, registry lookups
+     * for later tests still find `s` but its active is NULL so no
+     * dispatch path touches it. */
+    nx_hook_unregister(&h);
+    (void)nx_slot_swap(&s, 0);
 }

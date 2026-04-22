@@ -2,6 +2,8 @@
 #include "framework/hook.h"
 #include "framework/ipc.h"
 
+#include "core/cpu/monotonic.h"
+
 #include <stddef.h>
 
 /*
@@ -146,6 +148,31 @@ static void slot_resume_cb(struct nx_slot *s, void *ctx)
     nx_ipc_flush_hold_queue(s);
 }
 
+/* Pause-failure rollback — slice 3.9b.2.
+ *
+ * Invoked when `pause_hook` or `ops->pause` fails (or pause_hook blows
+ * its 1 ms deadline).  At the call site, slots bound to `c` are in
+ * CUTTING or DRAINING and the hold queue may already hold messages that
+ * arrived under NX_PAUSE_QUEUE during the partial pause.  Returning
+ * without rolling back leaves those slots quiescent forever (the bug
+ * tracked under slice 3.8's "slot may be in DRAINING; slice 3.9 will
+ * harden the rollback" comment).
+ *
+ * The rollback is symmetric to resume: clear pause_state → NONE on
+ * every bound slot and replay its hold queue via nx_ipc_send.  We reuse
+ * the existing `slot_resume_cb` so the behaviour matches a successful
+ * pause+resume, including hook ordering for the flushed messages. */
+static void rollback_pause(struct nx_component *c)
+{
+    nx_component_foreach_bound_slot(c, slot_resume_cb, NULL);
+}
+
+/* Wall-clock budget for `ops->pause_hook`, in nanoseconds.  The hook is
+ * meant to be a quick "finish any pending work" signal — the 1 ms figure
+ * comes from DESIGN.md §Recomposition Protocol.  Exported as a macro so
+ * tests can stage hooks that deliberately over-run it. */
+#define NX_PAUSE_HOOK_DEADLINE_NS  (1000000ULL)
+
 int nx_component_pause(struct nx_component *c)
 {
     if (!c) return NX_EINVAL;
@@ -164,12 +191,22 @@ int nx_component_pause(struct nx_component *c)
 
     if (c->descriptor && c->descriptor->ops) {
         if (c->descriptor->ops->pause_hook) {
+            struct nx_deadline dl;
+            nx_deadline_start(&dl, NX_PAUSE_HOOK_DEADLINE_NS);
             int hrc = c->descriptor->ops->pause_hook(c->impl);
-            if (hrc != NX_OK) return hrc;
+            if (hrc == NX_OK && nx_deadline_exceeded(&dl))
+                hrc = NX_EDEADLINE;
+            if (hrc != NX_OK) {
+                rollback_pause(c);
+                return hrc;
+            }
         }
         if (c->descriptor->ops->pause) {
             int orc = c->descriptor->ops->pause(c->impl);
-            if (orc != NX_OK) return orc;
+            if (orc != NX_OK) {
+                rollback_pause(c);
+                return orc;
+            }
         }
     }
 

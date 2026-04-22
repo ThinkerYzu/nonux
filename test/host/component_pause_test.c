@@ -4,6 +4,8 @@
 #include "framework/ipc.h"
 #include "framework/registry.h"
 
+#include <time.h>
+
 /*
  * Host-side tests for the slice-3.8 pause protocol and the IPC
  * router's pause-policy handling.
@@ -510,9 +512,10 @@ TEST(pause_hook_returning_error_aborts_transition)
     int rc = nx_component_pause(&c);
     ASSERT_EQ_U(rc, NX_EINVAL);
     ASSERT_EQ_U(g_failing_pause_hook_calls, 1);
-    /* State stays ACTIVE — pause did not complete.  (Slot may be in
-     * DRAINING; slice 3.9 will harden the rollback.) */
     ASSERT_EQ_U(c.state, NX_LC_ACTIVE);
+    /* Slice 3.9b.2: the bound slot's pause_state is rolled back to NONE
+     * so the IPC router treats this component as live again. */
+    ASSERT_EQ_U(nx_slot_pause_state(&s), NX_SLOT_PAUSE_NONE);
 }
 
 TEST(pause_on_component_without_pause_hook_still_works)
@@ -548,4 +551,212 @@ TEST(pause_on_unbound_component_still_transitions)
     ASSERT_EQ_U(s.pause_hook_calls, 1);
     ASSERT_EQ_U(s.pause_calls, 1);
     ASSERT_EQ_U(c.state, NX_LC_PAUSED);
+}
+
+/* --- Slice 3.9b.2: pause-failure rollback replays held messages ------- */
+
+TEST(pause_hook_failure_rolls_back_and_replays_held_messages)
+{
+    /* Setup: sender → receiver, ASYNC + QUEUE policy.  Pause the
+     * receiver with a failing pause_hook.  During the partial pause
+     * (after cutoff but before the failing hook), a send from the
+     * outer test code lands on the hold queue.  On rollback, the slot
+     * returns to NONE and the held message replays to the live
+     * inbox so the handler can drain it. */
+    nx_graph_reset(); nx_ipc_reset(); nx_hook_reset();
+    g_failing_pause_hook_calls = 0;
+
+    struct nx_slot sender = { .name = "sender", .iface = "x" };
+    struct nx_slot rcv    = { .name = "rcv",    .iface = "x" };
+    struct nx_component sender_comp = {
+        .manifest_id = "s_m", .instance_id = "0" };
+    struct rx_state rxs = { 0 };
+    struct nx_component rcv_comp = {
+        .manifest_id = "f", .instance_id = "0",
+        .descriptor  = &failing_desc,
+        .impl        = &rxs,
+    };
+    nx_slot_register(&sender);
+    nx_slot_register(&rcv);
+    nx_component_register(&sender_comp);
+    nx_component_register(&rcv_comp);
+    nx_slot_swap(&sender, &sender_comp);
+    nx_slot_swap(&rcv,    &rcv_comp);
+    nx_component_init(&rcv_comp);
+    nx_component_enable(&rcv_comp);
+    int err = NX_OK;
+    nx_connection_register(&sender, &rcv, NX_CONN_ASYNC, false,
+                           NX_PAUSE_QUEUE, &err);
+
+    /* Stage a "held" message by putting the slot into CUTTING manually
+     * and pushing one message — simulates the race window where a
+     * sender raced with the failing pause. */
+    nx_slot_set_pause_state(&rcv, NX_SLOT_PAUSE_CUTTING);
+    struct nx_ipc_message m = {
+        .src_slot = &sender, .dst_slot = &rcv, .msg_type = 7 };
+    ASSERT_EQ_U(nx_ipc_send(&m), NX_OK);
+    ASSERT_EQ_U(nx_ipc_hold_queue_depth(&sender, &rcv), 1);
+    nx_slot_set_pause_state(&rcv, NX_SLOT_PAUSE_NONE);
+
+    /* Now the real pause — which will fail — races with that held msg. */
+    int rc = nx_component_pause(&rcv_comp);
+    ASSERT_EQ_U(rc, NX_EINVAL);
+    ASSERT_EQ_U(g_failing_pause_hook_calls, 1);
+    ASSERT_EQ_U(rcv_comp.state, NX_LC_ACTIVE);
+    ASSERT_EQ_U(nx_slot_pause_state(&rcv), NX_SLOT_PAUSE_NONE);
+    /* The held message replayed through nx_ipc_send on rollback; ASYNC
+     * edge so it now sits in the live inbox. */
+    ASSERT_EQ_U(nx_ipc_hold_queue_depth(&sender, &rcv), 0);
+    ASSERT_EQ_U(nx_ipc_inbox_depth(&rcv), 1);
+    ASSERT_EQ_U(nx_ipc_dispatch(&rcv, 10), 1);
+    ASSERT_EQ_U(rxs.handle_calls, 1);
+}
+
+/* ops-side pause that fails AFTER pause_hook succeeded — rollback must
+ * still fire.  Uses a descriptor whose pause_hook returns OK but whose
+ * pause() returns an error. */
+static int pass_hook_stub(void *self)     { (void)self; return NX_OK; }
+static int failing_pause_stub(void *self) { (void)self; return NX_EBUSY; }
+static const struct nx_component_ops pause_fail_ops = {
+    .handle_msg = rx_handle,
+    .pause_hook = pass_hook_stub,
+    .pause      = failing_pause_stub,
+    .resume     = rx_resume,
+};
+static const struct nx_component_descriptor pause_fail_desc = {
+    .name = "pause_fail", .state_size = sizeof(struct rx_state),
+    .ops  = &pause_fail_ops,
+};
+
+TEST(pause_op_failure_after_hook_success_rolls_back)
+{
+    nx_graph_reset(); nx_ipc_reset(); nx_hook_reset();
+    struct nx_slot      s = { .name = "s", .iface = "x" };
+    struct rx_state     st = { 0 };
+    struct nx_component c = {
+        .manifest_id = "pf", .instance_id = "0",
+        .descriptor  = &pause_fail_desc,
+        .impl        = &st,
+    };
+    nx_slot_register(&s);
+    nx_component_register(&c);
+    nx_slot_swap(&s, &c);
+    nx_component_init(&c);
+    nx_component_enable(&c);
+
+    ASSERT_EQ_U(nx_component_pause(&c), NX_EBUSY);
+    ASSERT_EQ_U(c.state, NX_LC_ACTIVE);
+    ASSERT_EQ_U(nx_slot_pause_state(&s), NX_SLOT_PAUSE_NONE);
+}
+
+/* Pause_hook that deliberately burns more than 1 ms of wall-clock time
+ * so the slice-3.9b.2 deadline check trips.  Uses nanosleep + a
+ * CLOCK_MONOTONIC loop so we don't race against a 1 ms sleep that the
+ * kernel might schedule short. */
+static int slow_pause_hook(void *self)
+{
+    (void)self;
+    struct timespec start, now;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    do {
+        struct timespec req = { .tv_sec = 0, .tv_nsec = 500000 }; /* 0.5 ms */
+        nanosleep(&req, NULL);
+        clock_gettime(CLOCK_MONOTONIC, &now);
+    } while ((uint64_t)(now.tv_sec - start.tv_sec) * 1000000000ULL +
+             (now.tv_nsec - start.tv_nsec) < 2000000ULL);  /* 2 ms */
+    return NX_OK;
+}
+static const struct nx_component_ops slow_hook_ops = {
+    .handle_msg = rx_handle,
+    .pause_hook = slow_pause_hook,
+    .pause      = rx_pause,
+    .resume     = rx_resume,
+};
+static const struct nx_component_descriptor slow_hook_desc = {
+    .name = "slow_hook", .state_size = sizeof(struct rx_state),
+    .ops  = &slow_hook_ops,
+};
+
+TEST(pause_hook_exceeding_deadline_returns_edeadline_and_rolls_back)
+{
+    nx_graph_reset(); nx_ipc_reset(); nx_hook_reset();
+    struct nx_slot      s = { .name = "s", .iface = "x" };
+    struct rx_state     st = { 0 };
+    struct nx_component c = {
+        .manifest_id = "sh", .instance_id = "0",
+        .descriptor  = &slow_hook_desc,
+        .impl        = &st,
+    };
+    nx_slot_register(&s);
+    nx_component_register(&c);
+    nx_slot_swap(&s, &c);
+    nx_component_init(&c);
+    nx_component_enable(&c);
+
+    int rc = nx_component_pause(&c);
+    ASSERT_EQ_U(rc, NX_EDEADLINE);
+    ASSERT_EQ_U(c.state, NX_LC_ACTIVE);
+    ASSERT_EQ_U(nx_slot_pause_state(&s), NX_SLOT_PAUSE_NONE);
+    /* ops->pause never ran — the hook-side check tripped first. */
+    ASSERT_EQ_U(st.pause_calls, 0);
+}
+
+/* --- Slice 3.9b.2: NX_HOOK_SLOT_SWAPPED dispatch ---------------------- */
+
+struct swap_capture {
+    int                   fires;
+    struct nx_slot       *last_slot;
+    struct nx_component  *last_old;
+    struct nx_component  *last_new;
+};
+
+static enum nx_hook_action capture_swap(struct nx_hook_context *ctx, void *user)
+{
+    struct swap_capture *cap = user;
+    cap->fires++;
+    cap->last_slot = ctx->u.swap.slot;
+    cap->last_old  = ctx->u.swap.old_impl;
+    cap->last_new  = ctx->u.swap.new_impl;
+    return NX_HOOK_CONTINUE;
+}
+
+TEST(slot_swap_fans_out_to_slot_swapped_hook_chain)
+{
+    nx_graph_reset(); nx_ipc_reset(); nx_hook_reset();
+
+    struct nx_slot      s = { .name = "s", .iface = "x" };
+    struct nx_component a = { .manifest_id = "m", .instance_id = "a" };
+    struct nx_component b = { .manifest_id = "m", .instance_id = "b" };
+    nx_slot_register(&s);
+    nx_component_register(&a);
+    nx_component_register(&b);
+
+    struct swap_capture cap = { 0 };
+    struct nx_hook h = {
+        .point = NX_HOOK_SLOT_SWAPPED,
+        .fn    = capture_swap,
+        .user  = &cap,
+    };
+    ASSERT_EQ_U(nx_hook_register(&h), NX_OK);
+
+    /* Bind → the hook fires with old=NULL, new=&a. */
+    ASSERT_EQ_U(nx_slot_swap(&s, &a), NX_OK);
+    ASSERT_EQ_U(cap.fires, 1);
+    ASSERT_EQ_PTR(cap.last_slot, &s);
+    ASSERT_EQ_PTR(cap.last_old,  NULL);
+    ASSERT_EQ_PTR(cap.last_new,  &a);
+
+    /* Swap to &b → fires with old=&a, new=&b. */
+    ASSERT_EQ_U(nx_slot_swap(&s, &b), NX_OK);
+    ASSERT_EQ_U(cap.fires, 2);
+    ASSERT_EQ_PTR(cap.last_old, &a);
+    ASSERT_EQ_PTR(cap.last_new, &b);
+
+    /* Unbind → fires with old=&b, new=NULL. */
+    ASSERT_EQ_U(nx_slot_swap(&s, NULL), NX_OK);
+    ASSERT_EQ_U(cap.fires, 3);
+    ASSERT_EQ_PTR(cap.last_old, &b);
+    ASSERT_EQ_PTR(cap.last_new, NULL);
+
+    nx_hook_unregister(&h);
 }
