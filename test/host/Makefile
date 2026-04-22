@@ -21,10 +21,13 @@ SRCS := main.c \
         component_destroy_test.c \
         task_test.c \
         conformance/conformance_scheduler.c \
+        conformance/conformance_mm.c \
         conformance_scheduler_test.c \
         component_sched_rr_test.c \
+        component_mm_buddy_test.c \
         dispatcher_test.c \
-        ../../components/sched_rr/sched_rr.c
+        ../../components/sched_rr/sched_rr.c \
+        ../../components/mm_buddy/mm_buddy.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
@@ -39,7 +42,7 @@ SRCS += ../../core/pmm/pmm.c \
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
-vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr
+vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/mm_buddy
 
 OBJS := $(notdir $(SRCS:.c=.o))
 

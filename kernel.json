@@ -11,6 +11,10 @@
     "scheduler": {
       "impl": "sched_rr",
       "config": {}
+    },
+    "memory.page_alloc": {
+      "impl": "mm_buddy",
+      "config": {}
     }
   },
 

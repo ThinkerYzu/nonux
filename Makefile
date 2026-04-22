@@ -157,7 +157,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_context.c \
                  test/kernel/ktest_sched_bootstrap.c \
                  test/kernel/ktest_sched.c \
-                 test/kernel/ktest_dispatcher.c
+                 test/kernel/ktest_dispatcher.c \
+                 test/kernel/ktest_mm_buddy.c
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
 core/boot/boot-test.o: core/boot/boot.c
