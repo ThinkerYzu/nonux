@@ -1,4 +1,5 @@
 #include "core/lib/lib.h"
+#include "core/mmu/mmu.h"
 #include "core/pmm/pmm.h"
 #include "core/cpu/exception.h"
 #include "core/irq/irq.h"
@@ -43,6 +44,14 @@ void boot_main(void)
     kprintf("  ARM64 / QEMU virt\n");
     kprintf("========================================\n");
     kprintf("\n");
+
+    /* Slice 5.1: turn on the MMU as early as possible so the rest of
+     * bring-up runs with D-cache + I-cache enabled and Normal-memory
+     * semantics (unaligned access, weaker ordering).  VA = PA
+     * everywhere we map — turning it on does not change any symbol
+     * address, only how loads/stores / fetches behave. */
+    mmu_init();
+    kprintf("[mmu]  enabled (identity map: MMIO 0..1G Device, RAM 1..2G Normal)\n");
 
     kprintf("[boot] kernel loaded at 0x40080000 (QEMU's -kernel offset)\n");
     kprintf("[boot] BSS:  %p — %p\n",

@@ -7,7 +7,7 @@ LD       := $(CROSS)ld
 OBJCOPY  := $(CROSS)objcopy
 
 CFLAGS   := -ffreestanding -nostdlib -Wall -Wextra -Werror -O2 \
-            -mno-outline-atomics -mgeneral-regs-only -mstrict-align \
+            -mno-outline-atomics -mgeneral-regs-only \
             -I. -Igen
 ASFLAGS  := -I.
 
@@ -24,6 +24,7 @@ CORE_C   := core/boot/boot.c \
             core/lib/printf.c \
             core/lib/kheap.c \
             core/cpu/exception.c \
+            core/mmu/mmu.c \
             core/pmm/pmm.c \
             core/irq/irq.c \
             core/irq/gic.c \
@@ -149,6 +150,7 @@ venv: $(VENV_STAMP)
 # boot_main dispatches into ktest_main instead of the idle loop), plus
 # the ktest runner and test cases.
 KTEST_C       := test/kernel/ktest_main.c \
+                 test/kernel/ktest_mmu.c \
                  test/kernel/ktest_pmm.c \
                  test/kernel/ktest_irq.c \
                  test/kernel/ktest_bootstrap.c \
