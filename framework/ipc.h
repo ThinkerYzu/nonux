@@ -2,6 +2,7 @@
 #define NX_FRAMEWORK_IPC_H
 
 #include "framework/registry.h"
+#include "core/lib/mpsc.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -65,9 +66,15 @@ struct nx_ipc_message {
     uint32_t               payload_len;
     const void            *payload;
 
-    /* Framework-owned — populated by the router when enqueued, cleared
-     * on dequeue.  Callers must not touch. */
+    /* Framework-owned link fields.  A message is on exactly one list
+     * at a time:
+     *   - `_next`    — per-slot inbox (host async path) and per-edge
+     *                  hold queue (pause-protocol buffering).
+     *   - `disp_node` — framework dispatcher's MPSC (slice 3.9b.1,
+     *                   kernel async path).
+     * Callers must not touch either. */
     struct nx_ipc_message *_next;
+    struct nx_mpsc_node    disp_node;
 };
 
 /* ---------- Router public API ---------------------------------------- */
@@ -101,10 +108,33 @@ int nx_ipc_send(struct nx_ipc_message *msg);
  * Returns the number of messages dispatched (0..max).  Stops early if
  * the inbox is empty or `handle_msg` returns nonzero.
  *
- * Slice 3.9 will replace explicit calls to this helper with a pinned
- * per-CPU dispatcher thread.  The contract stays the same.
+ * **Host-only since slice 3.9b.1.**  On the kernel build, async messages
+ * are owned by the framework dispatcher kthread (see framework/
+ * dispatcher.h) and this helper is a no-op returning 0.  Host tests
+ * retain the manual-pump contract.
  */
 size_t nx_ipc_dispatch(struct nx_slot *slot, size_t max);
+
+/*
+ * ISR-safe enqueue entry point (slice 3.9b.1).  Interrupt handlers
+ * that need to hand a pre-built `nx_ipc_message` off to a component
+ * call this instead of `nx_ipc_send` — the function dereferences no
+ * slot, takes no lock, allocates nothing, and returns in a bounded
+ * handful of instructions.  The dispatcher kthread picks the
+ * message up on its next iteration and runs the IPC_RECV hook +
+ * `handle_msg` on a dispatcher-equivalent context where R8's
+ * slot-resolve-locality invariant holds.
+ *
+ * `msg->src_slot` may be NULL for boot/external edges; `msg->dst_slot`
+ * must be non-NULL — the dispatcher uses it to resolve the active
+ * impl.  Caller owns `msg` storage and must keep it alive until the
+ * dispatcher has consumed it (easiest: allocate from a pre-built pool).
+ *
+ * Returns NX_OK on enqueue or NX_EINVAL for a NULL msg / dst_slot.
+ * Not called on the host build (no dispatcher); on host this is a
+ * NX_EINVAL-returning stub so tests can't accidentally depend on it.
+ */
+int nx_ipc_enqueue_from_irq(struct nx_ipc_message *msg);
 
 /* Number of messages currently queued on `slot`'s inbox. */
 size_t nx_ipc_inbox_depth(struct nx_slot *slot);

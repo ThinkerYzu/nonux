@@ -23,6 +23,7 @@ SRCS := main.c \
         conformance/conformance_scheduler.c \
         conformance_scheduler_test.c \
         component_sched_rr_test.c \
+        dispatcher_test.c \
         ../../components/sched_rr/sched_rr.c
 
 # Code-under-test pulled from the kernel tree:
@@ -32,6 +33,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/component.c \
         ../../framework/ipc.c \
         ../../framework/hook.c \
+        ../../framework/dispatcher.c \
         ../../core/sched/task.c \
         ../../core/sched/sched.c
 

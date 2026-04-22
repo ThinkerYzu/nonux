@@ -5,6 +5,7 @@
 #if !__STDC_HOSTED__
 #include "core/sched/sched.h"
 #include "interfaces/scheduler.h"
+#include "framework/dispatcher.h"
 #endif
 
 #if __STDC_HOSTED__
@@ -188,6 +189,15 @@ int nx_framework_bootstrap(void)
                 sched_slot->active->descriptor->iface_ops;
             sched_init(sops, sched_slot->active->impl);
         }
+    }
+
+    /* Slice 3.9b.1: spawn the framework dispatcher kthread.  Must
+     * run after sched_init so sched_spawn_kthread has a policy to
+     * enqueue onto; before the caller enables IRQs so the first
+     * async message the tick generates lands in a ready MPSC. */
+    {
+        int rc = nx_dispatcher_init();
+        if (rc != NX_OK) return rc;
     }
 #endif
 

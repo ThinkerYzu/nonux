@@ -1,5 +1,6 @@
 #include "framework/ipc.h"
 #include "framework/component.h"
+#include "framework/dispatcher.h"
 #include "framework/hook.h"
 #include "framework/registry.h"
 
@@ -40,7 +41,17 @@
 
 #define NX_IPC_REDIRECT_DEPTH_MAX 4
 
-/* ---------- Per-slot inbox --------------------------------------------- */
+/* ---------- Per-slot inbox --------------------------------------------- *
+ *
+ * Slice 3.9b.1 moves the kernel's async dispatch path onto a framework
+ * dispatcher kthread + MPSC queue (see framework/dispatcher.c).  The
+ * per-slot inbox below is only used on the host build, where tests
+ * retain the manual-pump `nx_ipc_dispatch(slot, max)` contract.  The
+ * whole per-slot-inbox apparatus therefore compiles under
+ * `__STDC_HOSTED__` and the kernel build doesn't carry any of it.
+ */
+
+#if __STDC_HOSTED__
 
 struct ipc_slot_queue {
     struct nx_slot         *slot;
@@ -90,6 +101,19 @@ size_t nx_ipc_inbox_depth(struct nx_slot *slot)
     struct ipc_slot_queue *q = queue_for(slot, false);
     return q ? q->depth : 0;
 }
+
+#else   /* !__STDC_HOSTED__ — kernel build */
+
+size_t nx_ipc_inbox_depth(struct nx_slot *slot)
+{
+    (void)slot;
+    /* Async messages live in the framework dispatcher MPSC on kernel;
+     * there is no per-slot depth to report.  Returning 0 is the least
+     * surprising answer for any code that still queries this. */
+    return 0;
+}
+
+#endif  /* __STDC_HOSTED__ */
 
 /* ---------- Per-edge hold queue (NX_PAUSE_QUEUE) ----------------------- */
 
@@ -150,6 +174,7 @@ size_t nx_ipc_hold_queue_depth(struct nx_slot *src, struct nx_slot *dst)
 
 void nx_ipc_reset(void)
 {
+#if __STDC_HOSTED__
     while (g_queues) {
         struct ipc_slot_queue *q = g_queues;
         g_queues = q->next;
@@ -162,6 +187,7 @@ void nx_ipc_reset(void)
         }
         free(q);
     }
+#endif
     while (g_holds) {
         struct ipc_hold_entry *e = g_holds;
         g_holds = e->next;
@@ -302,11 +328,22 @@ static int do_send(struct nx_ipc_message *msg, int depth)
         return invoke_handler(msg->dst_slot, msg);
     }
 
-    /* Async: enqueue for a later nx_ipc_dispatch call. */
+    /* Async.  Before slice 3.9b.1 this unconditionally enqueued onto a
+     * per-slot inbox and waited for an explicit `nx_ipc_dispatch` call
+     * to drain it.  From 3.9b.1 on, the kernel build owns a
+     * framework-spawned dispatcher kthread that consumes a global MPSC
+     * queue; the per-slot inbox path stays the backing store on host
+     * tests so the 100+ existing IPC / pause / hook cases keep their
+     * manual-pump shape.  See DESIGN.md §Execution Model and
+     * framework/dispatcher.h. */
+#if __STDC_HOSTED__
     struct ipc_slot_queue *q = queue_for(msg->dst_slot, true);
     if (!q) return NX_ENOMEM;
     enqueue(q, msg);
     return NX_OK;
+#else
+    return nx_dispatcher_enqueue(msg);
+#endif
 }
 
 int nx_ipc_send(struct nx_ipc_message *msg)
@@ -316,6 +353,7 @@ int nx_ipc_send(struct nx_ipc_message *msg)
 
 size_t nx_ipc_dispatch(struct nx_slot *slot, size_t max)
 {
+#if __STDC_HOSTED__
     if (!slot || max == 0) return 0;
     struct ipc_slot_queue *q = queue_for(slot, false);
     if (!q) return 0;
@@ -343,6 +381,25 @@ size_t nx_ipc_dispatch(struct nx_slot *slot, size_t max)
         if (rc != NX_OK) break;
     }
     return dispatched;
+#else
+    /* Kernel: the dispatcher kthread owns the async inbox (MPSC).
+     * Slice 3.9b.1 leaves this helper callable for source
+     * compatibility but it is a no-op on the kernel build. */
+    (void)slot; (void)max;
+    return 0;
+#endif
+}
+
+int nx_ipc_enqueue_from_irq(struct nx_ipc_message *msg)
+{
+#if __STDC_HOSTED__
+    (void)msg;
+    /* No dispatcher thread on host — tests that need ISR-simulated
+     * enqueue should drive nx_dispatcher_enqueue directly. */
+    return NX_EINVAL;
+#else
+    return nx_dispatcher_enqueue(msg);
+#endif
 }
 
 /* ---------- Hold-queue flush ------------------------------------------ */
