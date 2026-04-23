@@ -40,6 +40,7 @@
 #define NX_EABORT    -8    /* hook chain returned ABORT */
 #define NX_EDEADLINE -9    /* pause_hook (or similar) exceeded its wall-clock budget */
 #define NX_EPERM    -10    /* caller attempted an operation it lacks rights for */
+#define NX_EAGAIN   -11    /* non-blocking op would block (e.g. empty channel recv) */
 
 /* ---------- Enums --------------------------------------------------------- */
 

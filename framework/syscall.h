@@ -38,6 +38,12 @@ enum nx_syscall_number {
                                   * error rather than some real op. */
     NX_SYS_DEBUG_WRITE    = 1,   /* (const char *buf, size_t len) → bytes written */
     NX_SYS_HANDLE_CLOSE   = 2,   /* (nx_handle_t h)               → NX_OK / NX_E* */
+    NX_SYS_CHANNEL_CREATE = 3,   /* (nx_handle_t *e0, nx_handle_t *e1)
+                                  *   → NX_OK; writes 2 handles via copy_to_user */
+    NX_SYS_CHANNEL_SEND   = 4,   /* (nx_handle_t h, const void *buf, size_t len)
+                                  *   → bytes sent / NX_EBUSY (full or closed) */
+    NX_SYS_CHANNEL_RECV   = 5,   /* (nx_handle_t h, void *buf, size_t cap)
+                                  *   → bytes received / NX_EAGAIN / NX_ENOMEM */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

@@ -42,7 +42,8 @@ FW_C     := framework/registry.c \
             framework/dispatcher.c \
             framework/bootstrap.c \
             framework/handle.c \
-            framework/syscall.c
+            framework/syscall.c \
+            framework/channel.c
 
 # Component sources + the gen/slot_table.c binding table, both emitted
 # by `make kernel-config`.
@@ -164,11 +165,14 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_mm_buddy.c \
                  test/kernel/ktest_handle.c \
                  test/kernel/ktest_syscall.c \
-                 test/kernel/ktest_el0.c
+                 test/kernel/ktest_el0.c \
+                 test/kernel/ktest_channel.c
 
-# Slice 5.5: a tiny EL0 program assembled into kernel-test.bin's
-# .rodata.  Not part of kernel.bin — it's test-only scaffold.
-KTEST_S       := test/kernel/user_prog.S
+# EL0 test programs assembled into kernel-test.bin's .rodata — each
+# is memcpy'd into the MMU's user window by its matching ktest before
+# drop_to_el0.  Not part of kernel.bin; test-only scaffold.
+KTEST_S       := test/kernel/user_prog.S \
+                 test/kernel/user_prog_chan.S
 KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 

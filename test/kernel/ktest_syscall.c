@@ -111,9 +111,13 @@ KTEST(syscall_handle_close_through_svc_closes_handle_in_kernel_table)
     nx_syscall_reset_for_test();
     struct nx_handle_table *t = nx_syscall_current_table();
 
+    /* Slice 5.6: `sys_handle_close` now calls `nx_channel_endpoint_close`
+     * on objects stored under NX_HANDLE_CHANNEL.  Use NX_HANDLE_VMO
+     * here so the dummy-pointer placeholder doesn't hit the channel
+     * destructor. */
     static int dummy;
     nx_handle_t h;
-    KASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_CHANNEL,
+    KASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_VMO,
                                  NX_RIGHT_READ | NX_RIGHT_WRITE,
                                  &dummy, &h), NX_OK);
 

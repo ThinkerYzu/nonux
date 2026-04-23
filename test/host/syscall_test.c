@@ -114,9 +114,15 @@ TEST(syscall_handle_close_routes_to_current_table)
     nx_syscall_reset_for_test();
     struct nx_handle_table *t = nx_syscall_current_table();
 
+    /* Use NX_HANDLE_VMO (no object-side destructor yet) with a local-
+     * int placeholder.  Slice 5.6 made `sys_handle_close` type-aware
+     * for CHANNEL (calls `nx_channel_endpoint_close` on the object),
+     * and passing a bare int as a "channel object" dereferences
+     * garbage.  VMO stays an opaque type so the test exercises the
+     * table-close path without tripping the channel destructor. */
     int dummy = 0;
     nx_handle_t h;
-    int rc_alloc = nx_handle_alloc(t, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
+    int rc_alloc = nx_handle_alloc(t, NX_HANDLE_VMO, NX_RIGHT_READ,
                                    &dummy, &h);
     ASSERT_EQ_U(rc_alloc, NX_OK);
 
