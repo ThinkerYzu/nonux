@@ -18,7 +18,8 @@ QEMU_FLAGS := -M virt,gic-version=2 -cpu cortex-a53 -nographic -kernel kernel.bi
 # Core sources (always compiled)
 CORE_S   := core/boot/start.S \
             core/cpu/vectors.S \
-            core/cpu/context.S
+            core/cpu/context.S \
+            core/cpu/el0_entry.S
 CORE_C   := core/boot/boot.c \
             core/lib/string.c \
             core/lib/printf.c \
@@ -162,7 +163,13 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_dispatcher.c \
                  test/kernel/ktest_mm_buddy.c \
                  test/kernel/ktest_handle.c \
-                 test/kernel/ktest_syscall.c
+                 test/kernel/ktest_syscall.c \
+                 test/kernel/ktest_el0.c
+
+# Slice 5.5: a tiny EL0 program assembled into kernel-test.bin's
+# .rodata.  Not part of kernel.bin — it's test-only scaffold.
+KTEST_S       := test/kernel/user_prog.S
+KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
 core/boot/boot-test.o: core/boot/boot.c
@@ -170,7 +177,8 @@ core/boot/boot-test.o: core/boot/boot.c
 
 TEST_OBJS     := $(filter-out core/boot/boot.o,$(OBJS)) \
                  core/boot/boot-test.o \
-                 $(KTEST_OBJS)
+                 $(KTEST_OBJS) \
+                 $(KTEST_S_OBJS)
 
 kernel-test.elf: $(TEST_OBJS) core/boot/linker.ld
 	$(LD) -T core/boot/linker.ld -o $@ $(TEST_OBJS)

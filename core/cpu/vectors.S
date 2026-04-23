@@ -34,7 +34,12 @@
     stp     x26, x27, [sp, #0x0D0]
     stp     x28, x29, [sp, #0x0E0]
     str     x30,      [sp, #0x0F0]
-    str     xzr,      [sp, #0x0F8]
+    /* Slice 5.5: preserve SP_EL0 across the exception so EL0 callers
+     * get their stack back on eret.  For EL1-origin traps SP_EL0 is
+     * usually unused but we still preserve it — cheaper than branching
+     * on the origin EL. */
+    mrs     x2, sp_el0
+    str     x2,       [sp, #0x0F8]
     mrs     x0, elr_el1
     mrs     x1, spsr_el1
     stp     x0,  x1,  [sp, #0x100]
@@ -44,6 +49,9 @@
     ldp     x0,  x1,  [sp, #0x100]
     msr     elr_el1,  x0
     msr     spsr_el1, x1
+    /* Slice 5.5: restore SP_EL0 before reloading x2 from memory. */
+    ldr     x2,       [sp, #0x0F8]
+    msr     sp_el0,  x2
     ldr     x30,      [sp, #0x0F0]
     ldp     x28, x29, [sp, #0x0E0]
     ldp     x26, x27, [sp, #0x0D0]
@@ -86,15 +94,21 @@ vectors:
     .balign 0x80
     b       _serror_stub
 
-    /* --- Lower EL using AArch64 (userspace — later phases) --- */
+    /* --- Lower EL using AArch64 (EL0 userspace, slice 5.5+) --- *
+     *
+     * Sync (SVC-from-EL0) routes to the same stub as sync-from-EL1 —
+     * the dispatcher in on_sync reads ESR.EC to distinguish SVC from
+     * real faults, and nx_syscall_dispatch itself doesn't care which
+     * EL the caller was at.  IRQ/FIQ/SError reuse the same core-
+     * driven stubs; they're EL-agnostic by construction. */
     .balign 0x80
-    b       _unimpl_stub
+    b       _sync_stub
     .balign 0x80
-    b       _unimpl_stub
+    b       _irq_stub
     .balign 0x80
-    b       _unimpl_stub
+    b       _fiq_stub
     .balign 0x80
-    b       _unimpl_stub
+    b       _serror_stub
 
     /* --- Lower EL using AArch32 (not supported) --- */
     .balign 0x80

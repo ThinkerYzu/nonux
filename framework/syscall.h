@@ -74,4 +74,13 @@ struct nx_handle_table *nx_syscall_current_table(void);
  */
 void nx_syscall_reset_for_test(void);
 
+/*
+ * Test-only: how many times NX_SYS_DEBUG_WRITE has been successfully
+ * invoked since kernel boot (or since the last nx_syscall_reset_for_test).
+ * Slice 5.5 uses this as the verification signal for "EL0 code reached
+ * the SVC" — UART output isn't programmatically observable from the
+ * test, but the counter is.  Production code has no reason to call this.
+ */
+uint64_t nx_syscall_debug_write_calls(void);
+
 #endif /* NX_FRAMEWORK_SYSCALL_H */

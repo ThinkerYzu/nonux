@@ -80,6 +80,27 @@ static inline uint64_t normal_block(uint64_t pa)
            DESC_AF | DESC_UXN;
 }
 
+/* User-accessible Normal block — slice 5.5.
+ *
+ * Same attributes as a plain Normal block except AP permits EL0 access
+ * (AP=0b01: RW at both EL1 and EL0) and UXN=0 (EL0 may execute).  PXN
+ * stays 0 so kernel code in this region also runs fine if needed.
+ *
+ * Used only for the user window at USER_WINDOW_VA; all other RAM blocks
+ * stay kernel-only via `normal_block()`.  Per-task TTBR0 tables that
+ * would split this into per-process mappings arrive in a follow-up
+ * slice.
+ */
+#define DESC_AP_USER_RW  (1UL << 6)   /* AP[2:1] = 0b01 — EL0+EL1 RW */
+
+static inline uint64_t user_block(uint64_t pa)
+{
+    return pa | DESC_VALID |
+           DESC_ATTR_IDX(ATTR_IDX_NORMAL) |
+           DESC_AP_USER_RW | DESC_SH_INNER |
+           DESC_AF;
+}
+
 /* ---------- TCR_EL1 ----------------------------------------------------- *
  *
  *   T0SZ=25       → 39-bit VA (start at L1)
@@ -100,6 +121,20 @@ static inline uint64_t normal_block(uint64_t pa)
 
 /* ---------- Bring-up --------------------------------------------------- */
 
+/* User window: a single 2 MiB block carved out of L2_ram for EL0 code +
+ * stack.  Chosen so it's deep enough into RAM to be clear of the PMM's
+ * near-term allocations (kernel image ends around 0x40096000; PMM hands
+ * out contiguously from 0x400d6000; 128 MiB in is far past any
+ * reasonable slice-5.x consumer).  Slice 5.6+ will move user pages
+ * onto per-task TTBR0 tables. */
+#define USER_WINDOW_INDEX   64u                        /* L2_ram entry # */
+#define USER_WINDOW_VA      (RAM_BASE + \
+                             ((uint64_t)USER_WINDOW_INDEX << BLOCK2_SHIFT))
+#define USER_WINDOW_SIZE    ((uint64_t)1 << BLOCK2_SHIFT)
+
+uint64_t mmu_user_window_base(void) { return USER_WINDOW_VA; }
+uint64_t mmu_user_window_size(void) { return USER_WINDOW_SIZE; }
+
 void mmu_init(void)
 {
     /* Populate L2 tables.  2 MiB blocks cover the full 1 GiB each. */
@@ -107,6 +142,12 @@ void mmu_init(void)
         l2_mmio_table[i] = device_block(MMIO_BASE + (i << BLOCK2_SHIFT));
         l2_ram_table[i]  = normal_block(RAM_BASE  + (i << BLOCK2_SHIFT));
     }
+
+    /* Upgrade the user-window slot's permissions so EL0 can read /
+     * write / execute within it.  Still identity-mapped to the same
+     * physical 2 MiB (VA == PA). */
+    l2_ram_table[USER_WINDOW_INDEX] =
+        user_block(RAM_BASE + ((uint64_t)USER_WINDOW_INDEX << BLOCK2_SHIFT));
 
     /* L1: wire the two L2 tables.  Everything else stays invalid. */
     l1_table[0] = (uint64_t)l2_mmio_table | DESC_VALID | DESC_TABLE;

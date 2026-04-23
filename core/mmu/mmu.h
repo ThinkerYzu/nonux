@@ -30,4 +30,11 @@ void mmu_init(void);
  * never need to query this. */
 int  mmu_is_enabled(void);
 
+/* Slice 5.5 — user window exposed so EL0 test code can find the VA/size
+ * of the one EL0-accessible 2 MiB block.  Identity-mapped (VA == PA),
+ * Normal memory, AP=EL0+EL1 RW, UXN=0.  Values are constants — safe to
+ * call before the MMU is on. */
+uint64_t mmu_user_window_base(void);
+uint64_t mmu_user_window_size(void);
+
 #endif /* NONUX_MMU_H */
