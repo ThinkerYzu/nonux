@@ -17,6 +17,7 @@
 
 #include "core/sched/task.h"
 #include "core/sched/sched.h"
+#include "framework/process.h"
 
 #if __STDC_HOSTED__
 #include <stdlib.h>
@@ -170,6 +171,14 @@ struct nx_task *nx_task_create(const char *name,
 #endif
     t->cpu_ctx.sp   = (uint64_t)sp_top;
     t->cpu_ctx.daif = 0;  /* IRQs enabled for a fresh kthread */
+
+    /* Inherit process from the caller (slice 7.1).  Fall back to the
+     * kernel process if there's no current task yet — that covers
+     * every kthread spawned before sched_start publishes idle as the
+     * current task. */
+    struct nx_task *caller = nx_task_current();
+    t->process = (caller && caller->process) ? caller->process
+                                             : &g_kernel_process;
 
     return t;
 }

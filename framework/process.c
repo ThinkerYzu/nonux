@@ -1,0 +1,210 @@
+/*
+ * Process framework — slice 7.1 implementation.  See process.h for
+ * the contract.
+ */
+
+#include "framework/process.h"
+#include "framework/handle.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#if __STDC_HOSTED__
+#include <stdlib.h>
+#include <string.h>
+#else
+#include "core/lib/kheap.h"
+#include "core/lib/lib.h"
+#include "core/mmu/mmu.h"
+#include "core/sched/task.h"
+#endif
+
+/* ---------- The always-present kernel process (pid 0) --------------- */
+
+struct nx_process g_kernel_process = {
+    .pid        = 0,
+    .name       = "kernel",
+    .state      = NX_PROCESS_STATE_ACTIVE,
+    .exit_code  = 0,
+    /* .handles is zero-initialised — equivalent to a fresh
+     * `nx_handle_table_init` call.  The handle table's invariant is
+     * that a zero-initialised table is empty, so we don't need an
+     * explicit init in the BSS-backed definition. */
+};
+
+/* ---------- Process bookkeeping ------------------------------------- */
+/*
+ * Small linear table of live user processes.  Fixed capacity in v1 —
+ * processes are expensive (pid + handle table) and the test surface
+ * doesn't need more than a handful concurrently.  Lookup is O(n) but
+ * `n` is tiny; swap for a hashmap when there's a consumer that cares.
+ */
+#define NX_PROCESS_TABLE_CAPACITY 16
+
+static struct nx_process *g_process_table[NX_PROCESS_TABLE_CAPACITY];
+static uint32_t            g_pid_next = 1;    /* pid 0 reserved for kernel */
+
+static int process_table_add(struct nx_process *p)
+{
+    for (int i = 0; i < NX_PROCESS_TABLE_CAPACITY; i++) {
+        if (!g_process_table[i]) { g_process_table[i] = p; return 0; }
+    }
+    return -1;
+}
+
+static void process_table_remove(struct nx_process *p)
+{
+    for (int i = 0; i < NX_PROCESS_TABLE_CAPACITY; i++) {
+        if (g_process_table[i] == p) { g_process_table[i] = NULL; return; }
+    }
+}
+
+/* ---------- API ----------------------------------------------------- */
+
+struct nx_process *nx_process_create(const char *name)
+{
+#if __STDC_HOSTED__
+    struct nx_process *p = calloc(1, sizeof *p);
+#else
+    struct nx_process *p = malloc(sizeof *p);
+    if (p) memset(p, 0, sizeof *p);
+#endif
+    if (!p) return NULL;
+
+    if (process_table_add(p) != 0) {
+#if __STDC_HOSTED__
+        free(p);
+#else
+        free(p);
+#endif
+        return NULL;
+    }
+
+    p->pid       = g_pid_next++;
+    p->state     = NX_PROCESS_STATE_ACTIVE;
+    p->exit_code = 0;
+
+    if (name) {
+        size_t i = 0;
+        for (; i < NX_PROCESS_NAME_MAX - 1 && name[i]; i++) p->name[i] = name[i];
+        p->name[i] = '\0';
+    } else {
+        p->name[0] = '\0';
+    }
+
+    nx_handle_table_init(&p->handles);
+
+    /*
+     * Slice 7.2: allocate a private address space.  On kernel this
+     * is a real TTBR0 root; on host it stays 0 (no MMU).  Failure
+     * rolls back the process registration.
+     */
+#if !__STDC_HOSTED__
+    p->ttbr0_root = mmu_create_address_space();
+    if (p->ttbr0_root == 0) {
+        process_table_remove(p);
+        free(p);
+        return NULL;
+    }
+#else
+    p->ttbr0_root = 0;
+#endif
+
+    return p;
+}
+
+void nx_process_destroy(struct nx_process *p)
+{
+    if (!p) return;
+    if (p == &g_kernel_process) {
+        /* Clearing the table is legal (test-fixture use); freeing the
+         * static storage isn't. */
+        nx_handle_table_init(&p->handles);
+        p->state     = NX_PROCESS_STATE_ACTIVE;
+        p->exit_code = 0;
+        return;
+    }
+
+    /* Close every live handle so type-aware destructors run (channel
+     * endpoints released, future VMO / FILE destructors fire). */
+    for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
+        struct nx_handle_entry *e = &p->handles.entries[i];
+        if (e->type != NX_HANDLE_INVALID) {
+            /* Reconstruct the handle value the same way alloc did so
+             * nx_handle_close finds it.  Matches the layout documented
+             * in framework/handle.h. */
+            nx_handle_t h = (e->generation << 8) | (uint32_t)(i + 1);
+            nx_handle_close(&p->handles, h);
+        }
+    }
+
+    process_table_remove(p);
+#if !__STDC_HOSTED__
+    if (p->ttbr0_root) {
+        mmu_destroy_address_space(p->ttbr0_root);
+        p->ttbr0_root = 0;
+    }
+#endif
+    free(p);
+}
+
+struct nx_process *nx_process_current(void)
+{
+#if !__STDC_HOSTED__
+    struct nx_task *t = nx_task_current();
+    if (t && t->process) return t->process;
+#endif
+    return &g_kernel_process;
+}
+
+struct nx_process *nx_process_lookup_by_pid(uint32_t pid)
+{
+    if (pid == 0) return &g_kernel_process;
+    for (int i = 0; i < NX_PROCESS_TABLE_CAPACITY; i++) {
+        if (g_process_table[i] && g_process_table[i]->pid == pid)
+            return g_process_table[i];
+    }
+    return NULL;
+}
+
+size_t nx_process_count(void)
+{
+    /* The kernel process is always present. */
+    size_t n = 1;
+    for (int i = 0; i < NX_PROCESS_TABLE_CAPACITY; i++)
+        if (g_process_table[i]) n++;
+    return n;
+}
+
+void nx_process_exit(int code)
+{
+    struct nx_process *p = nx_process_current();
+    p->state     = NX_PROCESS_STATE_EXITED;
+    p->exit_code = code;
+
+    /* Park in a tight wfe loop on kernel, an infinite loop on host.
+     * v1 ktest harness dequeues the stranded task externally.  Real
+     * scheduler-integrated exit (dequeue + switch-to-next) lands in
+     * slice 7.4 alongside `wait()`. */
+#if __STDC_HOSTED__
+    for (;;) { /* unreachable in tests — callers set up their own loop
+                * via a host fixture before invoking sys_exit. */ }
+#else
+    for (;;) asm volatile ("wfe");
+#endif
+}
+
+void nx_process_reset_for_test(void)
+{
+    for (int i = 0; i < NX_PROCESS_TABLE_CAPACITY; i++) {
+        if (g_process_table[i]) {
+            struct nx_process *p = g_process_table[i];
+            g_process_table[i] = NULL;
+            free(p);
+        }
+    }
+    g_pid_next = 1;
+    nx_handle_table_init(&g_kernel_process.handles);
+    g_kernel_process.state     = NX_PROCESS_STATE_ACTIVE;
+    g_kernel_process.exit_code = 0;
+}

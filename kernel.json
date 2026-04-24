@@ -15,6 +15,14 @@
     "memory.page_alloc": {
       "impl": "mm_buddy",
       "config": {}
+    },
+    "filesystem.root": {
+      "impl": "ramfs",
+      "config": {}
+    },
+    "vfs": {
+      "impl": "vfs_simple",
+      "config": {}
     }
   },
 

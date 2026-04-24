@@ -16,6 +16,10 @@
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
 #include "framework/hook.h"
+#include "framework/process.h"
+#if !__STDC_HOSTED__
+#include "core/mmu/mmu.h"
+#endif
 
 #if !__STDC_HOSTED__
 #include "core/lib/lib.h"
@@ -88,6 +92,10 @@ static void idle_task_init(void)
     g_idle_task.kstack_size    = 0;
     g_idle_task.sched_node.next = &g_idle_task.sched_node;
     g_idle_task.sched_node.prev = &g_idle_task.sched_node;
+    /* Slice 7.1: idle belongs to the kernel process (pid 0).  Any
+     * kthread spawned before someone explicitly reassigns its
+     * `process` pointer inherits this default (see nx_task_create). */
+    g_idle_task.process        = &g_kernel_process;
     /* cpu_ctx is undefined — the very first cpu_switch_to saves into
      * it and every subsequent one uses it.  We'll only ever switch
      * AWAY from idle (the boot CPU is already running in idle's
@@ -146,6 +154,21 @@ void sched_check_resched(void)
         .u.csw   = { .prev = curr, .next = next },
     };
     nx_hook_dispatch(&hctx);
+
+    /* Slice 7.2: flip TTBR0 if the incoming task lives in a different
+     * process.  Every address-space root shares the kernel's identity
+     * map for the code page currently executing, so the instruction
+     * fetch after the `isb` inside `mmu_switch_address_space` resolves
+     * unchanged.  The TLB flush makes stale user-region entries from
+     * the outgoing process invisible to the incoming one. */
+#if !__STDC_HOSTED__
+    if (next->process && curr->process &&
+        next->process != curr->process &&
+        next->process->ttbr0_root != curr->process->ttbr0_root &&
+        next->process->ttbr0_root != 0) {
+        mmu_switch_address_space(next->process->ttbr0_root);
+    }
+#endif
 
     cpu_switch_to(curr, next);
     /* Resumes here whenever some future switch selects `curr` again.

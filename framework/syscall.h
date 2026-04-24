@@ -44,9 +44,38 @@ enum nx_syscall_number {
                                   *   → bytes sent / NX_EBUSY (full or closed) */
     NX_SYS_CHANNEL_RECV   = 5,   /* (nx_handle_t h, void *buf, size_t cap)
                                   *   → bytes received / NX_EAGAIN / NX_ENOMEM */
+    NX_SYS_OPEN           = 6,   /* (const char *path, uint32_t flags)
+                                  *   → HANDLE_FILE handle / NX_E* */
+    NX_SYS_READ           = 7,   /* (nx_handle_t h, void *buf, size_t cap)
+                                  *   → bytes read / NX_E* */
+    NX_SYS_WRITE          = 8,   /* (nx_handle_t h, const void *buf, size_t len)
+                                  *   → bytes written / NX_E* */
+    NX_SYS_SEEK           = 9,   /* (nx_handle_t h, int64_t offset, int whence)
+                                  *   → new absolute position / NX_E* */
+    NX_SYS_READDIR        = 10,  /* (uint32_t *cookie, struct nx_fs_dirent *out)
+                                  *   → NX_OK / NX_ENOENT / NX_EINVAL */
+    NX_SYS_EXIT           = 11,  /* (int code) → noreturn; marks current
+                                  *   process EXITED, parks in wfe loop */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
+
+/*
+ * File-syscall limits (slice 6.3).
+ *
+ * `NX_PATH_MAX` bounds the path string copy_from_user reads on open —
+ * paths longer than this return NX_EINVAL.  128 bytes is generous for
+ * the single-mount v1 filesystem (ramfs's NAME_MAX is 32); a future
+ * slice can raise this without breaking the syscall ABI.
+ *
+ * `NX_FILE_IO_MAX` is the staging-buffer size read/write use on each
+ * syscall.  Consumers passing larger `cap` / `len` get at most this
+ * many bytes per call — users loop to transfer more.  Matches the
+ * channel syscall pattern (NX_CHANNEL_MSG_MAX = 256) so the two
+ * bulk-IO kernel buffers share a size class.
+ */
+#define NX_PATH_MAX     128u
+#define NX_FILE_IO_MAX  256u
 
 /*
  * Dispatch entry — invoked from `on_sync` after it has decoded

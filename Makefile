@@ -43,7 +43,9 @@ FW_C     := framework/registry.c \
             framework/bootstrap.c \
             framework/handle.c \
             framework/syscall.c \
-            framework/channel.c
+            framework/channel.c \
+            framework/process.c \
+            framework/elf.c
 
 # Component sources + the gen/slot_table.c binding table, both emitted
 # by `make kernel-config`.
@@ -166,13 +168,34 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_handle.c \
                  test/kernel/ktest_syscall.c \
                  test/kernel/ktest_el0.c \
-                 test/kernel/ktest_channel.c
+                 test/kernel/ktest_channel.c \
+                 test/kernel/ktest_vfs.c \
+                 test/kernel/ktest_process.c \
+                 test/kernel/ktest_elf.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
 # drop_to_el0.  Not part of kernel.bin; test-only scaffold.
 KTEST_S       := test/kernel/user_prog.S \
-                 test/kernel/user_prog_chan.S
+                 test/kernel/user_prog_chan.S \
+                 test/kernel/user_prog_file.S \
+                 test/kernel/user_prog_readdir.S \
+                 test/kernel/init_prog_blob.S
+
+# Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
+# Built as its own aarch64 executable, then embedded into kernel-test.bin
+# via `.incbin` inside `init_prog_blob.S`.  `framework/elf.c` parses
+# the blob at test time and loads its PT_LOAD segments into a target
+# process's address space.
+test/kernel/init_prog.o: test/kernel/init_prog.S
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+test/kernel/init_prog.elf: test/kernel/init_prog.o test/kernel/init_prog.ld
+	$(LD) -T test/kernel/init_prog.ld -o $@ test/kernel/init_prog.o
+
+# .incbin brings the ELF bytes into .rodata; assembler doesn't track
+# .incbin dependencies automatically, so add an explicit one.
+test/kernel/init_prog_blob.o: test/kernel/init_prog_blob.S test/kernel/init_prog.elf
 KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
@@ -230,6 +253,7 @@ bench: kernel.bin
 # Clean
 clean:
 	find . -name '*.o' -delete
-	rm -rf gen/ kernel.elf kernel.bin kernel-test.elf kernel-test.bin
+	rm -rf gen/ kernel.elf kernel.bin kernel-test.elf kernel-test.bin \
+	       test/kernel/init_prog.elf
 
 .PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean

@@ -1,8 +1,10 @@
 #include "framework/bootstrap.h"
 #include "framework/component.h"
+#include "framework/process.h"
 #include "framework/registry.h"
 
 #if !__STDC_HOSTED__
+#include "core/mmu/mmu.h"
 #include "core/sched/sched.h"
 #include "interfaces/scheduler.h"
 #include "framework/dispatcher.h"
@@ -97,6 +99,16 @@ static bool deps_ready(const struct nx_component_descriptor *d,
 
 int nx_framework_bootstrap(void)
 {
+    /* Slice 7.2: seed the always-present kernel process with the
+     * kernel's own TTBR0 root.  `mmu_init()` has already run by the
+     * time bootstrap fires (boot.c order), so the kernel L1 root is
+     * live and picking it up here is safe.  On host builds
+     * `mmu_kernel_address_space()` returns 0 and we stay with the
+     * zero-initialised placeholder. */
+#if !__STDC_HOSTED__
+    g_kernel_process.ttbr0_root = mmu_kernel_address_space();
+#endif
+
     /* Step 1: register every slot in the boot table. */
     for (unsigned i = 0; i < nx_boot_slots_count; i++) {
         int rc = nx_slot_register(nx_boot_slots[i].slot);

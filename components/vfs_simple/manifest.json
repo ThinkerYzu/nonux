@@ -1,0 +1,5 @@
+{
+  "name": "vfs_simple",
+  "version": "0.1.0",
+  "iface": "vfs"
+}

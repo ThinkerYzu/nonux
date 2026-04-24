@@ -62,6 +62,16 @@ enum nx_task_state {
 #define NX_TASK_NAME_MAX 16
 
 /*
+ * Forward declaration — `struct nx_process` is defined in
+ * framework/process.h.  Tasks link back to their owning process so
+ * the syscall dispatcher can resolve the current handle table
+ * without a separate global; inherited by `nx_task_create` from the
+ * caller's current process (falling back to `&g_kernel_process`
+ * during bootstrap).  Slice 7.1 added this field.
+ */
+struct nx_process;
+
+/*
  * `cpu_ctx` is first so `cpu_switch_to(struct task *)` can treat the task
  * pointer as a `struct nx_cpu_ctx *` without indexing.  `_Static_assert`
  * below pins this.
@@ -76,6 +86,7 @@ struct nx_task {
     void               *kstack_base;
     size_t              kstack_size;
     struct nx_list_node sched_node;
+    struct nx_process  *process;
 };
 
 _Static_assert(offsetof(struct nx_task, cpu_ctx) == 0,

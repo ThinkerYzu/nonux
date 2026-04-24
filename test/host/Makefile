@@ -22,15 +22,24 @@ SRCS := main.c \
         task_test.c \
         conformance/conformance_scheduler.c \
         conformance/conformance_mm.c \
+        conformance/conformance_fs.c \
         conformance_scheduler_test.c \
+        conformance_fs_test.c \
         component_sched_rr_test.c \
         component_mm_buddy_test.c \
+        component_ramfs_test.c \
+        component_vfs_simple_test.c \
         dispatcher_test.c \
         handle_test.c \
         syscall_test.c \
         channel_test.c \
+        file_syscall_test.c \
+        process_test.c \
+        elf_test.c \
         ../../components/sched_rr/sched_rr.c \
-        ../../components/mm_buddy/mm_buddy.c
+        ../../components/mm_buddy/mm_buddy.c \
+        ../../components/ramfs/ramfs.c \
+        ../../components/vfs_simple/vfs_simple.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
@@ -43,12 +52,14 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/handle.c \
         ../../framework/syscall.c \
         ../../framework/channel.c \
+        ../../framework/process.c \
+        ../../framework/elf.c \
         ../../core/sched/task.c \
         ../../core/sched/sched.c
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
-vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/mm_buddy
+vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/mm_buddy ../../components/ramfs ../../components/vfs_simple
 
 OBJS := $(notdir $(SRCS:.c=.o))
 
