@@ -18,6 +18,9 @@
 #include "core/sched/task.h"
 #include "core/sched/sched.h"
 #include "framework/process.h"
+#if !__STDC_HOSTED__
+#include "core/cpu/exception.h"
+#endif
 
 #if __STDC_HOSTED__
 #include <stdlib.h>
@@ -181,6 +184,92 @@ struct nx_task *nx_task_create(const char *name,
                                              : &g_kernel_process;
 
     return t;
+}
+
+struct nx_task *nx_task_create_forked(const char *name,
+                                      const struct trap_frame *parent_tf)
+{
+#if __STDC_HOSTED__
+    /* Host has no trap frames or EL0 — a fork-forked task is
+     * meaningless outside the kernel.  Stub out. */
+    (void)name; (void)parent_tf;
+    return NULL;
+#else
+    if (!parent_tf) return NULL;
+
+    struct nx_task *t = alloc_task_struct();
+    if (!t) return NULL;
+
+    void *stack = alloc_kstack(1);
+    if (!stack) {
+        free_task_struct(t);
+        return NULL;
+    }
+
+    t->id = __atomic_fetch_add(&g_task_id_seq, 1, __ATOMIC_RELAXED);
+
+    size_t i = 0;
+    if (name) {
+        for (; i < NX_TASK_NAME_MAX - 1 && name[i]; i++)
+            t->name[i] = name[i];
+    }
+    t->name[i] = '\0';
+
+    t->state         = NX_TASK_READY;
+    t->preempt_count = 0;
+    t->need_resched  = 0;
+    t->kstack_base   = stack;
+    t->kstack_size   = 4096u;
+    t->sched_node.next = &t->sched_node;
+    t->sched_node.prev = &t->sched_node;
+
+    /* Top of kstack, 16-byte aligned. */
+    uintptr_t sp_top = (uintptr_t)stack + t->kstack_size;
+    sp_top &= ~(uintptr_t)0xf;
+
+    /* Reserve sizeof(struct trap_frame) bytes for the child's
+     * replay frame.  The trap-frame layout in SAVE_TRAPFRAME uses
+     * exactly 272 bytes; `struct trap_frame` in exception.h is
+     * shaped to match (31 * 8 + 3 * 8 = 272).  Align to 16 so the
+     * restore's stp/ldp stay happy. */
+    uintptr_t frame_addr = sp_top - sizeof(struct trap_frame);
+    frame_addr &= ~(uintptr_t)0xf;
+
+    struct trap_frame *child_frame = (struct trap_frame *)frame_addr;
+    *child_frame = *parent_tf;          /* byte-copy the parent's frame */
+    child_frame->x[0] = 0;              /* child's fork return value */
+
+    /* Callee-saved regs are never read by `nx_task_fork_child_entry`
+     * (the thunk immediately restores from the trap frame).  Zero
+     * them so a future hook that inspects the context finds a
+     * clean state. */
+    t->cpu_ctx.x19 = 0;
+    t->cpu_ctx.x20 = 0;
+    t->cpu_ctx.x21 = 0;
+    t->cpu_ctx.x22 = 0;
+    t->cpu_ctx.x23 = 0;
+    t->cpu_ctx.x24 = 0;
+    t->cpu_ctx.x25 = 0;
+    t->cpu_ctx.x26 = 0;
+    t->cpu_ctx.x27 = 0;
+    t->cpu_ctx.x28 = 0;
+    t->cpu_ctx.x29 = 0;  /* FP */
+
+    /* LR = fork-child thunk; SP = frame base.  cpu_switch_to's
+     * first-time entry into this task lands directly in the thunk
+     * with SP pointing at a valid trap frame. */
+    extern void nx_task_fork_child_entry(void);
+    t->cpu_ctx.x30 = (uint64_t)(uintptr_t)&nx_task_fork_child_entry;
+    t->cpu_ctx.sp   = (uint64_t)frame_addr;
+    t->cpu_ctx.daif = 0;
+
+    /* Inherit process — caller may override to the forked child
+     * before enqueueing. */
+    struct nx_task *caller = nx_task_current();
+    t->process = (caller && caller->process) ? caller->process
+                                             : &g_kernel_process;
+    return t;
+#endif
 }
 
 void nx_task_destroy(struct nx_task *t)

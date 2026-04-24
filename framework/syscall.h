@@ -56,9 +56,47 @@ enum nx_syscall_number {
                                   *   → NX_OK / NX_ENOENT / NX_EINVAL */
     NX_SYS_EXIT           = 11,  /* (int code) → noreturn; marks current
                                   *   process EXITED, parks in wfe loop */
+    NX_SYS_FORK           = 12,  /* () → pid (parent) / 0 (child) / NX_E*.
+                                  *   Duplicates address space, empty
+                                  *   child handle table (v1). */
+    NX_SYS_WAIT           = 13,  /* (uint32_t pid, int *user_status)
+                                  *   → pid / NX_ENOENT / NX_EINVAL.
+                                  *   Polls with yield until target is
+                                  *   EXITED; writes exit_code to user. */
+    NX_SYS_EXEC           = 14,  /* (const char *path) → noreturn on
+                                  *   success; NX_E* on failure.
+                                  *   Loads an ELF from the vfs path
+                                  *   into a fresh address space,
+                                  *   swaps it in, erets to the ELF's
+                                  *   entry with zeroed registers. */
+    NX_SYS_PIPE           = 15,  /* (int fds[2]) → NX_OK; writes two
+                                  *   handles (read side at fds[0],
+                                  *   write side at fds[1]) via
+                                  *   copy_to_user.  Backed by the
+                                  *   slice-5.6 channel primitive. */
+    NX_SYS_SIGNAL         = 16,  /* (uint32_t pid, int signo)
+                                  *   → NX_OK / NX_ENOENT / NX_EINVAL.
+                                  *   Sets the matching bit in the
+                                  *   target process's pending_signals.
+                                  *   v1 supports SIGTERM (15) and
+                                  *   SIGKILL (9); both cause the
+                                  *   target to exit with status
+                                  *   128+signo at its next
+                                  *   sched_check_resched.  */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
+
+/*
+ * Signal numbers — POSIX-compatible values.  Both are polite in v1
+ * (neither triggers an async interrupt of the target); the
+ * sched_check_resched poll turns either into a `nx_process_exit`
+ * with the standard POSIX `128 + signo` exit status.  The real
+ * distinction (SIGTERM being catchable, SIGKILL not) lands with
+ * the slice that introduces signal handlers.
+ */
+#define NX_SIGKILL   9
+#define NX_SIGTERM   15
 
 /*
  * File-syscall limits (slice 6.3).

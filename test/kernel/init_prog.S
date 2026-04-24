@@ -14,7 +14,12 @@
  *
  * Program flow:
  *   1. NX_SYS_DEBUG_WRITE("[el0-elf-ok]", 13).
- *   2. wfe park — ktest dequeues externally.
+ *   2. NX_SYS_EXIT(17) — slice 7.4c made this a proper exit so the
+ *      program can be loaded via `NX_SYS_EXEC` and observed by a
+ *      waiting parent.  17 is an arbitrary non-zero "this is the
+ *      init-prog exit marker" value that `ktest_exec` checks
+ *      against.  The earlier `ktest_elf` (slice 7.3) doesn't
+ *      inspect exit_code, so the addition is backwards-compatible.
  *
  * The linker places `_start` at offset 0 of the text section, so
  * with `init_prog.ld` setting the base to 0x48000000, the entry
@@ -32,6 +37,14 @@ _start:
     mov     x8, #1                          /* NX_SYS_DEBUG_WRITE */
     svc     #0
 
+    /* NX_SYS_EXIT(17) — noreturn */
+    mov     x0, #17
+    mov     x8, #11                         /* NX_SYS_EXIT */
+    svc     #0
+
+    /* Unreachable — nx_process_exit parks the task.  Keep a wfe
+     * guard just in case the kernel ever lets sys_exit fall
+     * through. */
 _park:
     wfe
     b       _park

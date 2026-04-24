@@ -185,13 +185,40 @@ void nx_process_exit(int code)
     /* Park in a tight wfe loop on kernel, an infinite loop on host.
      * v1 ktest harness dequeues the stranded task externally.  Real
      * scheduler-integrated exit (dequeue + switch-to-next) lands in
-     * slice 7.4 alongside `wait()`. */
+     * slice 7.4 alongside `wait()`.
+     *
+     * Slice 7.4b: unmask IRQs before the wfe loop.  Hardware masks
+     * DAIF.I on exception entry; if we leave the mask set, `wfe`
+     * here doesn't wake on timer ticks — the CPU resumes from wfe
+     * but the interrupt isn't delivered, so the outer `b 1b` just
+     * re-enters wfe forever.  Unmasked, the tick fires, the IRQ
+     * stub's tail `sched_check_resched` preempts this task, and a
+     * waiting parent's `sys_wait` gets its chance to see the
+     * EXITED state.
+     */
 #if __STDC_HOSTED__
     for (;;) { /* unreachable in tests — callers set up their own loop
                 * via a host fixture before invoking sys_exit. */ }
 #else
+    asm volatile ("msr daifclr, #2" ::: "memory");   /* IRQ-enable */
     for (;;) asm volatile ("wfe");
 #endif
+}
+
+struct nx_process *nx_process_fork(struct nx_process *parent)
+{
+    if (!parent) return NULL;
+    /* Same name as parent (+ a trailing asterisk would be nice but
+     * NX_PROCESS_NAME_MAX is tight).  For v1 the name doesn't carry
+     * semantics; a later slice could plumb a distinct child name. */
+    struct nx_process *child = nx_process_create(parent->name);
+    if (!child) return NULL;
+
+#if !__STDC_HOSTED__
+    mmu_copy_user_backing(parent->ttbr0_root, child->ttbr0_root);
+#endif
+    /* Handle table left empty — see the header comment for rationale. */
+    return child;
 }
 
 void nx_process_reset_for_test(void)

@@ -110,6 +110,26 @@ struct nx_task *nx_task_create(const char *name,
                                void *arg,
                                size_t kstack_pages);
 
+/*
+ * Slice 7.4: create a child task whose first resume replays a
+ * parent's trap frame.  `parent_tf` is the trap frame the parent
+ * was running under at its fork SVC; this helper allocates a
+ * fresh kernel stack, byte-copies the 272-byte trap frame onto
+ * its top, rewrites the copy's `x[0]` to 0 (the child's fork
+ * return value), and sets `cpu_ctx` so the first `cpu_switch_to`
+ * into this task lands at `nx_task_fork_child_entry` (a thunk in
+ * `vectors.S` that does RESTORE_TRAPFRAME + eret).
+ *
+ * Caller sets `task->process` to the already-forked child
+ * process before enqueueing.  Kernel-only — host build has no
+ * trap frame concept and stubs this out.
+ *
+ * Returns NULL on kstack/struct allocation failure.
+ */
+struct trap_frame;  /* forward decl; full def in core/cpu/exception.h */
+struct nx_task *nx_task_create_forked(const char *name,
+                                      const struct trap_frame *parent_tf);
+
 void            nx_task_destroy(struct nx_task *t);
 struct nx_task *nx_task_current(void);
 

@@ -42,7 +42,11 @@ struct channel_msg {
 struct nx_channel_endpoint {
     struct nx_channel *chan;          /* shared allocation */
     uint8_t            idx;           /* 0 or 1 — this side's slot */
-    bool               closed;
+    bool               closed;        /* derived: handle_refs == 0 */
+    _Atomic int        handle_refs;   /* slice 7.6 prereq — fork
+                                       * inheritance bumps this so
+                                       * a single endpoint can
+                                       * survive multiple closes */
     unsigned           head;          /* index of next message to recv */
     unsigned           tail;          /* index of next free slot for send */
     struct channel_msg ring[NX_CHANNEL_RING_LEN];
@@ -50,7 +54,6 @@ struct nx_channel_endpoint {
 
 struct nx_channel {
     struct nx_channel_endpoint e[2];
-    _Atomic int                refcount;
 };
 
 static struct nx_channel_endpoint *peer_of(struct nx_channel_endpoint *e)
@@ -78,7 +81,12 @@ int nx_channel_create(struct nx_channel_endpoint **e0,
     c->e[0].idx  = 0;
     c->e[1].chan = c;
     c->e[1].idx  = 1;
-    atomic_init(&c->refcount, 2);
+    /* One handle is allocated per endpoint by the caller (sys_pipe /
+     * sys_channel_create) immediately after this returns; track that
+     * pre-allocation explicitly so close discipline matches alloc
+     * discipline. */
+    atomic_init(&c->e[0].handle_refs, 1);
+    atomic_init(&c->e[1].handle_refs, 1);
 
     *e0 = &c->e[0];
     *e1 = &c->e[1];
@@ -122,18 +130,38 @@ int nx_channel_recv(struct nx_channel_endpoint *e,
     return copied;
 }
 
+void nx_channel_endpoint_retain(struct nx_channel_endpoint *e)
+{
+    if (!e) return;
+    /* Caller must already hold a reference (parent's handle is live),
+     * so the endpoint can't transition to closed underneath us — the
+     * load + add is safe with relaxed ordering on a single CPU.  SMP
+     * would need acq_rel semantics on a fetch_add. */
+    atomic_fetch_add_explicit(&e->handle_refs, 1, memory_order_relaxed);
+}
+
 void nx_channel_endpoint_close(struct nx_channel_endpoint *e)
 {
     if (!e) return;
-    if (e->closed) return;   /* idempotent */
+    /* Decrement this endpoint's handle refcount.  Only when it hits
+     * zero do we mark the endpoint closed (which causes peer sends to
+     * see NX_EBUSY).  When BOTH endpoints in the channel pair are
+     * closed, the whole channel allocation is freed. */
+    int prev = atomic_fetch_sub_explicit(&e->handle_refs, 1,
+                                         memory_order_acq_rel);
+    if (prev != 1) return;   /* still other handle refs to this endpoint */
     e->closed = true;
 
-    int prev = atomic_fetch_sub_explicit(&e->chan->refcount, 1,
-                                         memory_order_acq_rel);
-    if (prev == 1) {
-        /* We held the last reference — free the whole channel. */
-        free(e->chan);
-    }
+    /* Last-handle-on-this-endpoint owner.  If the peer endpoint is
+     * also already closed (zero handle_refs), nobody else holds the
+     * channel allocation — free it.  We re-read the peer's
+     * `handle_refs` rather than caching anything because two final
+     * closers on opposite endpoints could race; only one of them
+     * sees both refs at zero, and that one frees. */
+    struct nx_channel *c = e->chan;
+    int peer_refs = atomic_load_explicit(&c->e[1u - e->idx].handle_refs,
+                                         memory_order_acquire);
+    if (peer_refs == 0) free(c);
 }
 
 /* ---------- Test helpers --------------------------------------------- */

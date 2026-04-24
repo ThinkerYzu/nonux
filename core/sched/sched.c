@@ -17,6 +17,7 @@
 #include "core/sched/task.h"
 #include "framework/hook.h"
 #include "framework/process.h"
+#include "framework/syscall.h"          /* NX_SIGKILL / NX_SIGTERM */
 #if !__STDC_HOSTED__
 #include "core/mmu/mmu.h"
 #endif
@@ -133,6 +134,42 @@ void sched_check_resched(void)
     struct nx_task *curr = nx_task_current();
     if (!curr) return;
     if (!g_sched_ops) return;
+
+    /*
+     * Slice 7.5: polled signal delivery.  If `sys_signal` has posted
+     * SIGKILL or SIGTERM against the current task's process, route
+     * to `nx_process_exit(128 + signo)` inline.  That matches POSIX's
+     * "terminated by signal N" exit-status convention and makes the
+     * parent's `waitpid` observe the death through the same channel
+     * as a voluntary `exit(n)`.  Handler-based catching (SIGTERM is
+     * POSIX-catchable) lands in a later slice alongside the signal-
+     * handler framework.
+     *
+     * Check is gated on `curr->process` because the idle task before
+     * slice 7.1's plumbing ran with `process == NULL`.  Today the
+     * bootstrap wires `g_idle_task.process = &g_kernel_process`, but
+     * the guard is cheap and saves a fault if a future task-create
+     * path ever forgets.  SIGKILL is checked before SIGTERM because
+     * delivery order shouldn't change the outcome — whichever wins
+     * races, the process ends up EXITED.  Preempt-count is ignored
+     * deliberately: nx_process_exit doesn't modify the runqueue, and
+     * the interrupt that took us here already paid for entering a
+     * kernel context.
+     */
+    if (curr->process &&
+        curr->process->state == NX_PROCESS_STATE_ACTIVE) {
+        /* Only deliver signals to an ACTIVE process.  If the process
+         * is already EXITED, the task is stuck in nx_process_exit's
+         * wfe loop — re-entering `nx_process_exit` here would starve
+         * any waiting parent because we'd never return to reach the
+         * `cpu_switch_to` below, so the scheduler could never rotate
+         * back to the parent to observe the EXITED state. */
+        uint32_t pending = __atomic_load_n(&curr->process->pending_signals,
+                                           __ATOMIC_ACQUIRE);
+        if (pending & (1u << NX_SIGKILL)) nx_process_exit(128 + NX_SIGKILL);
+        if (pending & (1u << NX_SIGTERM)) nx_process_exit(128 + NX_SIGTERM);
+    }
+
     if (!curr->need_resched) return;
     if (curr->preempt_count > 0) return;
 

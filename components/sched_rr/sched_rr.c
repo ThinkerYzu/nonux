@@ -24,6 +24,7 @@
  */
 
 #include "framework/component.h"
+#include "framework/process.h"
 #include "framework/registry.h"
 #include "interfaces/scheduler.h"
 #include "core/sched/task.h"
@@ -34,13 +35,17 @@
 #endif
 
 /*
- * Default time quantum in ticks.  At the 10 Hz kernel timer this is
- * 1 second per task — conservative for interactive workloads, lets
- * the slice-4.4 preemption demo visibly advance both tasks without
- * the test runner timing out.  A future kernel.json config knob can
+ * Default time quantum in ticks.  At the 10 Hz kernel timer each tick
+ * is 100 ms; 2 ticks gives a 200 ms slice — short enough that the
+ * slice 7.4 ktests cycle through ~5 stranded EL0-wfe tasks within
+ * the 15-second QEMU test timeout, long enough that the slice-4.4
+ * preemption demo still sees both tasks visibly advance.  (Originally
+ * 10 ticks = 1 s; that was fine with a handful of cooperating tasks
+ * but starved the exec test once fork + wait left their child tasks
+ * idling in the runqueue.)  A future kernel.json config knob can
  * override this once gen-config emits per-component config macros.
  */
-#define SCHED_RR_DEFAULT_QUANTUM_TICKS 10
+#define SCHED_RR_DEFAULT_QUANTUM_TICKS 2
 
 struct sched_rr_state {
     struct nx_list_head runqueue;
@@ -94,6 +99,32 @@ static int sched_rr_dequeue(void *self, struct nx_task *task)
     if (!on_queue(s, task)) return NX_ENOENT;
     nx_list_remove(&task->sched_node);
     return NX_OK;
+}
+
+/*
+ * Test-only: dequeue every runqueue entry whose task belongs to a
+ * user process (process != &g_kernel_process) except `keep` (may be
+ * NULL).  The ktest harness calls this between slice 7.4 tests so
+ * stranded EL0 children from prior runs don't starve the current
+ * test's kthread within the 15-second QEMU budget (each stranded
+ * EL0 task would otherwise burn its full `SCHED_RR_DEFAULT_QUANTUM
+ * _TICKS` before yielding, because it sits in `wfe` at EL0 and only
+ * timer ticks rotate past it).  Borrow semantics — the task's
+ * storage is NOT freed; the caller continues to own the `nx_task`
+ * allocation.  A real process reap lands in a later phase.
+ */
+void sched_rr_purge_user_tasks(void *self, struct nx_task *keep)
+{
+    struct sched_rr_state *s = self;
+    struct nx_list_node *node = s->runqueue.n.next;
+    while (node != &s->runqueue.n) {
+        struct nx_task *t = nx_list_entry(node, struct nx_task, sched_node);
+        struct nx_list_node *next = node->next;
+        if (t != keep && t->process && t->process != &g_kernel_process) {
+            nx_list_remove(node);
+        }
+        node = next;
+    }
 }
 
 static void sched_rr_yield(void *self)

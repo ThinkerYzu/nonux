@@ -27,10 +27,17 @@
  *     recv-non-blocking too (`NX_EAGAIN` when empty) so no scheduler
  *     wake-queue is needed yet.  A later slice adds blocking + wake
  *     coordination when a real consumer needs it.
- *   - **Pair refcount, not independent lifetimes.**  A channel's two
- *     endpoints share one allocation with an atomic refcount that
- *     starts at 2.  `nx_channel_endpoint_close` decrements; when the
- *     count hits zero, the whole channel is freed.
+ *   - **Per-endpoint handle refcount.**  Each endpoint has its own
+ *     `_Atomic int handle_refs` counter that tracks how many handles
+ *     in any handle table point at it.  `nx_channel_create` returns
+ *     each endpoint with refs=1 (one handle each on the caller side).
+ *     `nx_channel_endpoint_retain` bumps the count when fork inherits
+ *     a CHANNEL handle into the child's table — the same endpoint is
+ *     now reachable from two handle tables, and the second close
+ *     mustn't close the endpoint until the second handle is also
+ *     released.  `nx_channel_endpoint_close` decrements; when an
+ *     endpoint's refs hit zero it's marked closed.  When both
+ *     endpoints are closed the whole channel allocation is freed.
  *   - **Single-CPU v1.**  Ring pointer updates are plain loads/stores
  *     with a release/acquire-ordered tail write so a future SMP
  *     upgrade is a per-site barrier audit, not a restructure.
@@ -86,11 +93,26 @@ int nx_channel_recv(struct nx_channel_endpoint *e,
                     void *buf, size_t cap);
 
 /*
- * Close this endpoint.  Idempotent.  Decrements the channel's shared
- * refcount; when it hits zero (both endpoints closed), the whole
- * channel is freed.  Calls on a NULL argument are a no-op.
+ * Drop one handle reference to this endpoint.  When the endpoint's
+ * `handle_refs` falls to zero the endpoint is marked closed; when
+ * both endpoints in the channel pair are closed the whole channel
+ * allocation is freed.  Idempotent against NULL.  Multiple handle
+ * tables (e.g., parent + fork-child) can hold references to the
+ * same endpoint — each table's close call drops one ref; only the
+ * final close actually shuts the endpoint down.
  */
 void nx_channel_endpoint_close(struct nx_channel_endpoint *e);
+
+/*
+ * Bump an endpoint's `handle_refs`.  Used by `sys_fork`'s handle-
+ * table inheritance path: the child's table allocates a new
+ * `HANDLE_CHANNEL` entry pointing at the same endpoint object as
+ * the parent's, so the endpoint must learn about the additional
+ * reference before either side calls close.  Caller must already
+ * be holding a reference (i.e., the parent's handle is live);
+ * retaining a closed endpoint is undefined.
+ */
+void nx_channel_endpoint_retain(struct nx_channel_endpoint *e);
 
 /*
  * Test helpers — inspect the depth of an endpoint's inbox ring

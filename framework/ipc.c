@@ -178,24 +178,21 @@ void nx_ipc_reset(void)
     while (g_queues) {
         struct ipc_slot_queue *q = g_queues;
         g_queues = q->next;
-        /* Messages themselves are caller-owned storage; we just clear
-         * the `_next` links so stale pointers don't linger. */
-        for (struct nx_ipc_message *m = q->head; m; ) {
-            struct nx_ipc_message *nxt = m->_next;
-            m->_next = NULL;
-            m = nxt;
-        }
+        /* Messages themselves are caller-owned storage and may have
+         * already gone out of scope (host tests stack-allocate them,
+         * and a reset typically runs between tests after the caller's
+         * stack frame has popped).  We used to walk the list and
+         * clear each message's `_next` for tidiness — but touching
+         * memory we don't own segfaults as soon as a stack frame
+         * gets reused.  Just drop the queue bookkeeping; if any
+         * caller is still using its own message they own the lifetime
+         * of its `_next` field. */
         free(q);
     }
 #endif
     while (g_holds) {
         struct ipc_hold_entry *e = g_holds;
         g_holds = e->next;
-        for (struct nx_ipc_message *m = e->head; m; ) {
-            struct nx_ipc_message *nxt = m->_next;
-            m->_next = NULL;
-            m = nxt;
-        }
         free(e);
     }
 }

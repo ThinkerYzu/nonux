@@ -162,3 +162,28 @@ _unimpl_stub:
     bl      on_unimpl
     RESTORE_TRAPFRAME
     eret
+
+/*
+ * Slice 7.4 — first-switch entry for a fork-created child task.
+ *
+ * When the scheduler picks a forked child for the first time,
+ * `cpu_switch_to` restores its callee-saved regs + `ret`s to LR.
+ * That LR was written by `nx_task_create_forked` to be
+ * `nx_task_fork_child_entry` (this symbol).  At entry, SP points
+ * at the child's pre-populated trap frame — an exact copy of the
+ * parent's trap frame at the fork SVC, with `x[0]` overwritten to
+ * 0 (the child's fork return value).
+ *
+ * We do RESTORE_TRAPFRAME (which both loads the saved x0..x30 +
+ * SP_EL0 + ELR_EL1/SPSR_EL1 AND pops the 272-byte frame from the
+ * kernel stack) then eret.  The eret delivers control to EL0 at
+ * the instruction after the fork SVC, with x0 = 0.
+ *
+ * This is structurally identical to the tail of `_sync_stub` — we
+ * reuse the RESTORE_TRAPFRAME macro so any future change to the
+ * trap-frame layout propagates here automatically.
+ */
+.global nx_task_fork_child_entry
+nx_task_fork_child_entry:
+    RESTORE_TRAPFRAME
+    eret

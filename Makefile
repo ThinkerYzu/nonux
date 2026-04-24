@@ -171,7 +171,14 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_channel.c \
                  test/kernel/ktest_vfs.c \
                  test/kernel/ktest_process.c \
-                 test/kernel/ktest_elf.c
+                 test/kernel/ktest_elf.c \
+                 test/kernel/ktest_fork.c \
+                 test/kernel/ktest_wait.c \
+                 test/kernel/ktest_exec.c \
+                 test/kernel/ktest_posix.c \
+                 test/kernel/ktest_posix_pipe.c \
+                 test/kernel/ktest_posix_signal.c \
+                 test/kernel/ktest_posix_pipe_xproc.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -180,7 +187,14 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/user_prog_chan.S \
                  test/kernel/user_prog_file.S \
                  test/kernel/user_prog_readdir.S \
-                 test/kernel/init_prog_blob.S
+                 test/kernel/user_prog_fork.S \
+                 test/kernel/user_prog_wait.S \
+                 test/kernel/user_prog_exec.S \
+                 test/kernel/init_prog_blob.S \
+                 test/kernel/posix_prog_blob.S \
+                 test/kernel/posix_pipe_prog_blob.S \
+                 test/kernel/posix_signal_prog_blob.S \
+                 test/kernel/posix_pipe_xproc_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -190,12 +204,65 @@ KTEST_S       := test/kernel/user_prog.S \
 test/kernel/init_prog.o: test/kernel/init_prog.S
 	$(CC) $(ASFLAGS) -c $< -o $@
 
+# -n (--nmagic) turns off page alignment so the LOAD segment starts
+# right after the header + phdr table rather than at file offset
+# 0x10000 (default page align).  Drops the embedded blob from ~66 KiB
+# to ~150 bytes — matters for slice 7.4c, which seeds ramfs with the
+# ELF via the vfs syscalls (ramfs files cap at RAMFS_FILE_CAP bytes).
 test/kernel/init_prog.elf: test/kernel/init_prog.o test/kernel/init_prog.ld
-	$(LD) -T test/kernel/init_prog.ld -o $@ test/kernel/init_prog.o
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/init_prog.o
 
 # .incbin brings the ELF bytes into .rodata; assembler doesn't track
 # .incbin dependencies automatically, so add an explicit one.
 test/kernel/init_prog_blob.o: test/kernel/init_prog_blob.S test/kernel/init_prog.elf
+
+# Slice 7.4d: a C-compiled EL0 ELF that exercises the posix_shim
+# header-only wrappers.  Reuses init_prog.ld for the user-window
+# VA.  -ffreestanding -nostdlib keeps the build independent of any
+# libc; -mgeneral-regs-only / -mno-outline-atomics mirror the
+# kernel's flags so we produce pure integer EL0 code.
+POSIX_PROG_CFLAGS := -ffreestanding -nostdlib -Wall -Wextra -Werror -O2 \
+                     -mno-outline-atomics -mgeneral-regs-only \
+                     -fno-stack-protector -fno-pic -I.
+test/kernel/posix_prog.o: test/kernel/posix_prog.c components/posix_shim/posix.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_prog.elf: test/kernel/posix_prog.o test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/posix_prog.o
+
+test/kernel/posix_prog_blob.o: test/kernel/posix_prog_blob.S test/kernel/posix_prog.elf
+
+# Slice 7.5 pipe demo — same flag / linker-script recipe as
+# posix_prog.elf.  Single-process write→read roundtrip through the
+# NX_SYS_PIPE + type-polymorphic NX_SYS_READ/WRITE path.
+test/kernel/posix_pipe_prog.o: test/kernel/posix_pipe_prog.c components/posix_shim/posix.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_pipe_prog.elf: test/kernel/posix_pipe_prog.o test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/posix_pipe_prog.o
+
+test/kernel/posix_pipe_prog_blob.o: test/kernel/posix_pipe_prog_blob.S test/kernel/posix_pipe_prog.elf
+
+# Slice 7.5 signal demo — parent fork + SIGTERM to child.
+test/kernel/posix_signal_prog.o: test/kernel/posix_signal_prog.c components/posix_shim/posix.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_signal_prog.elf: test/kernel/posix_signal_prog.o test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/posix_signal_prog.o
+
+test/kernel/posix_signal_prog_blob.o: test/kernel/posix_signal_prog_blob.S test/kernel/posix_signal_prog.elf
+
+# Slice 7.6 prereq — cross-process pipe demo.  Same flag set + linker
+# script as posix_prog.elf; just a different .c source.  Validates
+# fork's handle-table inheritance for HANDLE_CHANNEL endpoints.
+test/kernel/posix_pipe_xproc_prog.o: test/kernel/posix_pipe_xproc_prog.c components/posix_shim/posix.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_pipe_xproc_prog.elf: test/kernel/posix_pipe_xproc_prog.o test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/posix_pipe_xproc_prog.o
+
+test/kernel/posix_pipe_xproc_prog_blob.o: test/kernel/posix_pipe_xproc_prog_blob.S test/kernel/posix_pipe_xproc_prog.elf
+
 KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
@@ -254,6 +321,8 @@ bench: kernel.bin
 clean:
 	find . -name '*.o' -delete
 	rm -rf gen/ kernel.elf kernel.bin kernel-test.elf kernel-test.bin \
-	       test/kernel/init_prog.elf
+	       test/kernel/init_prog.elf test/kernel/posix_prog.elf \
+	       test/kernel/posix_pipe_prog.elf test/kernel/posix_signal_prog.elf \
+	       test/kernel/posix_pipe_xproc_prog.elf
 
 .PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean

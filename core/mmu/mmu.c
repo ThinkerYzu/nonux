@@ -393,3 +393,21 @@ void *mmu_address_space_user_backing(uint64_t root)
     return s ? s->user_backing : NULL;
 #endif
 }
+
+void mmu_copy_user_backing(uint64_t src_root, uint64_t dst_root)
+{
+#if __STDC_HOSTED__
+    (void)src_root; (void)dst_root;
+#else
+    void *src = mmu_address_space_user_backing(src_root);
+    void *dst = mmu_address_space_user_backing(dst_root);
+    if (!src || !dst || src == dst) return;
+    memcpy(dst, src, USER_WINDOW_SIZE);
+    /* Same cache-coherence sequence as the ELF loader's post-copy
+     * barrier: freshly-copied bytes may hold executable code. */
+    asm volatile ("dsb ish"  ::: "memory");
+    asm volatile ("ic iallu" ::: "memory");
+    asm volatile ("dsb ish"  ::: "memory");
+    asm volatile ("isb");
+#endif
+}

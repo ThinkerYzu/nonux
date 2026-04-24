@@ -59,6 +59,17 @@ struct nx_process {
      * switching to this process leaves TTBR0 unchanged.
      */
     uint64_t                ttbr0_root;
+    /*
+     * Pending-signal bitmask (slice 7.5).  Bit `signo` set means that
+     * signal has been delivered but not yet acted on by the target.
+     * Read + cleared at every `sched_check_resched` for the current
+     * task; SIGKILL / SIGTERM cause `nx_process_exit(128 + signo)`
+     * inline.  `_Atomic` because `sys_signal` may run on one CPU
+     * while the target runs on another — v1 is single-CPU so the
+     * race is academic, but the project rule is C11 atomics on
+     * shared counters from day 1.
+     */
+    _Atomic uint32_t        pending_signals;
 };
 
 /*
@@ -134,5 +145,29 @@ void nx_process_exit(int code) __attribute__((noreturn));
  * for the registry.
  */
 void nx_process_reset_for_test(void);
+
+/*
+ * Slice 7.4: duplicate `parent` as a fresh child process.
+ *
+ * The child gets:
+ *   - a new pid (via `nx_process_create`),
+ *   - its own address space with the parent's user-window contents
+ *     byte-copied in at fork time (subsequent writes by either
+ *     process stay private),
+ *   - an empty handle table (handle inheritance lands in a later
+ *     sub-slice — v1 fork's use case is "fork + exec" where the
+ *     child rebuilds its handles anyway).
+ *
+ * Returns the child process on success, NULL on allocation failure.
+ * Caller is responsible for:
+ *   - creating a child TASK whose trap frame matches `parent`'s at
+ *     the fork SVC point (see `nx_task_create_forked` in
+ *     `core/sched/task.h`) and whose `process` pointer is set to
+ *     the returned child.  `sys_fork` is the single kernel caller.
+ *
+ * Host builds have no MMU so the child has no real address-space
+ * copy — `ttbr0_root` stays 0 on both parent and child.
+ */
+struct nx_process *nx_process_fork(struct nx_process *parent);
 
 #endif /* NX_FRAMEWORK_PROCESS_H */

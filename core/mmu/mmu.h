@@ -123,6 +123,22 @@ uint64_t mmu_kernel_address_space(void);
  */
 void *mmu_address_space_user_backing(uint64_t root);
 
+/*
+ * Byte-copy the 2 MiB user-window backing from `src_root` into
+ * `dst_root`.  Slice 7.4: fork's child gets its own address space
+ * but the initial contents must match the parent's user-window
+ * state at the fork point.  Both roots must have been allocated
+ * via `mmu_create_address_space` — the kernel root has no backing
+ * and calling this with either arg == kernel root is a no-op.
+ *
+ * Emits `dsb ish ; ic iallu ; dsb ish ; isb` after the copy so
+ * freshly-written instruction bytes are fetched fresh (same
+ * discipline as the ELF loader's post-copy barrier).
+ *
+ * Host builds are a no-op (no MMU, no backing).
+ */
+void mmu_copy_user_backing(uint64_t src_root, uint64_t dst_root);
+
 #if __STDC_HOSTED__
 /*
  * Host-test helper: inspect the value last passed to

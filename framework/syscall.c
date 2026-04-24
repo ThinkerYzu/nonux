@@ -7,6 +7,15 @@
 #include "interfaces/fs.h"
 #include "interfaces/vfs.h"
 
+#if !__STDC_HOSTED__
+#include "core/lib/kheap.h"
+#include "core/mmu/mmu.h"
+#include "core/sched/sched.h"
+#include "core/sched/task.h"
+#include "framework/elf.h"
+#include "interfaces/scheduler.h"
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -445,6 +454,15 @@ static int lookup_file_object(nx_handle_t h, uint32_t need_rights,
     return NX_OK;
 }
 
+/*
+ * Handle-type-polymorphic `read` / `write`.  Slice 6.3 introduced
+ * these for HANDLE_FILE; slice 7.5 teaches them to dispatch through
+ * the channel layer when the handle is HANDLE_CHANNEL (which is
+ * what `sys_pipe` allocates for both pipe ends).  POSIX conflates
+ * these into one `read` / `write` pair — matching that expectation
+ * means a `posix_read(pipe_fd)` wrapper doesn't need to know which
+ * kernel primitive is under the fd.
+ */
 static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5)
 {
@@ -453,18 +471,36 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     void        *buf = (void *)(uintptr_t)a1;
     size_t       cap = (size_t)a2;
     if (cap == 0) return 0;  /* no-op read is explicitly OK */
-    if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
 
-    void *object = 0;
-    int rc = lookup_file_object(h, NX_RIGHT_READ, &object);
+    struct nx_handle_table *t = nx_syscall_current_table();
+    enum nx_handle_type type;
+    uint32_t rights;
+    void *obj;
+    int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
     if (rc != NX_OK) return rc;
+    if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
 
+    if (type == NX_HANDLE_CHANNEL) {
+        /* Pipe read — bounded by the channel's 256-byte message size,
+         * same as sys_channel_recv. */
+        if (cap > NX_CHANNEL_MSG_MAX) cap = NX_CHANNEL_MSG_MAX;
+        uint8_t staging[NX_CHANNEL_MSG_MAX];
+        int got = nx_channel_recv(obj, staging, cap);
+        if (got < 0) return got;
+        rc = copy_to_user(buf, staging, (size_t)got);
+        if (rc != NX_OK) return rc;
+        return (nx_status_t)got;
+    }
+
+    if (type != NX_HANDLE_FILE) return NX_EINVAL;
+
+    if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
     const struct nx_vfs_ops *vops; void *vself;
     rc = resolve_vfs(&vops, &vself);
     if (rc != NX_OK) return rc;
 
     uint8_t staging[NX_FILE_IO_MAX];
-    int64_t got = vops->read(vself, object, staging, cap);
+    int64_t got = vops->read(vself, obj, staging, cap);
     if (got < 0) return (nx_status_t)got;
 
     rc = copy_to_user(buf, staging, (size_t)got);
@@ -480,12 +516,26 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     const void  *buf = (const void *)(uintptr_t)a1;
     size_t       len = (size_t)a2;
     if (len == 0) return 0;
-    if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
 
-    void *object = 0;
-    int rc = lookup_file_object(h, NX_RIGHT_WRITE, &object);
+    struct nx_handle_table *t = nx_syscall_current_table();
+    enum nx_handle_type type;
+    uint32_t rights;
+    void *obj;
+    int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
     if (rc != NX_OK) return rc;
+    if ((rights & NX_RIGHT_WRITE) != NX_RIGHT_WRITE) return NX_EPERM;
 
+    if (type == NX_HANDLE_CHANNEL) {
+        if (len > NX_CHANNEL_MSG_MAX) len = NX_CHANNEL_MSG_MAX;
+        uint8_t staging[NX_CHANNEL_MSG_MAX];
+        rc = copy_from_user(staging, buf, len);
+        if (rc != NX_OK) return rc;
+        return (nx_status_t)nx_channel_send(obj, staging, len);
+    }
+
+    if (type != NX_HANDLE_FILE) return NX_EINVAL;
+
+    if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
     uint8_t staging[NX_FILE_IO_MAX];
     rc = copy_from_user(staging, buf, len);
     if (rc != NX_OK) return rc;
@@ -494,7 +544,7 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     rc = resolve_vfs(&vops, &vself);
     if (rc != NX_OK) return rc;
 
-    return (nx_status_t)vops->write(vself, object, staging, len);
+    return (nx_status_t)vops->write(vself, obj, staging, len);
 }
 
 /*
@@ -584,6 +634,407 @@ static nx_status_t sys_exit(uint64_t a0, uint64_t a1, uint64_t a2,
     return NX_OK;
 }
 
+/*
+ * NX_SYS_FORK — ().
+ *
+ * Slice 7.4a.  Duplicate the current process:
+ *   - Fresh child process with its own address-space copy and
+ *     (in v1) an empty handle table.
+ *   - Child task with a kernel stack whose top holds a copy of the
+ *     parent's trap frame with `x[0]` rewritten to 0.  When the
+ *     scheduler picks the child, `nx_task_fork_child_entry`
+ *     RESTORE_TRAPFRAMEs + erets — the child lands at the
+ *     instruction after the fork SVC with x0 = 0.
+ *   - Parent return: this function returns the child's pid, which
+ *     the dispatcher stores into the parent's `tf->x[0]`.
+ *
+ * On host this is a no-op (no MMU, no trap frames) — returns
+ * `NX_EINVAL` so host tests can't accidentally rely on it.
+ */
+static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+#if __STDC_HOSTED__
+    return NX_EINVAL;
+#else
+    struct nx_task *caller = nx_task_current();
+    if (!caller || !caller->process) return NX_EINVAL;
+
+    /* The parent's trap frame sits at the top of its kernel stack —
+     * the one that SAVE_TRAPFRAME pushed on exception entry.  Recover
+     * it from `nx_syscall_dispatch`'s argument, which is exactly
+     * `sp` at the point the exception handler called `on_sync`.
+     *
+     * Subtle: this syscall body is NOT given `tf` directly — the
+     * dispatch table abstracts it away.  We recover it via a
+     * per-CPU stash set by `nx_syscall_dispatch` just before it
+     * reads the syscall number.  See below for the stash helper. */
+    extern struct trap_frame *nx_syscall_current_tf(void);
+    const struct trap_frame *parent_tf = nx_syscall_current_tf();
+    if (!parent_tf) return NX_EINVAL;
+
+    struct nx_process *child = nx_process_fork(caller->process);
+    if (!child) return NX_ENOMEM;
+
+    /*
+     * Slice 7.6 prereq: duplicate the parent's CHANNEL handles into
+     * the child's handle table.  Each duplicate bumps the matching
+     * endpoint's `handle_refs` so a single endpoint can survive
+     * close calls from both processes — the close-on-fork pattern
+     * (parent keeps write-side, child keeps read-side, after each
+     * has dropped the irrelevant fd) needs both handles live until
+     * each side voluntarily closes.
+     *
+     * HANDLE_FILE is intentionally NOT duplicated yet — each
+     * `vfs_simple` open carries per-cursor state (current offset,
+     * etc.) that's specific to that handle, so a naive alias would
+     * make `lseek` from one process visible to the other.  A real
+     * file dup needs the underlying driver to grow a per-open
+     * `dup` op or for the framework to track per-handle cursors
+     * outside the driver — both bigger than this slice.  v1's
+     * fork therefore inherits the parent's *channel* handles and
+     * leaves files behind.
+     */
+    struct nx_handle_table *parent_tbl = &caller->process->handles;
+    struct nx_handle_table *child_tbl  = &child->handles;
+    for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
+        const struct nx_handle_entry *src = &parent_tbl->entries[i];
+        if (src->type != NX_HANDLE_CHANNEL) continue;
+        if (!src->object) continue;
+        nx_channel_endpoint_retain(src->object);
+        nx_handle_t dup_h = NX_HANDLE_INVALID;
+        int rc = nx_handle_alloc(child_tbl, src->type,
+                                 src->rights, src->object, &dup_h);
+        if (rc != NX_OK) {
+            /* Child's table is full — drop the retain we just
+             * issued, then bail out.  The child's already-allocated
+             * entries are torn down by `nx_process_destroy`'s
+             * handle-table walk below.  Same NX_ENOMEM the caller
+             * would have seen if process_fork itself had failed. */
+            nx_channel_endpoint_close(src->object);
+            nx_process_destroy(child);
+            return NX_ENOMEM;
+        }
+    }
+
+    struct nx_task *child_task =
+        nx_task_create_forked(caller->name, parent_tf);
+    if (!child_task) {
+        nx_process_destroy(child);
+        return NX_ENOMEM;
+    }
+    child_task->process = child;
+
+    /* Enqueue the child so the scheduler picks it on a future tick.
+     * Returning parent-side completes the parent's SVC normally. */
+    const struct nx_scheduler_ops *ops = sched_ops_for_test();
+    void *sched_self = sched_self_for_test();
+    if (ops) ops->enqueue(sched_self, child_task);
+
+    return (nx_status_t)child->pid;
+#endif
+}
+
+/*
+ * NX_SYS_WAIT — (uint32_t pid, int *user_status).
+ *
+ * Slice 7.4b.  Block the caller until the target process is
+ * EXITED, then deliver its exit_code to the user via
+ * `copy_to_user` (if `user_status` is non-NULL) and return the
+ * target's pid.
+ *
+ * Semantics:
+ *   - pid == 0 or unknown pid: NX_ENOENT.
+ *   - pid == caller's own process: NX_EINVAL (can't wait on self;
+ *     matches POSIX's rejection of self-wait).
+ *   - target already EXITED: copy_to_user + return pid in one go
+ *     (no yielding).
+ *   - target ACTIVE: yield cooperatively and recheck.  v1 uses an
+ *     unbounded loop — the caller blocks "forever" in the POSIX
+ *     sense until the target exits.  The ktest harness has an
+ *     outer timeout (15 s) as a safety net.
+ *
+ * Does NOT reap the zombie.  The target process struct + its
+ * handle table + address space stay live after wait returns — a
+ * pid-leak in v1.  Proper reap lands when the process-table-
+ * capacity becomes a pressure (currently 16 entries; > enough
+ * for every test we run today).
+ *
+ * Host: no scheduler + no user pointer semantics — returns
+ * NX_EINVAL.
+ */
+static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+#if __STDC_HOSTED__
+    (void)a0; (void)a1;
+    return NX_EINVAL;
+#else
+    uint32_t  pid         = (uint32_t)a0;
+    int      *user_status = (int *)(uintptr_t)a1;
+
+    struct nx_process *target = nx_process_lookup_by_pid(pid);
+    if (!target || target == &g_kernel_process) return NX_ENOENT;
+
+    struct nx_process *caller = nx_process_current();
+    if (target == caller) return NX_EINVAL;
+
+    while (target->state != NX_PROCESS_STATE_EXITED)
+        nx_task_yield();
+
+    /* Deliver exit_code to user if requested.  Bad user pointer is
+     * non-fatal — we still return the pid so the caller learns
+     * the target exited even if the status copy failed. */
+    if (user_status) {
+        int kstatus = target->exit_code;
+        (void)copy_to_user(user_status, &kstatus, sizeof kstatus);
+    }
+    return (nx_status_t)pid;
+#endif
+}
+
+/*
+ * NX_SYS_EXEC — (const char *path).
+ *
+ * Slice 7.4c.  Replace the current process's address space with a
+ * fresh one loaded from the ELF at `path` (via the `vfs` slot),
+ * transfer control to the ELF's entry point.  Doesn't return to
+ * the caller on success — the SVC's `eret` delivers control to
+ * the new program.
+ *
+ * Steps:
+ *   1. `copy_path_from_user` the path into a kernel buffer.
+ *   2. Resolve `vfs`; open the path for read.
+ *   3. Read file bytes into a kernel buffer (capped at
+ *      `SYS_EXEC_MAX_FILE`).
+ *   4. `nx_elf_parse` to validate.
+ *   5. Allocate a fresh address space via `mmu_create_address_
+ *      space`.
+ *   6. Temporarily point `current->ttbr0_root = new_root` so the
+ *      loader's `mmu_address_space_user_backing` resolves the
+ *      right backing chunk.
+ *   7. `nx_elf_load_into_process` copies all PT_LOAD segments
+ *      into the new backing.
+ *   8. Modify the current trap frame (via `nx_syscall_current_tf`)
+ *      to eret at the ELF's entry with zeroed registers + a
+ *      top-of-user-window SP.
+ *   9. `mmu_switch_address_space(new_root)` flips TTBR0.
+ *   10. Free the old address space.
+ *   11. Return NX_OK; dispatcher writes `tf->x[0] = 0` (redundant
+ *       but harmless since we already zeroed x[0] in step 8).
+ *
+ * Error paths unwind cleanly — old address space stays live if any
+ * prep step fails.
+ *
+ * Handle table carries over (v1 doesn't close inherited handles on
+ * exec; a later slice can wire close-on-exec flags).
+ *
+ * Host: no MMU + no file I/O semantics — returns NX_EINVAL.
+ */
+#define SYS_EXEC_MAX_FILE  8192u   /* generous ceiling; our init-prog
+                                    * is ~150 B.  A bigger program
+                                    * would bump this. */
+
+static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+#if __STDC_HOSTED__
+    (void)a0;
+    return NX_EINVAL;
+#else
+    const char *user_path = (const char *)(uintptr_t)a0;
+
+    /* 1. Path copy. */
+    char kpath[NX_PATH_MAX];
+    int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
+    if (rc != NX_OK) return rc;
+
+    /* 2. Resolve vfs + open. */
+    const struct nx_vfs_ops *vops; void *vself;
+    rc = resolve_vfs(&vops, &vself);
+    if (rc != NX_OK) return rc;
+
+    void *file = NULL;
+    rc = vops->open(vself, kpath, NX_VFS_OPEN_READ, &file);
+    if (rc != NX_OK) return rc;
+
+    /* 3. Slurp file contents. */
+    uint8_t *kbuf = malloc(SYS_EXEC_MAX_FILE);
+    if (!kbuf) { vops->close(vself, file); return NX_ENOMEM; }
+
+    size_t total = 0;
+    while (total < SYS_EXEC_MAX_FILE) {
+        int64_t n = vops->read(vself, file, kbuf + total,
+                               SYS_EXEC_MAX_FILE - total);
+        if (n < 0)  { vops->close(vself, file); free(kbuf); return (nx_status_t)n; }
+        if (n == 0) break;
+        total += (size_t)n;
+    }
+    vops->close(vself, file);
+
+    /* 4. Validate ELF. */
+    struct nx_elf_info info;
+    rc = nx_elf_parse(kbuf, total, &info);
+    if (rc != NX_OK) { free(kbuf); return rc; }
+
+    /* 5. Allocate a fresh address space. */
+    uint64_t new_root = mmu_create_address_space();
+    if (new_root == 0) { free(kbuf); return NX_ENOMEM; }
+
+    /* 6-7. Swap the current process's root so the loader resolves
+     * the new backing; load segments. */
+    struct nx_process *p = nx_process_current();
+    uint64_t old_root = p->ttbr0_root;
+    p->ttbr0_root = new_root;
+
+    uint64_t entry = 0;
+    rc = nx_elf_load_into_process(p, kbuf, total, &entry);
+    free(kbuf);
+    if (rc != NX_OK) {
+        /* Roll back the process's root before destroying the
+         * half-loaded new one — leave the caller in its original
+         * address space with its original PC intact. */
+        p->ttbr0_root = old_root;
+        mmu_destroy_address_space(new_root);
+        return rc;
+    }
+
+    /* 8. Clobber the trap frame so eret delivers to the ELF entry
+     * with a clean register state.  The dispatcher will overwrite
+     * `tf->x[0]` with our return value (0 for NX_OK), which is the
+     * same value we're setting here — consistent either way. */
+    extern struct trap_frame *nx_syscall_current_tf(void);
+    struct trap_frame *tf = nx_syscall_current_tf();
+    if (tf) {
+        for (int i = 0; i < 31; i++) tf->x[i] = 0;
+        tf->pc = entry;
+        tf->sp_el0 = (mmu_user_window_base() + mmu_user_window_size())
+                     & ~((uint64_t)0xfu);
+        /* Clear PSTATE to a clean "EL0t, IRQs enabled" state.  The
+         * existing drop_to_el0 writes SPSR_EL1=0 for the same reason:
+         * EL0t mode bits are 0, DAIF=0 gives IRQs enabled. */
+        tf->pstate = 0;
+    }
+
+    /* 9. Flip TTBR0 to the new address space.  Kernel code page
+     * stays reachable because every address-space root shares the
+     * kernel identity map. */
+    mmu_switch_address_space(new_root);
+
+    /* 10. Reclaim the old address space. */
+    mmu_destroy_address_space(old_root);
+
+    /* 11. Return.  Dispatcher writes tf->x[0] = NX_OK = 0 (same
+     * value we already wrote).  Then RESTORE_TRAPFRAME + eret
+     * delivers control to the ELF's entry with x0=0 + zeroed
+     * other registers + fresh user stack. */
+    return NX_OK;
+#endif
+}
+
+/*
+ * NX_SYS_PIPE — (int fds[2]).
+ *
+ * Slice 7.5.  Wraps the slice-5.6 channel primitive into a POSIX-
+ * style pipe: one endpoint carries NX_RIGHT_READ (fds[0], the read
+ * side), the other NX_RIGHT_WRITE (fds[1], the write side).  No
+ * NX_RIGHT_TRANSFER in v1 — pipes don't cross process boundaries
+ * via IPC cap transfer yet (they cross naturally through fork,
+ * which inherits the handle table once that's plumbed; for now
+ * the pipe test has parent + child share by handing both ends to
+ * the child via its own fork before drop_to_el0).
+ *
+ * Returns NX_OK on success; the two handles land in fds[0] and
+ * fds[1] via `copy_to_user`.  The ABI intentionally uses 32-bit
+ * int for the handle values because POSIX pipe writes int fds; our
+ * `nx_handle_t` is already `uint32_t` so the width matches.
+ *
+ * Handle rollback on partial-allocation failure uses
+ * `nx_handle_close` + `nx_channel_endpoint_close` mirror calls,
+ * matching `sys_channel_create`'s unwind.
+ */
+static nx_status_t sys_pipe(uint64_t a0, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    int *user_fds = (int *)(uintptr_t)a0;
+    if (!user_fds) return NX_EINVAL;
+
+    struct nx_channel_endpoint *e0 = 0, *e1 = 0;
+    int rc = nx_channel_create(&e0, &e1);
+    if (rc != NX_OK) return rc;
+
+    struct nx_handle_table *t = nx_syscall_current_table();
+    nx_handle_t h_read  = NX_HANDLE_INVALID;
+    nx_handle_t h_write = NX_HANDLE_INVALID;
+
+    rc = nx_handle_alloc(t, NX_HANDLE_CHANNEL, NX_RIGHT_READ, e0, &h_read);
+    if (rc != NX_OK) {
+        nx_channel_endpoint_close(e0);
+        nx_channel_endpoint_close(e1);
+        return rc;
+    }
+    rc = nx_handle_alloc(t, NX_HANDLE_CHANNEL, NX_RIGHT_WRITE, e1, &h_write);
+    if (rc != NX_OK) {
+        nx_handle_close(t, h_read);
+        nx_channel_endpoint_close(e0);
+        nx_channel_endpoint_close(e1);
+        return rc;
+    }
+
+    int fds[2];
+    fds[0] = (int)h_read;
+    fds[1] = (int)h_write;
+    rc = copy_to_user(user_fds, fds, sizeof fds);
+    if (rc != NX_OK) {
+        nx_handle_close(t, h_read);
+        nx_handle_close(t, h_write);
+        nx_channel_endpoint_close(e0);
+        nx_channel_endpoint_close(e1);
+        return rc;
+    }
+    return NX_OK;
+}
+
+/*
+ * NX_SYS_SIGNAL — (uint32_t pid, int signo).
+ *
+ * Slice 7.5.  Sets the matching bit in the target process's
+ * `pending_signals` bitmask.  Unknown pid (or pid 0) returns
+ * NX_ENOENT; unsupported signo returns NX_EINVAL.  v1 supports
+ * only SIGTERM (15) and SIGKILL (9) — both are terminating; the
+ * distinction (catchable vs not) lands with signal handlers in a
+ * later slice.
+ *
+ * Delivery itself is polled, not async.  Actual exit happens the
+ * next time the target enters `sched_check_resched` (timer
+ * preemption, yield, or syscall entry via the dispatch shim).
+ * v1's "Real signal delivery (async interrupt of the target)
+ * lands with a later slice" promise from the Implementation Guide.
+ *
+ * Sending to your own process is allowed — useful for raise().
+ */
+static nx_status_t sys_signal(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    uint32_t pid   = (uint32_t)a0;
+    int      signo = (int)a1;
+
+    if (signo != NX_SIGTERM && signo != NX_SIGKILL) return NX_EINVAL;
+
+    struct nx_process *target = nx_process_lookup_by_pid(pid);
+    if (!target || target == &g_kernel_process) return NX_ENOENT;
+
+    __atomic_fetch_or(&target->pending_signals,
+                      (uint32_t)(1u << signo),
+                      __ATOMIC_RELEASE);
+    return NX_OK;
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -599,9 +1050,31 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_SEEK]           = sys_seek,
     [NX_SYS_READDIR]        = sys_readdir,
     [NX_SYS_EXIT]           = sys_exit,
+    [NX_SYS_FORK]           = sys_fork,
+    [NX_SYS_WAIT]           = sys_wait,
+    [NX_SYS_EXEC]           = sys_exec,
+    [NX_SYS_PIPE]           = sys_pipe,
+    [NX_SYS_SIGNAL]         = sys_signal,
 };
 
 /* ---------- Entry point ---------------------------------------------- */
+
+/*
+ * Slice 7.4: per-call stash of the active trap frame.  Most syscalls
+ * just consume their 6 argument registers and never need the frame;
+ * `sys_fork` is the exception — it builds a child task whose first
+ * EL0 resume replays the parent's frame, and needs to byte-copy it.
+ *
+ * Single-CPU v1 so a plain static suffices.  Multi-CPU wraps this
+ * behind `nx_task_current()`-keyed per-CPU state; the public
+ * accessor's signature is stable.
+ */
+static struct trap_frame *g_current_tf;
+
+struct trap_frame *nx_syscall_current_tf(void)
+{
+    return g_current_tf;
+}
 
 void nx_syscall_dispatch(struct trap_frame *tf)
 {
@@ -610,11 +1083,13 @@ void nx_syscall_dispatch(struct trap_frame *tf)
     uint64_t num = tf->x[8];
     nx_status_t rc;
 
+    g_current_tf = tf;
     if (num >= NX_SYSCALL_COUNT || g_syscall_table[num] == NULL) {
         rc = NX_EINVAL;
     } else {
         rc = g_syscall_table[num](tf->x[0], tf->x[1], tf->x[2],
                                   tf->x[3], tf->x[4], tf->x[5]);
     }
+    g_current_tf = NULL;
     tf->x[0] = (uint64_t)rc;
 }
