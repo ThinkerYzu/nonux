@@ -42,9 +42,11 @@ __cp_begin:
 	cmp x1, #62;   b.eq .Lnx_lseek
 	cmp x1, #63;   b.eq .Lnx_read
 	cmp x1, #64;   b.eq .Lnx_write
+	cmp x1, #66;   b.eq .Lnx_writev
 	cmp x1, #93;   b.eq .Lnx_exit
 	cmp x1, #94;   b.eq .Lnx_exit
 	cmp x1, #129;  b.eq .Lnx_kill
+	cmp x1, #214;  b.eq .Lnx_brk
 	cmp x1, #221;  b.eq .Lnx_execve
 	cmp x1, #260;  b.eq .Lnx_wait
 	movn x0, #37          // -ENOSYS = -38
@@ -54,8 +56,10 @@ __cp_begin:
 .Lnx_lseek:    mov x8, #9;  b .Lnx_run    // NX_SYS_SEEK
 .Lnx_read:     mov x8, #7;  b .Lnx_run    // NX_SYS_READ
 .Lnx_write:    mov x8, #8;  b .Lnx_run    // NX_SYS_WRITE
+.Lnx_writev:   mov x8, #18; b .Lnx_run    // NX_SYS_WRITEV
 .Lnx_exit:     mov x8, #11; b .Lnx_run    // NX_SYS_EXIT
 .Lnx_kill:     mov x8, #16; b .Lnx_run    // NX_SYS_SIGNAL
+.Lnx_brk:      mov x8, #17; b .Lnx_run    // NX_SYS_BRK
 .Lnx_execve:   mov x8, #14; b .Lnx_run    // NX_SYS_EXEC
 .Lnx_wait:     mov x8, #13;               // NX_SYS_WAIT, fall through
 

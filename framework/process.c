@@ -111,8 +111,10 @@ struct nx_process *nx_process_create(const char *name)
         free(p);
         return NULL;
     }
+    p->brk_addr = mmu_user_window_base() + NX_PROCESS_HEAP_OFFSET;
 #else
     p->ttbr0_root = 0;
+    p->brk_addr   = 0;
 #endif
 
     return p;
@@ -222,6 +224,11 @@ struct nx_process *nx_process_fork(struct nx_process *parent)
 #if !__STDC_HOSTED__
     mmu_copy_user_backing(parent->ttbr0_root, child->ttbr0_root);
 #endif
+    /* Inherit the parent's program break (slice 7.6c.3c).  The
+     * forked backing already contains the parent's heap data byte-
+     * for-byte; we just propagate the high-water mark so the
+     * child's mallocng knows where to continue from. */
+    child->brk_addr = parent->brk_addr;
     /* Handle table left empty — see the header comment for rationale. */
     return child;
 }

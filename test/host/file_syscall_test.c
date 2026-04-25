@@ -352,11 +352,40 @@ TEST(sys_write_on_stale_handle_returns_enoent)
     fixture_setup(&fx);
     struct trap_frame_host tf;
 
-    /* Stale handle value: index 0 (slot never allocated), generation
-     * 0.  nx_handle_lookup returns NX_ENOENT for an empty slot. */
-    int64_t rc = dispatch(&tf, NX_SYS_WRITE, (uint64_t)1,
+    /* Stale handle value: index 2 (slot never allocated), generation
+     * 0.  nx_handle_lookup returns NX_ENOENT for an empty slot.  We
+     * deliberately skip handle indices 1 and 2 (encoded values 1 and
+     * 2) because slice 7.6c.3c's stdio magic intercepts those when
+     * the slot is empty — they route to NX_SYS_DEBUG_WRITE (UART)
+     * instead of returning ENOENT. */
+    int64_t rc = dispatch(&tf, NX_SYS_WRITE, (uint64_t)3,
                           (uint64_t)(uintptr_t)"x", 1);
     ASSERT_EQ_U((uint64_t)rc, (uint64_t)(int64_t)NX_ENOENT);
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_write_to_unopened_stdout_routes_to_debug_write)
+{
+    /* Slice 7.6c.3c — kernel-side magic for fds 1 and 2.  When the
+     * caller has no allocated handle at index 1/2, NX_SYS_WRITE
+     * routes to NX_SYS_DEBUG_WRITE so musl/busybox-style programs
+     * see standard output without first opening anything.  Programs
+     * that DO allocate fd 1/2 (e.g. via NX_SYS_PIPE) get the
+     * regular dispatch — covered by the channel-roundtrip kernel
+     * test.  Host build's debug_write returns the byte count
+     * without actually emitting (no UART). */
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    int64_t rc = dispatch(&tf, NX_SYS_WRITE, (uint64_t)1,
+                          (uint64_t)(uintptr_t)"hi", 2);
+    ASSERT_EQ_U((uint64_t)rc, 2);
+
+    rc = dispatch(&tf, NX_SYS_WRITE, (uint64_t)2,
+                  (uint64_t)(uintptr_t)"err", 3);
+    ASSERT_EQ_U((uint64_t)rc, 3);
 
     fixture_teardown(&fx);
 }

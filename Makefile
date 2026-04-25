@@ -184,7 +184,9 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_libc.c \
                  test/kernel/ktest_posix_printf.c \
                  test/kernel/ktest_argv_push.c \
-                 test/kernel/ktest_posix_musl.c
+                 test/kernel/ktest_posix_musl.c \
+                 test/kernel/ktest_musl_exec.c \
+                 test/kernel/ktest_posix_musl_printf.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -206,7 +208,9 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_libc_prog_blob.S \
                  test/kernel/posix_printf_prog_blob.S \
                  test/kernel/argv_parent_prog_blob.S \
-                 test/kernel/posix_musl_prog_blob.S
+                 test/kernel/posix_musl_prog_blob.S \
+                 test/kernel/musl_exec_parent_prog_blob.S \
+                 test/kernel/posix_musl_printf_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -297,11 +301,13 @@ test/kernel/banner.txt:
 test/kernel/initramfs.cpio: tools/pack-initramfs.py \
                             test/kernel/init_prog.elf \
                             test/kernel/banner.txt \
-                            test/kernel/argv_child_prog.elf
+                            test/kernel/argv_child_prog.elf \
+                            test/kernel/posix_musl_prog.elf
 	$(PYTHON) tools/pack-initramfs.py $@ \
 	    test/kernel/init_prog.elf:/init \
 	    test/kernel/banner.txt:/banner \
-	    test/kernel/argv_child_prog.elf:/argv_child
+	    test/kernel/argv_child_prog.elf:/argv_child \
+	    test/kernel/posix_musl_prog.elf:/musl_prog
 
 test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
                               test/kernel/initramfs.cpio
@@ -412,6 +418,49 @@ test/kernel/argv_parent_prog.elf: test/kernel/argv_parent_prog.o \
 test/kernel/argv_parent_prog_blob.o: test/kernel/argv_parent_prog_blob.S \
                                      test/kernel/argv_parent_prog.elf
 
+# Slice 7.6c.3c — sys_exec → musl-linked-child round-trip.  Parent
+# is libnxlibc-linked (same shape as argv_parent_prog); execs
+# /musl_prog (the slice 7.6c.3b posix_musl_prog.elf, ramfs-seeded
+# under that path).  Validates AUXV consumption end-to-end —
+# slice 7.6c.3b's AUXV push only fires through sys_exec, and only
+# this test actually drives a sys_exec → musl-linked image.
+test/kernel/musl_exec_parent_prog.o: test/kernel/musl_exec_parent_prog.c \
+                                     components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/musl_exec_parent_prog.elf: test/kernel/musl_exec_parent_prog.o \
+                                       components/posix_shim/libnxlibc.a \
+                                       test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/musl_exec_parent_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/musl_exec_parent_prog_blob.o: test/kernel/musl_exec_parent_prog_blob.S \
+                                          test/kernel/musl_exec_parent_prog.elf
+
+# Slice 7.6c.3c — musl-linked printf demo.  Pulls in musl's
+# vfprintf -> long-double softfloat helpers (__netf2, __fixtfsi,
+# __addtf3, ...) which live in libgcc.a, not musl.  `LIBGCC` is
+# the cross-compiler's libgcc path; --start-group/--end-group
+# resolves the cycle between libc.a and libgcc.a.
+LIBGCC := $(shell $(CC) -print-libgcc-file-name)
+
+test/kernel/posix_musl_printf_prog.o: test/kernel/posix_musl_printf_prog.c
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_musl_printf_prog.elf: test/kernel/posix_musl_printf_prog.o \
+                                        $(MUSL_CRT1) $(MUSL_CRTI) \
+                                        $(MUSL_LIBC) $(MUSL_CRTN) \
+                                        test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    $(MUSL_CRT1) $(MUSL_CRTI) \
+	    test/kernel/posix_musl_printf_prog.o \
+	    --start-group $(MUSL_LIBC) $(LIBGCC) --end-group \
+	    $(MUSL_CRTN)
+
+test/kernel/posix_musl_printf_prog_blob.o: test/kernel/posix_musl_printf_prog_blob.S \
+                                           test/kernel/posix_musl_printf_prog.elf
+
 KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
@@ -458,6 +507,12 @@ $(MUSL_LIBC) $(MUSL_CRT1) $(MUSL_CRTI) $(MUSL_CRTN): \
               $(MUSL_STAMP) \
               $(MUSL_DIR)/arch/aarch64/syscall_arch.h \
               $(MUSL_DIR)/src/thread/aarch64/syscall_cp.s
+	@# musl's internal Makefile tracks .c -> .lo deps but NOT
+	@# arch-header inclusion; any patch to syscall_arch.h leaves the
+	@# .lo cache stale.  Wipe obj/ + lib/ when our deps trigger so the
+	@# patched translation lands.  Costs ~30 s on patch; no-op on
+	@# everything else (the rule only re-fires when its deps change).
+	rm -rf $(MUSL_DIR)/obj $(MUSL_DIR)/lib
 	$(MAKE) -C $(MUSL_DIR) lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o
 
 musl-libc: $(MUSL_LIBC) $(MUSL_CRT1) $(MUSL_CRTI) $(MUSL_CRTN)
@@ -540,6 +595,8 @@ clean:
 	       test/kernel/argv_parent_prog.elf \
 	       test/kernel/argv_child_prog.elf \
 	       test/kernel/posix_musl_prog.elf \
+	       test/kernel/musl_exec_parent_prog.elf \
+	       test/kernel/posix_musl_printf_prog.elf \
 	       components/posix_shim/libnxlibc.a \
 	       test/kernel/initramfs.cpio test/kernel/banner.txt
 

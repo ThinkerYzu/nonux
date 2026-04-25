@@ -21,17 +21,14 @@
  * musl's init paths handle that gracefully (AT_RANDOM=NULL falls
  * back to a hash-based stack canary; AT_PAGESZ=0 makes malloc's
  * rounding meaningless but we never call malloc; etc.).  Slice
- * 7.6c.3c will exercise the AUXV-on-stack path via sys_exec.
+ * 7.6c.3c's sys_exec→musl-child test exercises the AUXV-on-stack
+ * path with non-zero argv.
  *
- * Note on the write: musl's write uses fd 1 (STDOUT_FILENO) which
- * doesn't have a stdout-routing magic in our kernel — fd 1 is just
- * a regular handle index.  The NX_SYS_WRITE handler treats it as a
- * potential file/channel handle and rejects with NX_EBADF since it
- * isn't allocated.  That's the expected v1 behavior — slice 7.6c.3c
- * will add stdio plumbing.  The marker `[musl-ok]` therefore won't
- * appear in the live ktest log, but the program still reaches
- * `_exit(57)` (write returns -EBADF, the program ignores it, exits
- * cleanly) and the exit_code is observable in the process table.
+ * The `[musl-ok]` marker DOES reach the live ktest log via the
+ * slice-7.6c.3c stdio plumbing — `sys_write` magic-fd-handles fd 1
+ * and fd 2 by routing them to NX_SYS_DEBUG_WRITE without a handle
+ * lookup.  Programs get console output without opening anything,
+ * which is what musl's write(STDOUT_FILENO, ...) expects.
  */
 
 #include "ktest.h"
@@ -81,6 +78,7 @@ static void musl_el0_kthread(void *arg)
 KTEST(posix_musl_prog_runs_main_through_init_libc_and_exits_57)
 {
     nx_syscall_reset_for_test();
+    KASSERT_EQ_U(nx_syscall_debug_write_calls(), 0);
 
     void *sself = sched_self_for_test();
     sched_rr_purge_user_tasks(sself, NULL);
@@ -100,8 +98,10 @@ KTEST(posix_musl_prog_runs_main_through_init_libc_and_exits_57)
     KASSERT_NOT_NULL(g_musl_task);
     g_musl_task->process = g_musl_host;
 
-    /* Wait for the process to exit.  No marker is checked — see the
-     * file header for why fd=1 write is expected to be rejected. */
+    /* Wait for the process to exit.  Marker `[musl-ok]` reaches the
+     * live log via the slice-7.6c.3c magic-fd-handle: write(1, ...)
+     * routes to NX_SYS_DEBUG_WRITE.  At least one debug_write call
+     * is required for the test to pass. */
     int found = 0;
     for (int i = 0; i < 4096; i++) {
         struct nx_process *p = nx_process_lookup_by_pid(host_pid);
@@ -113,6 +113,7 @@ KTEST(posix_musl_prog_runs_main_through_init_libc_and_exits_57)
         nx_task_yield();
     }
     KASSERT(found);
+    KASSERT(nx_syscall_debug_write_calls() >= 1);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

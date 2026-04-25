@@ -478,6 +478,14 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     uint32_t rights;
     void *obj;
     int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
+
+    /* Slice 7.6c.3c — magic stdin fd 0.  When fd 0 has no allocated
+     * handle, report EOF (0 bytes) — there's no console input source
+     * in v1.  Symmetric with the sys_write magic for fd 1/2: a
+     * program that legitimately allocates fd 0 (e.g. via dup) gets
+     * the regular dispatch.  Real /dev/console-input is a Phase-9
+     * follow-up. */
+    if (rc == NX_ENOENT && h == 0) return 0;
     if (rc != NX_OK) return rc;
     if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
 
@@ -523,6 +531,24 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     uint32_t rights;
     void *obj;
     int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
+
+    /* Slice 7.6c.3c — magic stdio fds.  When fd 1 (stdout) or fd 2
+     * (stderr) HAS NO ALLOCATED HANDLE, route to NX_SYS_DEBUG_WRITE
+     * so musl/busybox-style programs get console output without
+     * first opening anything.  libnxlibc does the same trick at the
+     * libc layer; doing it kernel-side here handles musl-linked
+     * programs uniformly (musl doesn't know about our libnxlibc
+     * magic).  Critically, the lookup-then-fallback ordering means
+     * that if a program legitimately allocates fd 1 or 2 to a
+     * channel/file (e.g. NX_SYS_PIPE returns 1 + 2 in a fresh
+     * handle table), the regular dispatch wins.  Real stdio
+     * ownership (per-process file table entries pointing at a
+     * /dev/console-equivalent) is a Phase-9 follow-up — at that
+     * point this fallback becomes dead code and gets removed. */
+    if (rc == NX_ENOENT && (h == 1 || h == 2)) {
+        return sys_debug_write((uint64_t)(uintptr_t)buf, (uint64_t)len,
+                               0, 0, 0, 0);
+    }
     if (rc != NX_OK) return rc;
     if ((rights & NX_RIGHT_WRITE) != NX_RIGHT_WRITE) return NX_EPERM;
 
@@ -956,7 +982,12 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
      * the new backing; load segments. */
     struct nx_process *p = nx_process_current();
     uint64_t old_root = p->ttbr0_root;
+    uint64_t old_brk  = p->brk_addr;
     p->ttbr0_root = new_root;
+    /* Slice 7.6c.3c — fresh address space gets a fresh program
+     * break.  exec replaces the entire image, so the inherited
+     * brk_addr from the pre-exec process is meaningless. */
+    p->brk_addr = mmu_user_window_base() + NX_PROCESS_HEAP_OFFSET;
 
     uint64_t entry = 0;
     rc = nx_elf_load_into_process(p, kbuf, total, &entry);
@@ -966,6 +997,7 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
          * half-loaded new one — leave the caller in its original
          * address space with its original PC intact. */
         p->ttbr0_root = old_root;
+        p->brk_addr   = old_brk;
         mmu_destroy_address_space(new_root);
         return rc;
     }
@@ -1185,6 +1217,110 @@ static nx_status_t sys_signal(uint64_t a0, uint64_t a1, uint64_t a2,
     return NX_OK;
 }
 
+/*
+ * NX_SYS_WRITEV — (nx_handle_t h, const struct iovec *iov, int iovcnt)
+ * → total bytes written / NX_E*.
+ *
+ * Slice 7.6c.3c.  musl's stdio (`__stdio_write`) flushes buffered
+ * output via SYS_writev — one writev per fflush.  Without this
+ * syscall musl's printf silently sets F_ERR and discards the
+ * output.
+ *
+ * Implementation: walk the iovec array from user memory (each
+ * entry is `{ void *iov_base; size_t iov_len }` = 16 bytes on
+ * aarch64), copy_from_user each iovec slot to a kernel-side struct,
+ * dispatch each entry through sys_write so all the existing
+ * magic-fd / handle-table / CHANNEL / FILE branches apply.
+ *
+ * Cap iovcnt at IOV_MAX_LOCAL = 16.  Linux's IOV_MAX is 1024;
+ * v1's stdio buffer-flush + a few iovecs is well below 16.
+ */
+struct nx_iovec_user {
+    uint64_t iov_base;   /* user VA */
+    uint64_t iov_len;
+};
+
+#define NX_IOV_MAX_LOCAL 16u
+
+static nx_status_t sys_writev(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+    nx_handle_t h     = (nx_handle_t)a0;
+    const void *iovs  = (const void *)(uintptr_t)a1;
+    int         count = (int)a2;
+
+    if (count < 0) return NX_EINVAL;
+    if (count == 0) return 0;
+    if ((unsigned int)count > NX_IOV_MAX_LOCAL) return NX_EINVAL;
+
+    struct nx_iovec_user kiov[NX_IOV_MAX_LOCAL];
+    int rc = copy_from_user(kiov, iovs,
+                            (size_t)count * sizeof(struct nx_iovec_user));
+    if (rc != NX_OK) return rc;
+
+    int64_t total = 0;
+    for (int i = 0; i < count; i++) {
+        if (kiov[i].iov_len == 0) continue;
+        nx_status_t got = sys_write((uint64_t)h,
+                                    kiov[i].iov_base,
+                                    kiov[i].iov_len,
+                                    0, 0, 0);
+        if (got < 0) return total > 0 ? (nx_status_t)total : got;
+        total += got;
+        /* Short write: a partial iovec entry was accepted.  Match
+         * Linux's writev semantics: stop on the first short entry
+         * and return the running total. */
+        if ((uint64_t)got < kiov[i].iov_len) break;
+    }
+    return (nx_status_t)total;
+}
+
+/*
+ * NX_SYS_BRK — (uint64_t requested) → new break (slice 7.6c.3c).
+ *
+ * Linux brk(2) semantics: requested == 0 returns the current break;
+ * otherwise tries to set the break to `requested` and returns the
+ * resulting break.  On failure (out-of-range), Linux's convention is
+ * to return the OLD break unchanged so the caller detects failure
+ * by comparing the returned value to its requested value (musl's
+ * mallocng does exactly this).  No errno code is returned.
+ *
+ * Heap region: [base + NX_PROCESS_HEAP_OFFSET ..
+ *               base + NX_PROCESS_HEAP_LIMIT) — 512 KiB inside the
+ * existing 2 MiB user-window backing.  No extra kernel allocation;
+ * we just track the high-water mark per process.
+ *
+ * The host build path returns 0 (no MMU, no heap concept).  Kernel
+ * tests exercise the real path.
+ */
+static nx_status_t sys_brk(uint64_t a0, uint64_t a1, uint64_t a2,
+                           uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    uint64_t requested = a0;
+
+    struct nx_process *p = nx_process_current();
+    if (!p) return NX_EINVAL;
+
+#if !__STDC_HOSTED__
+    uint64_t base = mmu_user_window_base();
+    uint64_t lo   = base + NX_PROCESS_HEAP_OFFSET;
+    uint64_t hi   = base + NX_PROCESS_HEAP_LIMIT;
+    /* brk(0): return current break.  Also the path the very first
+     * mallocng call takes to learn where its arena starts. */
+    if (requested == 0) return (nx_status_t)p->brk_addr;
+    /* Out-of-range requests don't error — return the old break and
+     * let the caller detect failure (musl convention). */
+    if (requested < lo || requested > hi) return (nx_status_t)p->brk_addr;
+    p->brk_addr = requested;
+    return (nx_status_t)p->brk_addr;
+#else
+    (void)requested;
+    return 0;
+#endif
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -1205,6 +1341,8 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_EXEC]           = sys_exec,
     [NX_SYS_PIPE]           = sys_pipe,
     [NX_SYS_SIGNAL]         = sys_signal,
+    [NX_SYS_BRK]            = sys_brk,
+    [NX_SYS_WRITEV]         = sys_writev,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

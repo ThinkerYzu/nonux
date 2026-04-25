@@ -18,9 +18,11 @@
  *   __NR_lseek       (62)  -> NX_SYS_SEEK          (9)
  *   __NR_read        (63)  -> NX_SYS_READ          (7)
  *   __NR_write       (64)  -> NX_SYS_WRITE         (8)
+ *   __NR_writev      (66)  -> NX_SYS_WRITEV        (18)
  *   __NR_exit        (93)  -> NX_SYS_EXIT          (11)
  *   __NR_exit_group  (94)  -> NX_SYS_EXIT          (11)   [v1 alias]
  *   __NR_kill       (129)  -> NX_SYS_SIGNAL        (16)
+ *   __NR_brk        (214)  -> NX_SYS_BRK           (17)
  *   __NR_execve     (221)  -> NX_SYS_EXEC          (14)
  *   __NR_wait4      (260)  -> NX_SYS_WAIT          (13)   [drops options+rusage]
  *
@@ -41,9 +43,11 @@ static inline long __nx_translate(long n)
 	case 62:  return 9;   /* __NR_lseek       -> NX_SYS_SEEK */
 	case 63:  return 7;   /* __NR_read        -> NX_SYS_READ */
 	case 64:  return 8;   /* __NR_write       -> NX_SYS_WRITE */
+	case 66:  return 18;  /* __NR_writev      -> NX_SYS_WRITEV */
 	case 93:  return 11;  /* __NR_exit        -> NX_SYS_EXIT */
 	case 94:  return 11;  /* __NR_exit_group  -> NX_SYS_EXIT */
 	case 129: return 16;  /* __NR_kill        -> NX_SYS_SIGNAL */
+	case 214: return 17;  /* __NR_brk         -> NX_SYS_BRK */
 	case 221: return 14;  /* __NR_execve      -> NX_SYS_EXEC */
 	case 260: return 13;  /* __NR_wait4       -> NX_SYS_WAIT */
 	default:  return -1;

@@ -94,6 +94,36 @@ enum nx_syscall_number {
                                   *   target to exit with status
                                   *   128+signo at its next
                                   *   sched_check_resched.  */
+    NX_SYS_BRK            = 17,  /* (uint64_t requested) → new break
+                                  *   (uint64_t).  Linux's brk(2)
+                                  *   semantics: if `requested` is 0,
+                                  *   returns the current break;
+                                  *   otherwise tries to set the break
+                                  *   to `requested` and returns the
+                                  *   new break (== requested on
+                                  *   success, == old break if
+                                  *   out-of-range).  Heap lives in
+                                  *   the process's existing 2 MiB
+                                  *   user-window backing —
+                                  *   [base + 1 MiB .. base + 1.5 MiB)
+                                  *   reserves 512 KiB.  See
+                                  *   NX_PROCESS_HEAP_{OFFSET,LIMIT}
+                                  *   in framework/process.h. */
+    NX_SYS_WRITEV         = 18,  /* (nx_handle_t h, struct iovec *iov,
+                                  *   int iovcnt) → bytes written /
+                                  *   NX_E*.  Walks the iovec array
+                                  *   from user memory + dispatches
+                                  *   each entry through sys_write
+                                  *   (so the magic-fd-handle for
+                                  *   fd 1/2 + handle-table lookup
+                                  *   for opened fds + CHANNEL/FILE
+                                  *   dispatch all work).  Needed by
+                                  *   musl's __stdio_write — its
+                                  *   buffered printf pipeline emits
+                                  *   one writev per fwrite/fflush;
+                                  *   without this syscall musl's
+                                  *   stdout silently swallows
+                                  *   output. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

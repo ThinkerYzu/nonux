@@ -70,7 +70,31 @@ struct nx_process {
      * shared counters from day 1.
      */
     _Atomic uint32_t        pending_signals;
+    /*
+     * Program break (slice 7.6c.3c).  User-VA of the current top of
+     * the heap.  Initialized in nx_process_create / sys_exec to
+     * `mmu_user_window_base() + NX_PROCESS_HEAP_OFFSET`; grown by
+     * `NX_SYS_BRK = 17` up to `... + NX_PROCESS_HEAP_LIMIT`.  musl's
+     * mallocng uses this as its primary heap-extension primitive
+     * (`brk(0)` reads, `brk(end)` extends).  Heap lives inside the
+     * existing 2 MiB user-window backing — no extra kernel
+     * allocation; we just track the high-water mark per process.
+     */
+    uint64_t                brk_addr;
 };
+
+/* Heap layout within the 2 MiB user window:
+ *   [base ..        +1 MiB)   code + data + bss (loaded by exec/elf)
+ *   [base + 1 MiB . +1.5 MiB) heap (NX_SYS_BRK)
+ *   [base + 1.5 MiB ..top)    stack (sp_el0 starts at top - alignment)
+ *
+ * 512 KiB heap is plenty for our v1 demos (musl mallocng's chunked
+ * allocations rarely exceed a few KiB; busybox sh / printf handful
+ * of bytes per run).  Real /proc-style heap grows-on-demand lands
+ * with a future "user-window-grows-via-PMM" slice.
+ */
+#define NX_PROCESS_HEAP_OFFSET  (1u << 20)             /* 1 MiB into window */
+#define NX_PROCESS_HEAP_LIMIT   ((1u << 20) + (1u << 19))  /* 1.5 MiB into window */
 
 /*
  * The always-present kernel process (pid 0).  Used as the fallback
