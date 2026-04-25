@@ -60,12 +60,24 @@ set -o pipefail
 # 4. Real build.  --sysroot points at our private musl tree; -static
 # pulls libc.a in completely.  SKIP_STRIP=y leaves debug info in place
 # so we can readelf the output.
+#
+# -Ttext-segment=0x48000000 (slice 7.6d.2a): the kbuild default for
+# `-static -no-pie` aarch64 is text at VA 0x400000.  Our ELF loader
+# (framework/elf.c) honours PT_LOAD.p_vaddr verbatim — a load to
+# 0x400000 lands in MMIO space.  Pin text at the user-window base so
+# segments end up where the loader can actually copy them.  The value
+# is hardcoded here; it has to track mmu_user_window_base() in
+# core/mmu/mmu.c (and init_prog.ld's `. = 0x48000000;`).  If the user
+# window ever moves, this script + every other linker script that
+# spells out 0x48000000 has to move with it.
+USER_WINDOW_BASE="0x48000000"
+
 make -C "$BUSYBOX_DIR" \
     -j "$JOBS" \
     ARCH=arm64 \
     CROSS_COMPILE="$CROSS" \
     EXTRA_CFLAGS="--sysroot=$SYSROOT" \
-    EXTRA_LDFLAGS="--sysroot=$SYSROOT -static" \
+    EXTRA_LDFLAGS="--sysroot=$SYSROOT -static -Wl,-Ttext-segment=$USER_WINDOW_BASE" \
     SKIP_STRIP=y
 
 # 5. Sanity check.  busybox's own Makefile prints a size summary;
