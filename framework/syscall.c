@@ -860,9 +860,18 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
  *
  * Host: no MMU + no file I/O semantics — returns NX_EINVAL.
  */
-#define SYS_EXEC_MAX_FILE  8192u   /* generous ceiling; our init-prog
-                                    * is ~150 B.  A bigger program
-                                    * would bump this. */
+#define SYS_EXEC_MAX_FILE  (4u * 1024u * 1024u)
+                                   /* Bumped 8192 → 4 MiB in slice
+                                    * 7.6d.2c so the ~2.29 MiB busybox
+                                    * 1.36.1 binary can be slurped from
+                                    * vfs.  Per-call kheap allocation,
+                                    * so no static cost — but each
+                                    * sys_exec briefly holds 4 MiB.
+                                    * Falls in line with RAMFS_FILE_CAP
+                                    * (also 4 MiB).  Earlier sizes:
+                                    * ~150 B (init_prog), 4096
+                                    * (libnxlibc demos), 8192
+                                    * (musl demos). */
 #define SYS_EXEC_ARGV_MAX  16u     /* slice 7.6c.4: max argv entries */
 #define SYS_EXEC_ARGV_BYTES 1024u  /* total bytes of argv-string data */
 

@@ -43,13 +43,20 @@
 
 #define RAMFS_MAX_FILES   8u
 #define RAMFS_NAME_MAX   32u
-#define RAMFS_FILE_CAP  8192u   /* Bumped 4096 → 8192 in slice 7.6c.4
-                                 * so a libnxlibc-linked C program
-                                 * (printf + crt0 + libc helpers ≈
-                                 * 4.5 KB) fits at a ramfs path,
-                                 * giving NX_SYS_EXEC something to
-                                 * read.  Earlier bumps: 256 → 4096
-                                 * for slice 7.4c's init_prog.elf. */
+#define RAMFS_FILE_CAP  (4u * 1024u * 1024u)
+                                /* Bumped 8192 → 4 MiB in slice 7.6d.2c
+                                 * so the ~2.29 MiB busybox 1.36.1 binary
+                                 * fits at /bin/busybox.  Cost: 32 MiB
+                                 * static .bss for the per-instance file
+                                 * table (8 slots * 4 MiB).  v1 hack —
+                                 * post-Phase-7 ramfs rework should
+                                 * dynamically allocate per-file storage
+                                 * so small files don't pay the large-
+                                 * file cost.  Earlier bumps: 256 → 4096
+                                 * for slice 7.4c's init_prog.elf;
+                                 * 4096 → 8192 for slice 7.6c.4's
+                                 * libnxlibc-linked argv_child binary
+                                 * (~4.5 KB). */
 #define RAMFS_MAX_OPEN  (4u * RAMFS_MAX_FILES)  /* generous: no dynamic allocator */
 
 struct ramfs_file {
