@@ -521,7 +521,38 @@ musl-libc: $(MUSL_LIBC) $(MUSL_CRT1) $(MUSL_CRTI) $(MUSL_CRTN)
 musl-clean:
 	-$(MAKE) -C $(MUSL_DIR) clean 2>/dev/null
 	rm -f $(MUSL_STAMP) $(MUSL_DIR)/config.mak
+	rm -rf $(MUSL_DIR)/_sysroot
 .PHONY: musl-clean
+
+# Slice 7.6d.1 — cross-compile busybox against our patched musl.
+#
+# Build infrastructure only.  No boot integration yet (that's 7.6d.N's
+# job).  busybox source is vendored under third_party/busybox/ from
+# upstream's 1.36.1 tarball; our minimal config is committed at
+# third_party/busybox/configs/nonux_defconfig.  tools/build-busybox.sh
+# stages the config + drives the build against a private musl sysroot
+# at third_party/musl/_sysroot/ (populated lazily — install-headers
+# for include/, symlinks back to lib/ for the libs).
+#
+# busybox is intentionally NOT a dep of `make test` yet; the build
+# takes ~30 s and the artefact isn't consumed by any ktest in 7.6d.1.
+# It becomes a test dep when 7.6d.2 first execs it from a libnxlibc
+# parent.
+BUSYBOX_DIR    := third_party/busybox
+BUSYBOX_BIN    := $(BUSYBOX_DIR)/busybox
+BUSYBOX_CONFIG := $(BUSYBOX_DIR)/configs/nonux_defconfig
+BUSYBOX_BUILD  := tools/build-busybox.sh
+
+$(BUSYBOX_BIN): $(BUSYBOX_BUILD) $(BUSYBOX_CONFIG) $(MUSL_LIBC)
+	CROSS=$(CROSS) $(BUSYBOX_BUILD)
+
+busybox: $(BUSYBOX_BIN)
+.PHONY: busybox
+
+busybox-clean:
+	-$(MAKE) -C $(BUSYBOX_DIR) clean 2>/dev/null
+	rm -f $(BUSYBOX_DIR)/.config
+.PHONY: busybox-clean
 
 # Slice 7.6c.3b — first EL0 C demo against musl's libc.a + crt set.
 # Same freestanding flag set as the libnxlibc-linked demos; link line

@@ -39,3 +39,68 @@ test/host/test_host
 # Slice 7.6c.3a — vendored musl build stamp (configure once, then
 # musl's own .gitignore handles obj/ + lib/ + config.mak).
 third_party/musl/.configured
+
+# Slice 7.6d.1 — private musl sysroot (install-headers output + symlinks
+# back to musl/lib/) and busybox build artefacts.
+#
+# Vendored busybox source under third_party/busybox/ is checked in
+# verbatim from the upstream 1.36.1 tarball.  busybox's build emits a
+# pile of generated files in-tree (no out-of-tree build mode); the
+# top-level *.o / *.a / *.elf / *.bin / *.cpio rules above already
+# cover most.  These extras are the busybox-specific stragglers — the
+# top-level static binary (no extension), kconfig artefacts, generated
+# headers, and the kconfig parser-generated lex/yacc output.
+third_party/musl/_sysroot/
+third_party/busybox/busybox
+third_party/busybox/busybox_unstripped
+third_party/busybox/.config*
+third_party/busybox/.kconfig.d
+third_party/busybox/include/autoconf.h
+third_party/busybox/include/applet_tables.h
+third_party/busybox/include/applets.h
+third_party/busybox/include/bbconfigopts.h
+third_party/busybox/include/bbconfigopts_bz2.h
+third_party/busybox/include/common_bufsiz.h
+third_party/busybox/include/embedded_scripts.h
+third_party/busybox/include/NUM_APPLETS.h
+third_party/busybox/include/usage_compressed.h
+third_party/busybox/scripts/basic/fixdep
+third_party/busybox/scripts/kconfig/conf
+third_party/busybox/scripts/kconfig/zconf.tab.c
+third_party/busybox/scripts/kconfig/lex.zconf.c
+third_party/busybox/scripts/kconfig/zconf.hash.c
+third_party/busybox/applets_sh/applet_tables
+# kbuild scaffold inside the busybox tree.  busybox uses a
+# kernel-style kbuild: per-object `.<obj>.cmd` files are dep caches,
+# `.tmp_versions/` is link-time scratch, `.kernelrelease` is the
+# version stamp, `busybox_unstripped*` is the pre-strip link output.
+third_party/busybox/**/.*.cmd
+third_party/busybox/.*.cmd
+third_party/busybox/.tmp_versions/
+third_party/busybox/.kernelrelease
+third_party/busybox/busybox_unstripped.map
+third_party/busybox/busybox_unstripped.out
+# Subdir Config.in / Kbuild are generated from .src counterparts at
+# build time; only the top-level Config.in ships in upstream.
+third_party/busybox/**/Config.in
+!third_party/busybox/Config.in
+third_party/busybox/**/Kbuild
+# Generated kconfig artefacts under include/config/.
+third_party/busybox/include/config/
+third_party/busybox/include/common_bufsiz.h.method
+# Host-side helpers built during `applets/usage*` extraction.
+third_party/busybox/applets/applet_tables
+third_party/busybox/applets/usage
+third_party/busybox/applets/usage_pod
+# Generated docs (busybox.pod is itself generated from applet sources;
+# the rendered formats are downstream of that).
+third_party/busybox/docs/busybox.pod
+third_party/busybox/docs/BusyBox.html
+third_party/busybox/docs/BusyBox.txt
+third_party/busybox/docs/busybox.1
+third_party/busybox/docs/busybox.net/
+# Generated headers + host-side scripts/basic/ binaries.
+third_party/busybox/include/usage.h
+third_party/busybox/scripts/basic/docproc
+third_party/busybox/scripts/basic/split-include
+
