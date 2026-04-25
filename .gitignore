@@ -35,3 +35,7 @@ bench/output.log
 
 # Host test binary
 test/host/test_host
+
+# Slice 7.6c.3a — vendored musl build stamp (configure once, then
+# musl's own .gitignore handles obj/ + lib/ + config.mak).
+third_party/musl/.configured

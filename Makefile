@@ -427,8 +427,43 @@ kernel-test.elf: $(TEST_OBJS) core/boot/linker.ld
 kernel-test.bin: kernel-test.elf
 	$(OBJCOPY) -O binary $< $@
 
+# Slice 7.6c.3a — vendored musl libc.a.  Source tree lives at
+# third_party/musl/ (musl 1.2.5 snapshot, MIT-clean upstream + nonux
+# patches in arch/aarch64/syscall_arch.h and src/thread/aarch64/
+# syscall_cp.s — both translate Linux-aarch64 syscall numbers into
+# our NX_SYS_* numbers before `svc 0`).
+#
+# The build runs musl's own ./configure once (stamped by .configured),
+# then `make lib/libc.a` inside the musl tree.  Stays separate from
+# the kernel build — no demos link against musl yet.  Slice 7.6c.3b
+# wires the first EL0 program against it.
+MUSL_DIR    := third_party/musl
+MUSL_LIBC   := $(MUSL_DIR)/lib/libc.a
+MUSL_STAMP  := $(MUSL_DIR)/.configured
+
+$(MUSL_STAMP):
+	cd $(MUSL_DIR) && ./configure \
+	    --target=aarch64-linux-gnu \
+	    --prefix=/usr/local/musl \
+	    --disable-shared \
+	    CC=$(CC) CROSS_COMPILE=$(CROSS) >/dev/null
+	@touch $@
+
+$(MUSL_LIBC): $(MUSL_STAMP) \
+              $(MUSL_DIR)/arch/aarch64/syscall_arch.h \
+              $(MUSL_DIR)/src/thread/aarch64/syscall_cp.s
+	$(MAKE) -C $(MUSL_DIR) lib/libc.a
+
+musl-libc: $(MUSL_LIBC)
+.PHONY: musl-libc
+
+musl-clean:
+	-$(MAKE) -C $(MUSL_DIR) clean 2>/dev/null
+	rm -f $(MUSL_STAMP) $(MUSL_DIR)/config.mak
+.PHONY: musl-clean
+
 # Tests
-test: verify-registry test-tools test-host test-kernel
+test: verify-registry test-tools test-host test-kernel musl-libc
 
 test-host:
 	$(MAKE) -C test/host
