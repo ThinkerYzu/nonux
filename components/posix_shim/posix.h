@@ -172,16 +172,21 @@ static inline nx_posix_pid_t nx_posix_fork(void)
 }
 
 /* execve(path, argv, envp) — replaces the current process image
- * with the ELF at `path`.  argv/envp are reserved (v1 exec takes
- * only a path).  On success the call never returns — control
- * transfers to the new program's entry.  On failure returns
- * negative NX_E*. */
+ * with the ELF at `path`.  argv (NULL-terminated array of
+ * NUL-terminated strings) is forwarded to sys_exec, which builds
+ * the System V argv layout on the new user stack so the exec'd
+ * program's `main(argc, argv, envp)` sees the strings via the
+ * crt0 prologue (slice 7.6c.4).  envp is reserved — v1 always
+ * delivers an empty environment.  argv == NULL synthesises
+ * `{ path, NULL }` per Linux convention.  On success the call
+ * never returns; on failure returns negative NX_E*. */
 static inline int
 nx_posix_execve(const char *path, char *const argv[], char *const envp[])
 {
-    (void)argv; (void)envp;
-    return (int)nx_posix_svc1(NX_POSIX_SYS_EXEC,
-                              (uint64_t)(uintptr_t)path);
+    return (int)nx_posix_svc3(NX_POSIX_SYS_EXEC,
+                              (uint64_t)(uintptr_t)path,
+                              (uint64_t)(uintptr_t)argv,
+                              (uint64_t)(uintptr_t)envp);
 }
 
 /* waitpid(pid, &status, 0) — blocks until the target process

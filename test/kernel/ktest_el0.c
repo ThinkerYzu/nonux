@@ -73,7 +73,7 @@ static void el0_entry_kthread(void *arg)
      * (no function calls, all inline), but SPSR_EL1.M = EL0t selects
      * SP_EL0 so we must set it to a valid mapped address or the first
      * push / alignment-check on exception entry will fault. */
-    uint64_t sp_el0 = (base + size) & ~((uint64_t)0xfu);
+    uint64_t sp_el0 = (base + size - 16u) & ~((uint64_t)0xfu);
 
     /* One-way jump. */
     drop_to_el0(base, sp_el0);

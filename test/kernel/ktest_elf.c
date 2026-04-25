@@ -81,7 +81,7 @@ static void elf_el0_kthread(void *arg)
      * the kernel address space — the bytes live in our user backing. */
     uint64_t base = mmu_user_window_base();
     uint64_t size = mmu_user_window_size();
-    uint64_t sp_el0 = (base + size) & ~((uint64_t)0xfu);
+    uint64_t sp_el0 = (base + size - 16u) & ~((uint64_t)0xfu);
     drop_to_el0(g_elf_entry, sp_el0);
 }
 

@@ -836,21 +836,88 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
 #define SYS_EXEC_MAX_FILE  8192u   /* generous ceiling; our init-prog
                                     * is ~150 B.  A bigger program
                                     * would bump this. */
+#define SYS_EXEC_ARGV_MAX  16u     /* slice 7.6c.4: max argv entries */
+#define SYS_EXEC_ARGV_BYTES 1024u  /* total bytes of argv-string data */
 
 static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5)
 {
-    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    (void)a2; (void)a3; (void)a4; (void)a5;
 #if __STDC_HOSTED__
-    (void)a0;
+    (void)a0; (void)a1;
     return NX_EINVAL;
 #else
     const char *user_path = (const char *)(uintptr_t)a0;
+    char *const *user_argv = (char *const *)(uintptr_t)a1;
+    /* envp is reserved (a2) — currently always treated as the empty
+     * environment.  Per-program env handling lands when a slice
+     * actually needs it (likely 7.6d busybox). */
 
     /* 1. Path copy. */
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return rc;
+
+    /*
+     * 1.5. Slice 7.6c.4: copy argv from the user (still in the OLD
+     *      address space) into kernel staging.  Two reads per entry:
+     *      first the pointer slot from the argv array, then the
+     *      string it points to.  Stops at the first NULL pointer or
+     *      when we hit the per-call caps (16 entries / 1024 bytes
+     *      total — keeps the staging fixed-size on the kernel stack).
+     *
+     *      `argv_strs` is a packed buffer ("arg0\0arg1\0..."),
+     *      `argv_offsets[i]` is the byte offset of argv[i] inside it.
+     *      Both get re-laid-out onto the new user stack later.
+     */
+    char    argv_strs[SYS_EXEC_ARGV_BYTES];
+    size_t  argv_offsets[SYS_EXEC_ARGV_MAX];
+    size_t  argv_str_len = 0;
+    size_t  argc = 0;
+
+    if (user_argv) {
+        while (argc < SYS_EXEC_ARGV_MAX) {
+            char *user_str_ptr = NULL;
+            rc = copy_from_user(&user_str_ptr,
+                                (const char *)user_argv + argc * sizeof user_str_ptr,
+                                sizeof user_str_ptr);
+            if (rc != NX_OK) return rc;
+            if (user_str_ptr == NULL) break;
+
+            size_t remain = SYS_EXEC_ARGV_BYTES - argv_str_len;
+            if (remain == 0) break;       /* truncate silently — same
+                                           * shape as Linux's argv-too-
+                                           * long ENAMETOOLONG, but
+                                           * v1 silently drops the
+                                           * tail. */
+            argv_offsets[argc] = argv_str_len;
+            rc = copy_path_from_user(argv_strs + argv_str_len,
+                                     remain, user_str_ptr);
+            if (rc != NX_OK) return rc;
+
+            /* copy_path_from_user uses NX_PATH_MAX bound; argv strings
+             * follow the same rules as paths in v1.  Advance past the
+             * NUL terminator the helper wrote. */
+            size_t slen = 0;
+            while (argv_str_len + slen < SYS_EXEC_ARGV_BYTES &&
+                   argv_strs[argv_str_len + slen] != '\0') slen++;
+            argv_str_len += slen + 1;     /* +1 to include NUL */
+            argc++;
+        }
+    }
+
+    /* If no argv was passed (or it was an empty array), synthesise
+     * argv = { path, NULL } per Linux convention. */
+    if (argc == 0) {
+        size_t plen = 0;
+        while (plen < NX_PATH_MAX && kpath[plen] != '\0') plen++;
+        if (plen + 1 > SYS_EXEC_ARGV_BYTES) plen = SYS_EXEC_ARGV_BYTES - 1;
+        memcpy(argv_strs, kpath, plen);
+        argv_strs[plen] = '\0';
+        argv_offsets[0] = 0;
+        argv_str_len = plen + 1;
+        argc = 1;
+    }
 
     /* 2. Resolve vfs + open. */
     const struct nx_vfs_ops *vops; void *vself;
@@ -902,6 +969,53 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
         return rc;
     }
 
+    /*
+     * 7.5. Slice 7.6c.4: build the System V argv layout in the new
+     *      user backing.  We're between `nx_elf_load_into_process`
+     *      and the TTBR0 flip, so the new backing is reachable
+     *      through the kernel-visible alias from
+     *      `mmu_address_space_user_backing` (same trick the ELF
+     *      loader uses for its PT_LOAD copies).
+     *
+     *      Stack layout, low (sp) to high:
+     *        sp+0:                argc
+     *        sp+8 .. sp+8+8*argc: argv[0]..argv[argc-1]
+     *        sp+8+8*(argc+1):     NULL (argv terminator)
+     *        sp+8+8*(argc+2):     NULL (envp[0] = end-of-envp)
+     *        ...                  argv strings (8-aligned, at top)
+     *
+     *      sp_el0 lands at the `argc` slot.  16-byte-aligned per AAPCS.
+     */
+    void *new_backing = mmu_address_space_user_backing(new_root);
+    uint64_t window_base = mmu_user_window_base();
+    uint64_t window_size = mmu_user_window_size();
+    uint64_t new_sp;
+    if (new_backing) {
+        /* Strings sit at the high end of the window. */
+        uint64_t str_offset = (window_size - argv_str_len) & ~(uint64_t)7u;
+        memcpy((char *)new_backing + str_offset, argv_strs, argv_str_len);
+
+        /* Pointer area below strings.  Slot count: 1 (argc) + argc
+         * (argv[0..argc-1]) + 1 (argv NULL terminator) + 1 (envp[0]
+         * = empty-environment NULL) = 3 + argc slots × 8 bytes.
+         * Round sp down to 16 for AAPCS. */
+        uint64_t fixed_size = 8u * (3u + argc);
+        uint64_t sp_offset  = (str_offset - fixed_size) & ~(uint64_t)15u;
+
+        uint64_t *u = (uint64_t *)((char *)new_backing + sp_offset);
+        u[0] = argc;
+        for (size_t i = 0; i < argc; i++)
+            u[1 + i] = window_base + str_offset + argv_offsets[i];
+        u[1 + argc] = 0;          /* argv terminator */
+        u[2 + argc] = 0;          /* envp[0] = NULL */
+
+        new_sp = window_base + sp_offset;
+    } else {
+        /* Defensive fallback if the backing alias isn't available
+         * (host build, or a future caller without an MMU window). */
+        new_sp = (window_base + window_size) & ~(uint64_t)0xfu;
+    }
+
     /* 8. Clobber the trap frame so eret delivers to the ELF entry
      * with a clean register state.  The dispatcher will overwrite
      * `tf->x[0]` with our return value (0 for NX_OK), which is the
@@ -911,8 +1025,7 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
     if (tf) {
         for (int i = 0; i < 31; i++) tf->x[i] = 0;
         tf->pc = entry;
-        tf->sp_el0 = (mmu_user_window_base() + mmu_user_window_size())
-                     & ~((uint64_t)0xfu);
+        tf->sp_el0 = new_sp;
         /* Clear PSTATE to a clean "EL0t, IRQs enabled" state.  The
          * existing drop_to_el0 writes SPSR_EL1=0 for the same reason:
          * EL0t mode bits are 0, DAIF=0 gives IRQs enabled. */

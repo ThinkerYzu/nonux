@@ -47,7 +47,7 @@ static void main_el0_kthread(void *arg)
     (void)arg;
     uint64_t base = mmu_user_window_base();
     uint64_t size = mmu_user_window_size();
-    uint64_t sp_el0 = (base + size) & ~((uint64_t)0xfu);
+    uint64_t sp_el0 = (base + size - 16u) & ~((uint64_t)0xfu);
     drop_to_el0(g_main_entry, sp_el0);
 }
 

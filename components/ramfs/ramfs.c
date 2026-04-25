@@ -43,10 +43,13 @@
 
 #define RAMFS_MAX_FILES   8u
 #define RAMFS_NAME_MAX   32u
-#define RAMFS_FILE_CAP  4096u   /* slice 7.4c: up from 256 so a minimal
-                                 * static ELF (~150 B after -n-pack via the
-                                 * linker) fits at a ramfs path, giving
-                                 * `NX_SYS_EXEC` something to read. */
+#define RAMFS_FILE_CAP  8192u   /* Bumped 4096 → 8192 in slice 7.6c.4
+                                 * so a libnxlibc-linked C program
+                                 * (printf + crt0 + libc helpers ≈
+                                 * 4.5 KB) fits at a ramfs path,
+                                 * giving NX_SYS_EXEC something to
+                                 * read.  Earlier bumps: 256 → 4096
+                                 * for slice 7.4c's init_prog.elf. */
 #define RAMFS_MAX_OPEN  (4u * RAMFS_MAX_FILES)  /* generous: no dynamic allocator */
 
 struct ramfs_file {

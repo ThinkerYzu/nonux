@@ -238,7 +238,10 @@ int mmu_is_enabled(void)
  * the heap that carries the bookkeeping.  The caller holds an L1 root
  * (uint64_t PA); we find the bookkeeping via a tiny lookup table.
  */
-#define MMU_MAX_ADDRESS_SPACES  16u
+/* v1 cap.  Bumped from 16 → 32 in slice 7.6c.4 alongside
+ * NX_PROCESS_TABLE_CAPACITY (same reason: cumulative test usage of
+ * stranded processes hit the previous cap). */
+#define MMU_MAX_ADDRESS_SPACES  32u
 
 struct mmu_address_space {
     uint64_t  l1_root_pa;     /* == (uintptr_t)l1_page */

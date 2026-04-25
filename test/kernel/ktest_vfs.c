@@ -178,7 +178,7 @@ static void file_el0_kthread(void *arg)
     uint64_t base = mmu_user_window_base();
     uint64_t size = mmu_user_window_size();
     file_copy_prog_to_window((void *)(uintptr_t)base);
-    uint64_t sp_el0 = (base + size) & ~((uint64_t)0xfu);
+    uint64_t sp_el0 = (base + size - 16u) & ~((uint64_t)0xfu);
     drop_to_el0(base, sp_el0);
 }
 
@@ -249,7 +249,7 @@ static void readdir_el0_kthread(void *arg)
     uint64_t base = mmu_user_window_base();
     uint64_t size = mmu_user_window_size();
     readdir_copy_prog_to_window((void *)(uintptr_t)base);
-    uint64_t sp_el0 = (base + size) & ~((uint64_t)0xfu);
+    uint64_t sp_el0 = (base + size - 16u) & ~((uint64_t)0xfu);
     drop_to_el0(base, sp_el0);
 }
 

@@ -182,7 +182,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_initramfs.c \
                  test/kernel/ktest_posix_main.c \
                  test/kernel/ktest_posix_libc.c \
-                 test/kernel/ktest_posix_printf.c
+                 test/kernel/ktest_posix_printf.c \
+                 test/kernel/ktest_argv_push.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -202,7 +203,8 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/initramfs_blob.S \
                  test/kernel/posix_main_prog_blob.S \
                  test/kernel/posix_libc_prog_blob.S \
-                 test/kernel/posix_printf_prog_blob.S
+                 test/kernel/posix_printf_prog_blob.S \
+                 test/kernel/argv_parent_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -292,10 +294,12 @@ test/kernel/banner.txt:
 
 test/kernel/initramfs.cpio: tools/pack-initramfs.py \
                             test/kernel/init_prog.elf \
-                            test/kernel/banner.txt
+                            test/kernel/banner.txt \
+                            test/kernel/argv_child_prog.elf
 	$(PYTHON) tools/pack-initramfs.py $@ \
 	    test/kernel/init_prog.elf:/init \
-	    test/kernel/banner.txt:/banner
+	    test/kernel/banner.txt:/banner \
+	    test/kernel/argv_child_prog.elf:/argv_child
 
 test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
                               test/kernel/initramfs.cpio
@@ -375,6 +379,37 @@ test/kernel/posix_printf_prog.elf: test/kernel/posix_printf_prog.o \
 test/kernel/posix_printf_prog_blob.o: test/kernel/posix_printf_prog_blob.S \
                                       test/kernel/posix_printf_prog.elf
 
+# Slice 7.6c.4 — argv-push round-trip.  Two C-compiled EL0 binaries:
+#   argv_child_prog.elf  — exec'd target, validates argc/argv content,
+#                          shipped in initramfs as `/argv_child` so
+#                          sys_exec can load it via vfs.
+#   argv_parent_prog.elf — drops to EL0 directly; forks + execve's
+#                          /argv_child with explicit argv, waits.
+test/kernel/argv_child_prog.o: test/kernel/argv_child_prog.c \
+                               components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/argv_child_prog.elf: test/kernel/argv_child_prog.o \
+                                 components/posix_shim/libnxlibc.a \
+                                 test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/argv_child_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/argv_parent_prog.o: test/kernel/argv_parent_prog.c \
+                                components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/argv_parent_prog.elf: test/kernel/argv_parent_prog.o \
+                                  components/posix_shim/libnxlibc.a \
+                                  test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/argv_parent_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/argv_parent_prog_blob.o: test/kernel/argv_parent_prog_blob.S \
+                                     test/kernel/argv_parent_prog.elf
+
 KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
@@ -439,6 +474,8 @@ clean:
 	       test/kernel/posix_main_prog.elf \
 	       test/kernel/posix_libc_prog.elf \
 	       test/kernel/posix_printf_prog.elf \
+	       test/kernel/argv_parent_prog.elf \
+	       test/kernel/argv_child_prog.elf \
 	       components/posix_shim/libnxlibc.a \
 	       test/kernel/initramfs.cpio test/kernel/banner.txt
 

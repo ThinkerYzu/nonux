@@ -63,12 +63,23 @@ enum nx_syscall_number {
                                   *   → pid / NX_ENOENT / NX_EINVAL.
                                   *   Polls with yield until target is
                                   *   EXITED; writes exit_code to user. */
-    NX_SYS_EXEC           = 14,  /* (const char *path) → noreturn on
-                                  *   success; NX_E* on failure.
+    NX_SYS_EXEC           = 14,  /* (const char *path,
+                                  *    char *const argv[],
+                                  *    char *const envp[]) → noreturn
+                                  *   on success; NX_E* on failure.
                                   *   Loads an ELF from the vfs path
                                   *   into a fresh address space,
-                                  *   swaps it in, erets to the ELF's
-                                  *   entry with zeroed registers. */
+                                  *   swaps it in, builds the System V
+                                  *   argv layout on the new user
+                                  *   stack (argc + argv ptrs + envp
+                                  *   NULL + strings), erets to the
+                                  *   ELF's entry with `sp_el0` at the
+                                  *   new layout's `argc` slot.  argv
+                                  *   == NULL synthesises `{ path,
+                                  *   NULL }`.  envp is currently
+                                  *   always the empty environment.
+                                  *   v1 caps argc at 16 and total
+                                  *   argv-string bytes at 1024. */
     NX_SYS_PIPE           = 15,  /* (int fds[2]) → NX_OK; writes two
                                   *   handles (read side at fds[0],
                                   *   write side at fds[1]) via

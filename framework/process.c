@@ -39,7 +39,12 @@ struct nx_process g_kernel_process = {
  * doesn't need more than a handful concurrently.  Lookup is O(n) but
  * `n` is tiny; swap for a hashmap when there's a consumer that cares.
  */
-#define NX_PROCESS_TABLE_CAPACITY 16
+/* v1 cap.  Was 16; bumped to 32 in slice 7.6c.4 because the test
+ * harness's stranded-task convention leaves processes in the table
+ * across tests, and the argv-push round-trip's parent + forked-
+ * child trio pushed cumulative usage past 16.  Real reap on
+ * `wait()` would let us drop this back. */
+#define NX_PROCESS_TABLE_CAPACITY 32
 
 static struct nx_process *g_process_table[NX_PROCESS_TABLE_CAPACITY];
 static uint32_t            g_pid_next = 1;    /* pid 0 reserved for kernel */
