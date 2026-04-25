@@ -183,7 +183,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_main.c \
                  test/kernel/ktest_posix_libc.c \
                  test/kernel/ktest_posix_printf.c \
-                 test/kernel/ktest_argv_push.c
+                 test/kernel/ktest_argv_push.c \
+                 test/kernel/ktest_posix_musl.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -204,7 +205,8 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_main_prog_blob.S \
                  test/kernel/posix_libc_prog_blob.S \
                  test/kernel/posix_printf_prog_blob.S \
-                 test/kernel/argv_parent_prog_blob.S
+                 test/kernel/argv_parent_prog_blob.S \
+                 test/kernel/posix_musl_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -427,18 +429,21 @@ kernel-test.elf: $(TEST_OBJS) core/boot/linker.ld
 kernel-test.bin: kernel-test.elf
 	$(OBJCOPY) -O binary $< $@
 
-# Slice 7.6c.3a — vendored musl libc.a.  Source tree lives at
-# third_party/musl/ (musl 1.2.5 snapshot, MIT-clean upstream + nonux
-# patches in arch/aarch64/syscall_arch.h and src/thread/aarch64/
-# syscall_cp.s — both translate Linux-aarch64 syscall numbers into
-# our NX_SYS_* numbers before `svc 0`).
+# Slice 7.6c.3a/b — vendored musl libc.a + crt objects.  Source tree
+# lives at third_party/musl/ (musl 1.2.5 snapshot, MIT-clean upstream
+# + nonux patches in arch/aarch64/syscall_arch.h and
+# src/thread/aarch64/syscall_cp.s — both translate Linux-aarch64
+# syscall numbers into our NX_SYS_* numbers before `svc 0`).
 #
 # The build runs musl's own ./configure once (stamped by .configured),
-# then `make lib/libc.a` inside the musl tree.  Stays separate from
-# the kernel build — no demos link against musl yet.  Slice 7.6c.3b
-# wires the first EL0 program against it.
+# then `make lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o` inside the
+# musl tree.  Slice 7.6c.3b adds the crt objects so EL0 C programs
+# can link with musl's standard `-lc + crt1 + crti/crtn` shape.
 MUSL_DIR    := third_party/musl
 MUSL_LIBC   := $(MUSL_DIR)/lib/libc.a
+MUSL_CRT1   := $(MUSL_DIR)/lib/crt1.o
+MUSL_CRTI   := $(MUSL_DIR)/lib/crti.o
+MUSL_CRTN   := $(MUSL_DIR)/lib/crtn.o
 MUSL_STAMP  := $(MUSL_DIR)/.configured
 
 $(MUSL_STAMP):
@@ -449,18 +454,41 @@ $(MUSL_STAMP):
 	    CC=$(CC) CROSS_COMPILE=$(CROSS) >/dev/null
 	@touch $@
 
-$(MUSL_LIBC): $(MUSL_STAMP) \
+$(MUSL_LIBC) $(MUSL_CRT1) $(MUSL_CRTI) $(MUSL_CRTN): \
+              $(MUSL_STAMP) \
               $(MUSL_DIR)/arch/aarch64/syscall_arch.h \
               $(MUSL_DIR)/src/thread/aarch64/syscall_cp.s
-	$(MAKE) -C $(MUSL_DIR) lib/libc.a
+	$(MAKE) -C $(MUSL_DIR) lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o
 
-musl-libc: $(MUSL_LIBC)
+musl-libc: $(MUSL_LIBC) $(MUSL_CRT1) $(MUSL_CRTI) $(MUSL_CRTN)
 .PHONY: musl-libc
 
 musl-clean:
 	-$(MAKE) -C $(MUSL_DIR) clean 2>/dev/null
 	rm -f $(MUSL_STAMP) $(MUSL_DIR)/config.mak
 .PHONY: musl-clean
+
+# Slice 7.6c.3b — first EL0 C demo against musl's libc.a + crt set.
+# Same freestanding flag set as the libnxlibc-linked demos; link line
+# differs only in the libc + crt selection.  -nostdlib keeps gcc's
+# default crt0/crt1 search out of the way; we explicitly list
+# musl's crt1.o + crti.o (program-init prologue) + libc.a + crtn.o
+# (program-init epilogue).
+test/kernel/posix_musl_prog.o: test/kernel/posix_musl_prog.c
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_musl_prog.elf: test/kernel/posix_musl_prog.o \
+                                 $(MUSL_CRT1) $(MUSL_CRTI) \
+                                 $(MUSL_LIBC) $(MUSL_CRTN) \
+                                 test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    $(MUSL_CRT1) $(MUSL_CRTI) \
+	    test/kernel/posix_musl_prog.o \
+	    --start-group $(MUSL_LIBC) --end-group \
+	    $(MUSL_CRTN)
+
+test/kernel/posix_musl_prog_blob.o: test/kernel/posix_musl_prog_blob.S \
+                                    test/kernel/posix_musl_prog.elf
 
 # Tests
 test: verify-registry test-tools test-host test-kernel musl-libc
@@ -511,6 +539,7 @@ clean:
 	       test/kernel/posix_printf_prog.elf \
 	       test/kernel/argv_parent_prog.elf \
 	       test/kernel/argv_child_prog.elf \
+	       test/kernel/posix_musl_prog.elf \
 	       components/posix_shim/libnxlibc.a \
 	       test/kernel/initramfs.cpio test/kernel/banner.txt
 

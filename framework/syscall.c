@@ -22,6 +22,7 @@
 #if !__STDC_HOSTED__
 #include "core/lib/lib.h"              /* uart_putc, memcpy */
 #include "core/cpu/exception.h"        /* struct trap_frame */
+#include "core/cpu/monotonic.h"        /* nx_monotonic_raw — AT_RANDOM seed */
 #include "core/mmu/mmu.h"              /* mmu_user_window_{base,size} */
 #else
 #include <string.h>                    /* memcpy */
@@ -977,14 +978,30 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
      *      `mmu_address_space_user_backing` (same trick the ELF
      *      loader uses for its PT_LOAD copies).
      *
-     *      Stack layout, low (sp) to high:
+     *      Stack layout, low (sp) to high (slice 7.6c.3b extends
+     *      with AUXV between envp NULL and the argv strings):
      *        sp+0:                argc
      *        sp+8 .. sp+8+8*argc: argv[0]..argv[argc-1]
-     *        sp+8+8*(argc+1):     NULL (argv terminator)
-     *        sp+8+8*(argc+2):     NULL (envp[0] = end-of-envp)
+     *        sp+8*(argc+1):       NULL  (argv terminator)
+     *        sp+8*(argc+2):       NULL  (envp[0] = end-of-envp)
+     *        sp+8*(argc+3..4):    AT_PAGESZ pair (key=6, val=4096)
+     *        sp+8*(argc+5..6):    AT_RANDOM pair (key=25, val=&pad)
+     *        sp+8*(argc+7..8):    AT_NULL pair (key=0, val=0)
+     *        ...                  16-byte AT_RANDOM pad (8-aligned)
      *        ...                  argv strings (8-aligned, at top)
      *
      *      sp_el0 lands at the `argc` slot.  16-byte-aligned per AAPCS.
+     *
+     *      AUXV is what musl's `__libc_start_main` walks during
+     *      libc init.  AT_PAGESZ feeds malloc's allocation rounding;
+     *      AT_RANDOM is dereferenced by `__init_ssp` to seed the
+     *      stack canary.  v1 entropy comes from the ARM virtual
+     *      counter (`nx_monotonic_raw`) — pseudo, not cryptographic;
+     *      a real entropy source is a Phase-9 follow-up.  We don't
+     *      emit AT_PHDR/AT_PHENT/AT_PHNUM (musl uses them only when
+     *      walking PT_TLS — our static-no-thread programs don't have
+     *      one, so the absent entries are equivalent to "loop runs
+     *      zero iterations").
      */
     void *new_backing = mmu_address_space_user_backing(new_root);
     uint64_t window_base = mmu_user_window_base();
@@ -995,19 +1012,39 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
         uint64_t str_offset = (window_size - argv_str_len) & ~(uint64_t)7u;
         memcpy((char *)new_backing + str_offset, argv_strs, argv_str_len);
 
-        /* Pointer area below strings.  Slot count: 1 (argc) + argc
-         * (argv[0..argc-1]) + 1 (argv NULL terminator) + 1 (envp[0]
-         * = empty-environment NULL) = 3 + argc slots × 8 bytes.
+        /* 16-byte AT_RANDOM pad sits below the strings, 8-aligned. */
+        uint64_t at_random_offset = (str_offset - 16u) & ~(uint64_t)7u;
+        {
+            uint8_t *pad = (uint8_t *)new_backing + at_random_offset;
+            bool ok = false;
+            uint64_t seed = nx_monotonic_raw(&ok);
+            /* Splat the seed into 16 bytes with a per-byte spreader
+             * so the canary differs even when seed-bits-of-interest
+             * are sparse.  Not cryptographic — see header comment. */
+            for (int i = 0; i < 16; i++)
+                pad[i] = (uint8_t)((seed >> (i * 4)) ^ (uint8_t)(i * 0x37));
+        }
+
+        /* Pointer area below the AT_RANDOM pad.  Slot count:
+         *   1 (argc) + argc (argv body) + 1 (argv NULL)
+         *   + 1 (envp NULL) + 6 (AUXV: 3 pairs × 2)
+         *   = argc + 9 slots × 8 bytes.
          * Round sp down to 16 for AAPCS. */
-        uint64_t fixed_size = 8u * (3u + argc);
-        uint64_t sp_offset  = (str_offset - fixed_size) & ~(uint64_t)15u;
+        uint64_t fixed_size = 8u * (9u + argc);
+        uint64_t sp_offset  = (at_random_offset - fixed_size) & ~(uint64_t)15u;
 
         uint64_t *u = (uint64_t *)((char *)new_backing + sp_offset);
         u[0] = argc;
         for (size_t i = 0; i < argc; i++)
             u[1 + i] = window_base + str_offset + argv_offsets[i];
-        u[1 + argc] = 0;          /* argv terminator */
-        u[2 + argc] = 0;          /* envp[0] = NULL */
+        u[1 + argc] = 0;            /* argv terminator */
+        u[2 + argc] = 0;            /* envp[0] = NULL */
+        u[3 + argc] = 6;            /* AT_PAGESZ */
+        u[4 + argc] = 4096;
+        u[5 + argc] = 25;           /* AT_RANDOM */
+        u[6 + argc] = window_base + at_random_offset;
+        u[7 + argc] = 0;            /* AT_NULL */
+        u[8 + argc] = 0;
 
         new_sp = window_base + sp_offset;
     } else {

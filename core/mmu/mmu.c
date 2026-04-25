@@ -192,6 +192,22 @@ void mmu_init(void)
     sctlr |= (1UL << 12);  /* I  — I-cache enable          */
     asm volatile ("msr sctlr_el1, %0" :: "r"(sctlr) : "memory");
     asm volatile ("isb");
+
+    /* Slice 7.6c.3b: enable EL0 access to FP/SIMD.  CPACR_EL1.FPEN =
+     * 0b11 means "no trap from any EL"; the kernel itself is built
+     * with -mgeneral-regs-only so it never touches FP/SIMD, but EL0
+     * userspace (musl's memset, busybox, etc.) freely uses NEON.  In
+     * v1 we don't save/restore FP state on context switch — the
+     * single-EL0-task-at-a-time pattern in our ktests means FP
+     * registers stay coherent for the running task.  Cross-task FP
+     * persistence (e.g. a long-running busybox shell parented over
+     * forked children that also use FP) lands with a future
+     * "FP context save on schedule" slice. */
+    uint64_t cpacr;
+    asm volatile ("mrs %0, cpacr_el1" : "=r"(cpacr));
+    cpacr |= (3UL << 20);  /* FPEN = 0b11 — no trap on FP/SIMD */
+    asm volatile ("msr cpacr_el1, %0" :: "r"(cpacr) : "memory");
+    asm volatile ("isb");
 }
 
 int mmu_is_enabled(void)
