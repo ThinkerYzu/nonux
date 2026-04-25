@@ -77,9 +77,9 @@ KTEST(musl_exec_parent_forks_and_execs_musl_child_returns_57)
                                       &g_mep_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_mep_task = sched_spawn_kthread("musl-exec-el0", mep_el0_kthread, 0);
+    g_mep_task = sched_spawn_kthread("musl-exec-el0", mep_el0_kthread, 0,
+                                     g_mep_host);
     KASSERT_NOT_NULL(g_mep_task);
-    g_mep_task->process = g_mep_host;
 
     /* The parent emits two markers + waits for the child;
      * child emits one marker (`[musl-ok]`) + exits 57.  Total:

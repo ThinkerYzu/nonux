@@ -73,9 +73,9 @@ KTEST(posix_libc_write_routes_stdout_through_debug_and_exit_53)
                                       &g_libc_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_libc_task = sched_spawn_kthread("libc-el0", libc_el0_kthread, 0);
+    g_libc_task = sched_spawn_kthread("libc-el0", libc_el0_kthread, 0,
+                                      g_libc_host);
     KASSERT_NOT_NULL(g_libc_task);
-    g_libc_task->process = g_libc_host;
 
     /* Single debug_write expected: `[libc-ok]` from nxlibc_write
      * routing fd=1 through nx_posix_debug_write. */

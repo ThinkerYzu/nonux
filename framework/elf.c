@@ -162,7 +162,7 @@ int nx_elf_segment(const void *blob, size_t len, uint16_t idx,
 /*
  * Kernel-only helper: resolve a VA in the target's user window to
  * the corresponding kernel-accessible pointer.  The MMU layer
- * hands out the 2 MiB backing chunk for a given TTBR0 root; we
+ * hands out the user-window backing chunk for a given TTBR0 root; we
  * offset into it by `(vaddr - user_window_base)`.  Bounds-checked
  * against the window size.
  *

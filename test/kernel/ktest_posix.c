@@ -93,9 +93,9 @@ KTEST(posix_shim_fork_child_exit_23_parent_waits_and_emits_ok)
     KASSERT_EQ_U(rc, NX_OK);
     KASSERT_EQ_U(g_posix_entry, mmu_user_window_base());
 
-    g_posix_task = sched_spawn_kthread("posix-el0", posix_el0_kthread, 0);
+    g_posix_task = sched_spawn_kthread("posix-el0", posix_el0_kthread, 0,
+                                       g_posix_host);
     KASSERT_NOT_NULL(g_posix_task);
-    g_posix_task->process = g_posix_host;
 
     /* Three markers expected: [posix-parent], [posix-child],
      * [posix-ok].  Each is a single NX_SYS_DEBUG_WRITE. */

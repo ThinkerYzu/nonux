@@ -171,3 +171,28 @@ size_t pmm_total_count(void)
 {
     return g_total - g_reserved;
 }
+
+void pmm_reserve_range(uintptr_t pa, size_t bytes)
+{
+    /* Round inward / outward symmetrically so the entire requested range
+     * is covered by reserved pages. */
+    uintptr_t start = pa & ~(uintptr_t)(PMM_PAGE_SIZE - 1);
+    uintptr_t end   = (pa + bytes + PMM_PAGE_SIZE - 1) &
+                      ~(uintptr_t)(PMM_PAGE_SIZE - 1);
+    if (end <= start) return;
+
+    if (start < g_base) start = g_base;
+    if (start >= g_base + (uintptr_t)g_total * PMM_PAGE_SIZE) return;
+    if (end   >  g_base + (uintptr_t)g_total * PMM_PAGE_SIZE) {
+        end = g_base + (uintptr_t)g_total * PMM_PAGE_SIZE;
+    }
+
+    size_t i_start = (start - g_base) >> PMM_PAGE_SHIFT;
+    size_t i_end   = (end   - g_base) >> PMM_PAGE_SHIFT;
+
+    for (size_t i = i_start; i < i_end; i++) {
+        if (try_claim(i)) {
+            __atomic_fetch_sub(&g_free, 1, __ATOMIC_RELAXED);
+        }
+    }
+}

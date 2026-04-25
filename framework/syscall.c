@@ -1287,9 +1287,12 @@ static nx_status_t sys_writev(uint64_t a0, uint64_t a1, uint64_t a2,
  * mallocng does exactly this).  No errno code is returned.
  *
  * Heap region: [base + NX_PROCESS_HEAP_OFFSET ..
- *               base + NX_PROCESS_HEAP_LIMIT) — 512 KiB inside the
- * existing 2 MiB user-window backing.  No extra kernel allocation;
- * we just track the high-water mark per process.
+ *               base + NX_PROCESS_HEAP_LIMIT) — 1.5 MiB inside the
+ * existing 8 MiB user-window backing (slice 7.6d.2b grew the window
+ * from 2 MiB to 8 MiB; heap relocated from [+1 MiB, +1.5 MiB) to
+ * [+6 MiB, +7.5 MiB) so it doesn't overlap busybox's data/bss).
+ * No extra kernel allocation; we just track the high-water mark per
+ * process.
  *
  * The host build path returns 0 (no MMU, no heap concept).  Kernel
  * tests exercise the real path.

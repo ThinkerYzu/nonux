@@ -76,9 +76,9 @@ KTEST(posix_pipe_xproc_parent_writes_child_reads_via_inherited_handles)
                                       &g_xpipe_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_xpipe_task = sched_spawn_kthread("xpipe-el0", xpipe_el0_kthread, 0);
+    g_xpipe_task = sched_spawn_kthread("xpipe-el0", xpipe_el0_kthread, 0,
+                                       g_xpipe_host);
     KASSERT_NOT_NULL(g_xpipe_task);
-    g_xpipe_task->process = g_xpipe_host;
 
     /* Three markers expected: [xpipe-parent], [xpipe-child],
      * [xpipe-ok].  Each is one debug_write — counter == 3 means the

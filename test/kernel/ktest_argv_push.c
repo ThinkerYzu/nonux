@@ -85,9 +85,9 @@ KTEST(sys_exec_pushes_argv_and_child_observes_strings_via_main)
                                       &g_argv_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_argv_task = sched_spawn_kthread("argv-el0", argv_el0_kthread, 0);
+    g_argv_task = sched_spawn_kthread("argv-el0", argv_el0_kthread, 0,
+                                      g_argv_host);
     KASSERT_NOT_NULL(g_argv_task);
-    g_argv_task->process = g_argv_host;
 
     /* Markers expected (in any scheduling order between parent and
      * child, but all 6 must arrive):

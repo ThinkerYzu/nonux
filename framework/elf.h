@@ -22,7 +22,7 @@
  *   - Little-endian (EI_DATA == ELFDATA2LSB).
  *   - ET_EXEC (static executable) with EM_AARCH64.
  *   - Any number of PT_LOAD segments, as long as every one lands
- *     entirely inside the process's 2 MiB user window
+ *     entirely inside the process's user window
  *     (`mmu_user_window_base() .. +mmu_user_window_size()`).
  *
  * What we DON'T support in v1.
@@ -32,7 +32,7 @@
  *     addresses baked in; we just copy bytes.
  *   - Symbol tables, debug info.  Loader ignores every section
  *     that isn't PT_LOAD.
- *   - BSS zeroing beyond the 2 MiB window.  If `p_memsz` extends
+ *   - BSS zeroing beyond the user window.  If `p_memsz` extends
  *     past the window end, load returns NX_ENOMEM.
  *
  * Kernel-vs-host.
@@ -120,8 +120,8 @@ int nx_elf_segment(const void *blob, size_t len, uint16_t idx,
  *
  * Semantics:
  *   - Segment bytes go to `target`'s user-window backing (the
- *     2 MiB block the slice-7.2 MMU layer carved out for this
- *     process).  The VA stays within
+ *     contiguous 2 MiB blocks the MMU layer carved out for this
+ *     process — currently 4 blocks = 8 MiB).  The VA stays within
  *     `[mmu_user_window_base(), +size)`; anything that crosses
  *     either boundary returns NX_ENOMEM.
  *   - `mem_size - file_size` bytes past the copied region are

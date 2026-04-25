@@ -78,9 +78,9 @@ KTEST(posix_pipe_write_read_roundtrip_via_nx_posix_wrappers)
     KASSERT_EQ_U(rc, NX_OK);
     KASSERT_EQ_U(g_pipe_entry, mmu_user_window_base());
 
-    g_pipe_task = sched_spawn_kthread("pipe-el0", pipe_el0_kthread, 0);
+    g_pipe_task = sched_spawn_kthread("pipe-el0", pipe_el0_kthread, 0,
+                                      g_pipe_host);
     KASSERT_NOT_NULL(g_pipe_task);
-    g_pipe_task->process = g_pipe_host;
 
     /* Single debug_write expected: `[pipe-ok]`.  Any earlier error
      * in the EL0 program calls exit() before hitting debug_write,

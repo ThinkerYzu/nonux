@@ -73,9 +73,9 @@ KTEST(fork_el0_parent_and_child_each_emit_their_marker)
     g_fork_parent = nx_process_create("fork-parent");
     KASSERT_NOT_NULL(g_fork_parent);
 
-    g_fork_task = sched_spawn_kthread("fork-el0", fork_el0_kthread, 0);
+    g_fork_task = sched_spawn_kthread("fork-el0", fork_el0_kthread, 0,
+                                      g_fork_parent);
     KASSERT_NOT_NULL(g_fork_task);
-    g_fork_task->process = g_fork_parent;
 
     /* Yield until the debug_write counter reaches 2 — one from the
      * parent, one from the child.  Gives the scheduler time to

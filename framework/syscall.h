@@ -103,10 +103,10 @@ enum nx_syscall_number {
                                   *   new break (== requested on
                                   *   success, == old break if
                                   *   out-of-range).  Heap lives in
-                                  *   the process's existing 2 MiB
+                                  *   the process's existing 8 MiB
                                   *   user-window backing —
-                                  *   [base + 1 MiB .. base + 1.5 MiB)
-                                  *   reserves 512 KiB.  See
+                                  *   [base + 6 MiB .. base + 7.5 MiB)
+                                  *   reserves 1.5 MiB.  See
                                   *   NX_PROCESS_HEAP_{OFFSET,LIMIT}
                                   *   in framework/process.h. */
     NX_SYS_WRITEV         = 18,  /* (nx_handle_t h, struct iovec *iov,

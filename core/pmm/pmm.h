@@ -44,4 +44,16 @@ void pmm_free_pages(void *page, size_t count);
 size_t pmm_free_count(void);
 size_t pmm_total_count(void);
 
+/* Reserve a physical-address range [pa, pa+bytes) so subsequent allocations
+ * never return any page that overlaps it.  Used by mmu_init to keep the
+ * user-window VA range (slot USER_WINDOW_INDEX..) off-limits for kernel-
+ * internal data — per-process TTBR0 overrides those VAs to user_block, so
+ * any kernel-side write at PA = identity-VA in that range would alias to
+ * the wrong user_pa when running under a process's address space.
+ *
+ * Idempotent for already-allocated pages; no-op for ranges outside the
+ * PMM pool.  Should be called once during boot, immediately after
+ * pmm_init. */
+void pmm_reserve_range(uintptr_t pa, size_t bytes);
+
 #endif /* NONUX_PMM_H */

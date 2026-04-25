@@ -106,9 +106,9 @@ KTEST(exec_fork_child_execs_init_parent_waits_for_exit_17)
     KASSERT_NOT_NULL(g_exec_parent);
     exec_parent_pid = g_exec_parent->pid;
 
-    g_exec_task = sched_spawn_kthread("exec-el0", exec_el0_kthread, 0);
+    g_exec_task = sched_spawn_kthread("exec-el0", exec_el0_kthread, 0,
+                                      g_exec_parent);
     KASSERT_NOT_NULL(g_exec_task);
-    g_exec_task->process = g_exec_parent;
 
     /* Three markers expected: [exec-parent], [el0-elf-ok] (from
      * the exec'd init_prog), [exec-ok] (from parent after wait

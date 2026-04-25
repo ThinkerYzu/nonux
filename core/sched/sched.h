@@ -116,11 +116,27 @@ void nx_task_yield(void);
  * of PMM memory are allocated.  On success the returned task is ready
  * to run and the scheduler will pick it up on the next reschedule.
  *
+ * `process` selects the task's process binding:
+ *   - NULL: inherit from the caller's current task (production default;
+ *     all framework kthreads use this).
+ *   - non-NULL: bind to the given process BEFORE the task is enqueued.
+ *     Required when the spawned kthread will drop_to_el0 — the
+ *     scheduler reads `next->process->ttbr0_root` in `sched_check_resched`
+ *     to decide whether to flip TTBR0.  If the assignment happens
+ *     after enqueue, the scheduler can pick the kthread between
+ *     enqueue and assignment, see process == kernel-process, leave
+ *     TTBR0 pointed at the kernel root, and drop_to_el0 will execute
+ *     whatever bytes happen to live at PA mmu_user_window_base() in
+ *     the kernel's identity map (slice 7.6d.2b made this race
+ *     guaranteed to fault — see logs/session-51-user-window-grow.md).
+ *
  * This is a core primitive, not a component-spawned worker — the
  * slice-3.8 `spawns_threads ⇒ pause_hook` manifest rule does not apply.
  */
+struct nx_process;
 struct nx_task *sched_spawn_kthread(const char *name,
                                     void (*entry)(void *),
-                                    void *arg);
+                                    void *arg,
+                                    struct nx_process *process);
 
 #endif /* NONUX_SCHED_SCHED_H */

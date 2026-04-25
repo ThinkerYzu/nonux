@@ -225,10 +225,16 @@ void nx_task_yield(void)
 
 struct nx_task *sched_spawn_kthread(const char *name,
                                     void (*entry)(void *),
-                                    void *arg)
+                                    void *arg,
+                                    struct nx_process *process)
 {
     struct nx_task *t = nx_task_create(name, entry, arg, 1);
     if (!t) return NULL;
+    /* Slice 7.6d.2b: bind the explicit process BEFORE enqueue so the
+     * scheduler's first sched_check_resched of this task sees the
+     * intended process and flips TTBR0 accordingly.  See header for
+     * the race-window rationale. */
+    if (process) t->process = process;
     if (g_sched_ops) {
         int rc = g_sched_ops->enqueue(g_sched_self, t);
         if (rc != 0) {

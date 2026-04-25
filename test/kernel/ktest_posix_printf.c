@@ -73,9 +73,9 @@ KTEST(posix_printf_emits_every_conversion_and_exits_37)
                                       &g_pf_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_pf_task = sched_spawn_kthread("printf-el0", pf_el0_kthread, 0);
+    g_pf_task = sched_spawn_kthread("printf-el0", pf_el0_kthread, 0,
+                                    g_pf_host);
     KASSERT_NOT_NULL(g_pf_task);
-    g_pf_task->process = g_pf_host;
 
     /* 9 printf + 1 atoi-printf + 1 puts (=2 writes — body + newline)
      * = 12 debug_writes total.  Use ≥ 10 as the lower bound to be

@@ -65,7 +65,8 @@ KTEST(el0_channel_create_send_recv_round_trip)
     nx_syscall_reset_for_test();
     KASSERT_EQ_U(nx_syscall_debug_write_calls(), 0);
 
-    g_chan_el0_task = sched_spawn_kthread("el0_chan", chan_el0_kthread, 0);
+    g_chan_el0_task = sched_spawn_kthread("el0_chan", chan_el0_kthread, 0,
+                                          NULL);
     KASSERT_NOT_NULL(g_chan_el0_task);
 
     /* Yield until EL0 reaches the final debug_write.  The program

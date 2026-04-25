@@ -79,9 +79,9 @@ KTEST(posix_musl_printf_emits_every_conversion_and_exits_67)
                                       &g_mp_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_mp_task = sched_spawn_kthread("musl-pf-el0", mp_el0_kthread, 0);
+    g_mp_task = sched_spawn_kthread("musl-pf-el0", mp_el0_kthread, 0,
+                                    g_mp_host);
     KASSERT_NOT_NULL(g_mp_task);
-    g_mp_task->process = g_mp_host;
 
     int found = 0;
     for (int i = 0; i < 8192; i++) {

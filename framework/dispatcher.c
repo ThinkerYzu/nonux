@@ -133,7 +133,7 @@ int nx_dispatcher_init(void)
     if (g_disp_kthread_spawned) return NX_OK;
     struct nx_task *t = sched_spawn_kthread("nx_disp",
                                             nx_dispatcher_kthread_entry,
-                                            NULL);
+                                            NULL, NULL);
     if (!t) return NX_ENOMEM;
     g_disp_kthread_spawned = true;
     return NX_OK;

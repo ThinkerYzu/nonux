@@ -90,7 +90,7 @@ KTEST(process_exit_marks_current_process_exited_with_code)
     KASSERT_NOT_NULL(g_exit_target);
     KASSERT_EQ_U(g_exit_target->state, NX_PROCESS_STATE_ACTIVE);
 
-    g_exit_task = sched_spawn_kthread("exiter", exit_kthread, 0);
+    g_exit_task = sched_spawn_kthread("exiter", exit_kthread, 0, g_exit_target);
     KASSERT_NOT_NULL(g_exit_task);
 
     /* Yield until the kthread has reached nx_process_exit.  It parks
@@ -263,12 +263,10 @@ KTEST(process_context_switch_flips_ttbr0)
     /* Spawn the two kthreads, each pinned to its process.  They'll
      * yield forever once they've read their byte; the test body
      * yields until both have recorded. */
-    struct nx_task *ta = sched_spawn_kthread("cs-a", as_thread_a, 0);
-    struct nx_task *tb = sched_spawn_kthread("cs-b", as_thread_b, 0);
+    struct nx_task *ta = sched_spawn_kthread("cs-a", as_thread_a, 0, pa);
+    struct nx_task *tb = sched_spawn_kthread("cs-b", as_thread_b, 0, pb);
     KASSERT_NOT_NULL(ta);
     KASSERT_NOT_NULL(tb);
-    ta->process = pa;
-    tb->process = pb;
 
     const int max_yields = 256;
     int reached = 0;

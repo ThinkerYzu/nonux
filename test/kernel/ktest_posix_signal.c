@@ -72,9 +72,9 @@ KTEST(posix_signal_sigterm_kills_forked_child_with_status_143)
                                       &g_sig_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_sig_task = sched_spawn_kthread("signal-el0", sig_el0_kthread, 0);
+    g_sig_task = sched_spawn_kthread("signal-el0", sig_el0_kthread, 0,
+                                     g_sig_host);
     KASSERT_NOT_NULL(g_sig_task);
-    g_sig_task->process = g_sig_host;
 
     /* Three markers expected: [signal-parent] (parent pre-kill),
      * [signal-child] (child pre-loop), [signal-ok] (parent after

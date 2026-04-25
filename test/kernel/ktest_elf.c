@@ -105,9 +105,9 @@ KTEST(elf_load_and_drop_to_el0_runs_marker_syscall)
     KASSERT_EQ_U(rc, NX_OK);
     KASSERT_EQ_U(g_elf_entry, mmu_user_window_base());
 
-    g_elf_task = sched_spawn_kthread("elf-el0", elf_el0_kthread, 0);
+    g_elf_task = sched_spawn_kthread("elf-el0", elf_el0_kthread, 0,
+                                     g_elf_target);
     KASSERT_NOT_NULL(g_elf_task);
-    g_elf_task->process = g_elf_target;
 
     /* Yield until the EL0 program reaches its single debug_write.
      * That SVC is the only counter-bumping event in the program, so

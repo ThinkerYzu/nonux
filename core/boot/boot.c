@@ -63,7 +63,19 @@ void boot_main(void)
 
     uintptr_t pmm_base = (uintptr_t)__free_mem_start;
     pmm_init(pmm_base, (size_t)(RAM_END - pmm_base));
-    kprintf("[pmm]  total=%lu free=%lu pages (%lu KiB)\n",
+    /* Slice 7.6d.2b: reserve the user-window VA range from PMM so kernel
+     * data (kstacks, page tables, slab pages) never lands at a PA that
+     * overlaps it.  Per-process TTBR0 has slot USER_WINDOW_INDEX..
+     * overridden as user_block descriptors pointing at the process's
+     * own user_pa, so EL1 access via identity-VA in that range would
+     * alias to the wrong PA when running under a process's TTBR0 —
+     * the failure mode is invisible until the kernel happens to access
+     * its own stack/state via VA in the range, which is intermittent
+     * for 2 MiB user windows and guaranteed once user_pa chunks reach
+     * 8 MiB and routinely span the user-window PA range. */
+    pmm_reserve_range((uintptr_t)mmu_user_window_base(),
+                      (size_t)mmu_user_window_size());
+    kprintf("[pmm]  total=%lu free=%lu pages (%lu KiB) [user-window reserved]\n",
             (uint64_t)pmm_total_count(),
             (uint64_t)pmm_free_count(),
             (uint64_t)pmm_free_count() * 4);

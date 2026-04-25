@@ -130,16 +130,20 @@ static inline uint64_t user_block(uint64_t pa)
 
 /* ---------- Bring-up --------------------------------------------------- */
 
-/* User window: a single 2 MiB block carved out of L2_ram for EL0 code +
- * stack.  Chosen so it's deep enough into RAM to be clear of the PMM's
- * near-term allocations (kernel image ends around 0x40096000; PMM hands
- * out contiguously from 0x400d6000; 128 MiB in is far past any
- * reasonable slice-5.x consumer).  Slice 5.6+ will move user pages
- * onto per-task TTBR0 tables. */
+/* User window: a contiguous run of 2 MiB blocks carved out of L2_ram
+ * for EL0 code + stack.  Chosen so it's deep enough into RAM to be
+ * clear of the PMM's near-term allocations (kernel image ends around
+ * 0x40096000; PMM hands out contiguously from 0x400d6000; 128 MiB in
+ * is far past any reasonable consumer).  Slice 5.6+ moved user pages
+ * onto per-task TTBR0 tables.  Slice 7.6d.2b grew the window from
+ * one block (2 MiB) to four blocks (8 MiB) so a static-linked
+ * busybox image (~1.91 MiB text+data) leaves room for stack + heap. */
 #define USER_WINDOW_INDEX   64u                        /* L2_ram entry # */
+#define USER_WINDOW_BLOCKS  4u                         /* count of 2 MiB blocks */
 #define USER_WINDOW_VA      (RAM_BASE + \
                              ((uint64_t)USER_WINDOW_INDEX << BLOCK2_SHIFT))
-#define USER_WINDOW_SIZE    ((uint64_t)1 << BLOCK2_SHIFT)
+#define USER_WINDOW_SIZE    ((uint64_t)USER_WINDOW_BLOCKS << BLOCK2_SHIFT)
+#define USER_BLOCK_SIZE     ((uint64_t)1 << BLOCK2_SHIFT)  /* 2 MiB block alignment */
 
 uint64_t mmu_user_window_base(void) { return USER_WINDOW_VA; }
 uint64_t mmu_user_window_size(void) { return USER_WINDOW_SIZE; }
@@ -152,9 +156,18 @@ void mmu_init(void)
         l2_ram_table[i]  = normal_block(RAM_BASE  + (i << BLOCK2_SHIFT));
     }
 
-    /* Upgrade the user-window slot's permissions so EL0 can read /
-     * write / execute within it.  Still identity-mapped to the same
-     * physical 2 MiB (VA == PA). */
+    /* Upgrade slot USER_WINDOW_INDEX's permissions so EL0 can access
+     * the first user-window block in the kernel's address space.
+     * Slice-5.5 era artifact for drop_to_el0 with kernel TTBR0 (no
+     * per-process address space yet).  Per-process L2_ram tables
+     * overwrite USER_WINDOW_INDEX..USER_WINDOW_INDEX+USER_WINDOW_BLOCKS-1
+     * with user_block descriptors pointing at the per-process
+     * backing — see mmu_create_address_space.  We deliberately leave
+     * the kernel's slots USER_WINDOW_INDEX+1.. as normal_block
+     * (kernel-only) so a stray EL0 access via the kernel TTBR0
+     * faults rather than silently aliasing the kernel's identity
+     * map of those PAs (which often coincides with some other
+     * process's user backing post-slice-7.6d.2b). */
     l2_ram_table[USER_WINDOW_INDEX] =
         user_block(RAM_BASE + ((uint64_t)USER_WINDOW_INDEX << BLOCK2_SHIFT));
 
@@ -227,23 +240,24 @@ int mmu_is_enabled(void)
  *     [2..511] invalid     (no mapping)
  *
  *   L2_ram_priv[512]       fresh 4 KiB page, aligned to 4 KiB
- *     [0..63]  = kernel's l2_ram_table[0..63]  (RAM, kernel-only, shared PAs)
- *     [64]     = user_block(user_backing)      (this process's private 2 MiB)
- *     [65..511] = kernel's l2_ram_table[65..511]
+ *     [0..63]    = kernel's l2_ram_table[0..63]   (RAM, kernel-only, shared PAs)
+ *     [64..67]   = user_block(user_backing + i*2 MiB)  (private 8 MiB)
+ *     [68..511]  = kernel's l2_ram_table[68..511]
  *
- *   user_backing           fresh 2 MiB chunk, aligned to 2 MiB (via malloc
- *                          which routes through PMM for large allocs;
- *                          PMM hands back page-aligned PA-contiguous runs,
- *                          and for ≥ 2 MiB the alignment happens to
- *                          coincide because PMM advances by pages only —
- *                          we align the result manually below to be safe).
+ *   user_backing           fresh USER_WINDOW_SIZE (8 MiB) chunk, aligned
+ *                          to USER_BLOCK_SIZE (2 MiB) — each L2 block is
+ *                          2 MiB-granular, so the four contiguous slots
+ *                          just need the start address to be 2 MiB-aligned;
+ *                          subsequent slots follow by stride.  We align
+ *                          the malloc result manually (PMM advances by
+ *                          pages only, so the raw return is 4 KiB-aligned).
  */
 
 #if !__STDC_HOSTED__
 /*
  * Bookkeeping for destroy.  An L1 root is an opaque `uint64_t l1_pa`; to
  * free it we need to know which physical pages hold L1_priv, L2_ram_priv,
- * and the 2 MiB user backing.  We stash them in a small header placed at
+ * and the 8 MiB user backing.  We stash them in a small header placed at
  * the FRONT of the L1 page — the page is 4 KiB, the header is 24 bytes,
  * and the actual page-table descriptors start at a 4 KiB alignment.
  * Using the same page for the header keeps per-process state inline and
@@ -263,7 +277,7 @@ struct mmu_address_space {
     uint64_t  l1_root_pa;     /* == (uintptr_t)l1_page */
     void     *l1_page;        /* 4 KiB L1 table */
     void     *l2_ram_page;    /* 4 KiB L2_ram */
-    void     *user_backing;   /* 2 MiB user window */
+    void     *user_backing;   /* USER_WINDOW_SIZE (8 MiB) user window */
     void     *user_backing_raw;  /* the unaligned malloc() return — for free */
 };
 
@@ -309,26 +323,34 @@ uint64_t mmu_create_address_space(void)
         return 0;
     }
 
-    /* 2 MiB user backing — malloc an extra 2 MiB to align to a 2 MiB
-     * boundary manually.  PMM's pages are 4 KiB, so without this
-     * we'd get a 4 KiB-aligned chunk that may straddle a 2 MiB
-     * boundary, which makes it unusable as an L2 block. */
-    void *raw = malloc(USER_WINDOW_SIZE * 2);
+    /* User backing — `USER_WINDOW_SIZE` bytes (8 MiB after slice
+     * 7.6d.2b) of contiguous RAM, aligned to a 2 MiB block boundary.
+     * Each L2 block is 2 MiB-granular, so the four contiguous slots
+     * just need the START address to be 2 MiB-aligned; the rest
+     * follow by stride.  Trim alignment slack to one block (was
+     * USER_WINDOW_SIZE * 2 in the 2 MiB era — wasteful at 8 MiB). */
+    void *raw = malloc(USER_WINDOW_SIZE + USER_BLOCK_SIZE);
     if (!raw) {
         free(l1); free(l2r);
         return 0;
     }
-    uint64_t user_pa = ((uint64_t)(uintptr_t)raw + USER_WINDOW_SIZE - 1) &
-                       ~(USER_WINDOW_SIZE - 1);
+    uint64_t user_pa = ((uint64_t)(uintptr_t)raw + USER_BLOCK_SIZE - 1) &
+                       ~(USER_BLOCK_SIZE - 1);
 
     /* Populate L1: [0] shares kernel l2_mmio, [1] points at new L2_ram. */
     for (int i = 0; i < 512; i++) l1[i] = 0;
     l1[0] = (uint64_t)(uintptr_t)l2_mmio_table | DESC_VALID | DESC_TABLE;
     l1[1] = (uint64_t)(uintptr_t)l2r           | DESC_VALID | DESC_TABLE;
 
-    /* Populate L2_ram: copy kernel's RAM map, then overwrite slot 64. */
+    /* Populate L2_ram: copy kernel's RAM map, then overwrite the
+     * USER_WINDOW_BLOCKS slots starting at USER_WINDOW_INDEX with
+     * descriptors pointing at consecutive 2 MiB chunks of the
+     * per-process backing. */
     for (int i = 0; i < 512; i++) l2r[i] = l2_ram_table[i];
-    l2r[USER_WINDOW_INDEX] = user_block(user_pa);
+    for (uint64_t i = 0; i < USER_WINDOW_BLOCKS; i++) {
+        l2r[USER_WINDOW_INDEX + i] =
+            user_block(user_pa + (i << BLOCK2_SHIFT));
+    }
 
     s->l1_root_pa       = (uint64_t)(uintptr_t)l1;
     s->l1_page          = l1;
@@ -421,7 +443,40 @@ void mmu_copy_user_backing(uint64_t src_root, uint64_t dst_root)
     void *src = mmu_address_space_user_backing(src_root);
     void *dst = mmu_address_space_user_backing(dst_root);
     if (!src || !dst || src == dst) return;
+
+    /* Slice 7.6d.2b: the memcpy below uses kernel-mode pointers (=
+     * physical addresses, since the kernel runs with an identity
+     * map for all of RAM).  We arrived here from a syscall while the
+     * caller's process TTBR0 is active, and that TTBR0's L2 has slots
+     * USER_WINDOW_INDEX..+USER_WINDOW_BLOCKS-1 overridden as
+     * user_block descriptors pointing at the caller's own user_pa.
+     * If the destination PA range (dst..dst+USER_WINDOW_SIZE) crosses
+     * the user-window VA (0x48000000..+USER_WINDOW_SIZE) — increasingly
+     * likely now that user_pa chunks are 8 MiB — the memcpy's writes
+     * via the user-window VA would translate back to the *caller's*
+     * user_pa instead of dst's PA.  The kernel address space's
+     * identity map keeps slot USER_WINDOW_INDEX pointing at PA
+     * RAM_BASE+(slot<<BLOCK2_SHIFT), so the same VA resolves to the
+     * intended PA there.  Switch to kernel TTBR0 for the copy + back
+     * before returning so the caller's RESTORE_TRAPFRAME + eret keeps
+     * working in the caller's address space.
+     *
+     * We do the switch via raw `msr` rather than
+     * mmu_switch_address_space() because the latter does a tlbi that
+     * blows the entire TLB — overkill twice in a hot path (fork is
+     * already slow).  The raw msr + isb is enough to make subsequent
+     * fetches/loads use the new root; the existing TLB entries for
+     * non-user-window VAs (e.g. the kernel's own code/data) stay
+     * valid because they're identical across roots. */
+    uint64_t saved_ttbr0;
+    asm volatile ("mrs %0, ttbr0_el1" : "=r"(saved_ttbr0));
+    asm volatile ("msr ttbr0_el1, %0" :: "r"(mmu_kernel_address_space()) : "memory");
+    asm volatile ("isb");
+
     memcpy(dst, src, USER_WINDOW_SIZE);
+
+    asm volatile ("msr ttbr0_el1, %0" :: "r"(saved_ttbr0) : "memory");
+    asm volatile ("isb");
     /* Same cache-coherence sequence as the ELF loader's post-copy
      * barrier: freshly-copied bytes may hold executable code. */
     asm volatile ("dsb ish"  ::: "memory");

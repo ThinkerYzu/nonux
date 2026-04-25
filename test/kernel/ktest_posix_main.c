@@ -71,9 +71,9 @@ KTEST(posix_main_entry_invokes_main_with_argv_and_returns_exit_code)
     KASSERT_EQ_U(rc, NX_OK);
     KASSERT_EQ_U(g_main_entry, mmu_user_window_base());
 
-    g_main_task = sched_spawn_kthread("main-el0", main_el0_kthread, 0);
+    g_main_task = sched_spawn_kthread("main-el0", main_el0_kthread, 0,
+                                      g_main_host);
     KASSERT_NOT_NULL(g_main_task);
-    g_main_task->process = g_main_host;
 
     /* Single debug_write expected: `[main-ok]` from main's body. */
     const int max_yields = 2048;

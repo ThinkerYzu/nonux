@@ -82,7 +82,7 @@ static void el0_entry_kthread(void *arg)
 static void spawn_el0_task_once(void)
 {
     if (g_el0_task) return;
-    g_el0_task = sched_spawn_kthread("el0_prog", el0_entry_kthread, 0);
+    g_el0_task = sched_spawn_kthread("el0_prog", el0_entry_kthread, 0, NULL);
 }
 
 KTEST(drop_to_el0_runs_user_program_which_reaches_debug_write)
@@ -132,8 +132,8 @@ KTEST(el0_user_window_vars_are_sensible)
     uint64_t size = mmu_user_window_size();
     KASSERT(base >= 0x40000000UL);
     KASSERT(base <  0x80000000UL);
-    KASSERT(size == (2UL * 1024 * 1024));
-    KASSERT((base & (size - 1)) == 0);   /* 2 MiB-aligned */
+    KASSERT(size == (8UL * 1024 * 1024));   /* slice 7.6d.2b: was 2 MiB */
+    KASSERT((base & (size - 1)) == 0);      /* size-aligned */
     /* User prog bytes must fit (generously) inside the window. */
     size_t prog_len = (size_t)(__user_prog_end - __user_prog_start);
     KASSERT(prog_len > 0);

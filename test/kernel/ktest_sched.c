@@ -97,7 +97,8 @@ KTEST(sched_spawn_kthread_runs_entry_after_yield)
 
     struct nx_task *k = sched_spawn_kthread("ktest_spawn",
                                              sentinel_entry,
-                                             (void *)(uintptr_t)0xABCD);
+                                             (void *)(uintptr_t)0xABCD,
+                                             NULL);
     KASSERT_NOT_NULL(k);
 
     /* Yield from idle so the scheduler picks the new kthread.  After
@@ -148,8 +149,8 @@ KTEST(sched_two_tasks_cooperate_via_yield)
     g_ta_count = 0;
     g_tb_count = 0;
 
-    struct nx_task *a = sched_spawn_kthread("ta", task_a_entry, NULL);
-    struct nx_task *b = sched_spawn_kthread("tb", task_b_entry, NULL);
+    struct nx_task *a = sched_spawn_kthread("ta", task_a_entry, NULL, NULL);
+    struct nx_task *b = sched_spawn_kthread("tb", task_b_entry, NULL, NULL);
     KASSERT_NOT_NULL(a);
     KASSERT_NOT_NULL(b);
 

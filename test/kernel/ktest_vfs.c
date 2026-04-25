@@ -187,7 +187,8 @@ KTEST(el0_file_open_write_close_reopen_read_roundtrip)
     nx_syscall_reset_for_test();
     KASSERT_EQ_U(nx_syscall_debug_write_calls(), 0);
 
-    g_file_el0_task = sched_spawn_kthread("el0_file", file_el0_kthread, 0);
+    g_file_el0_task = sched_spawn_kthread("el0_file", file_el0_kthread, 0,
+                                          NULL);
     KASSERT_NOT_NULL(g_file_el0_task);
 
     /* Yield until EL0 reaches the final debug_write.  The program
@@ -259,7 +260,7 @@ KTEST(el0_readdir_walks_root_and_emits_names_then_marker)
     KASSERT_EQ_U(nx_syscall_debug_write_calls(), 0);
 
     g_readdir_el0_task = sched_spawn_kthread("el0_rdr",
-                                             readdir_el0_kthread, 0);
+                                             readdir_el0_kthread, 0, NULL);
     KASSERT_NOT_NULL(g_readdir_el0_task);
 
     /* Wait for the tail-marker debug_write.  Each loop iteration fires

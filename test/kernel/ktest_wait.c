@@ -78,9 +78,9 @@ KTEST(wait_fork_child_exit_42_returns_status_to_parent)
     KASSERT_NOT_NULL(g_wait_parent);
     uint32_t wait_parent_pid = g_wait_parent->pid;
 
-    g_wait_task = sched_spawn_kthread("wait-el0", wait_el0_kthread, 0);
+    g_wait_task = sched_spawn_kthread("wait-el0", wait_el0_kthread, 0,
+                                      g_wait_parent);
     KASSERT_NOT_NULL(g_wait_task);
-    g_wait_task->process = g_wait_parent;
 
     /* Three debug_writes expected: parent pre-wait, child (before
      * exit), parent post-wait (the "wait-ok" marker).  If wait

@@ -94,9 +94,9 @@ KTEST(posix_musl_prog_runs_main_through_init_libc_and_exits_57)
                                       &g_musl_entry);
     KASSERT_EQ_U(rc, NX_OK);
 
-    g_musl_task = sched_spawn_kthread("musl-el0", musl_el0_kthread, 0);
+    g_musl_task = sched_spawn_kthread("musl-el0", musl_el0_kthread, 0,
+                                      g_musl_host);
     KASSERT_NOT_NULL(g_musl_task);
-    g_musl_task->process = g_musl_host;
 
     /* Wait for the process to exit.  Marker `[musl-ok]` reaches the
      * live log via the slice-7.6c.3c magic-fd-handle: write(1, ...)
