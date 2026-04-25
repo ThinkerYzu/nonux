@@ -251,6 +251,124 @@ const struct nx_fs_ops ramfs_fs_ops = {
 
 /* ---------- Component lifecycle -------------------------------------- */
 
+/* ---------- Initramfs slurp (slice 7.6b) ----------------------------- *
+ *
+ * Walks a cpio-newc blob (RFC: kernel.org/doc/html/latest/driver-api/
+ * early-userspace/buffer-format.html, also `man 5 cpio`) at component
+ * init() and seeds the ramfs file table with each entry.  The blob is
+ * delivered through a pair of weak symbols (`__ramfs_initramfs_blob_
+ * start` / `_end`) so production `kernel.bin` builds — which never
+ * provide them — see start == end and skip the slurp entirely; only
+ * the test build (which embeds an actual cpio via `.incbin`) does the
+ * work.
+ *
+ * Format reminder (per entry, all hex fields are 8 ASCII characters):
+ *
+ *   c_magic[6] "070701"
+ *   c_ino, c_mode, c_uid, c_gid, c_nlink, c_mtime, c_filesize,
+ *   c_devmajor, c_devminor, c_rdevmajor, c_rdevminor,
+ *   c_namesize, c_check     ← total 13 × 8 = 104 chars; +6 magic = 110.
+ *   name (NUL-terminated)   ← `c_namesize` bytes including the NUL,
+ *                              padded to 4-byte boundary.
+ *   data                    ← `c_filesize` bytes, padded to 4 bytes.
+ *
+ * A trailer entry named "TRAILER!!!" with `c_filesize == 0` ends the
+ * archive — we stop scanning when we see the name match.
+ *
+ * v1 supports regular files only.  Directories (mode bits 0o040000)
+ * and symlinks (0o120000) are silently skipped; ramfs's flat
+ * single-mount layout has no representation for them.  busybox's
+ * standard initramfs layout uses dir entries to define the rootfs
+ * structure but works fine when they're absent (the files just live
+ * in a flat namespace), so this gap is OK until slice 7.6d's full
+ * busybox integration explicitly needs hierarchical paths.
+ */
+
+extern char __ramfs_initramfs_blob_start[] __attribute__((weak));
+extern char __ramfs_initramfs_blob_end[]   __attribute__((weak));
+
+#define CPIO_NEWC_HEADER_SIZE  110u
+#define CPIO_NEWC_MAGIC        "070701"
+
+static unsigned cpio_hex8(const char *p)
+{
+    unsigned v = 0;
+    for (int i = 0; i < 8; i++) {
+        char c = p[i];
+        v <<= 4;
+        if      (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+        else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+        else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+        else return 0xFFFFFFFFu;     /* sentinel — caller treats as "stop" */
+    }
+    return v;
+}
+
+static size_t cpio_align4(size_t v) { return (v + 3u) & ~(size_t)3u; }
+
+/*
+ * Stuff the blob's contents into the ramfs file table.  Best-effort:
+ * malformed entries terminate the walk silently (we can't kprintf
+ * here without a kernel-only include path on host builds, and an
+ * unparseable blob is the build-system's bug, not a runtime concern).
+ * Returns the number of files seeded.
+ */
+static unsigned ramfs_slurp_initramfs(struct ramfs_state *s,
+                                      const char *blob, size_t total)
+{
+    unsigned count = 0;
+    size_t   off   = 0;
+    while (off + CPIO_NEWC_HEADER_SIZE <= total) {
+        const char *hdr = blob + off;
+        for (int i = 0; i < 6; i++)
+            if (hdr[i] != CPIO_NEWC_MAGIC[i]) return count;
+
+        unsigned mode      = cpio_hex8(hdr + 6 + 1 * 8);
+        unsigned filesize  = cpio_hex8(hdr + 6 + 6 * 8);
+        unsigned namesize  = cpio_hex8(hdr + 6 + 11 * 8);
+        if (mode == 0xFFFFFFFFu || filesize == 0xFFFFFFFFu ||
+            namesize == 0xFFFFFFFFu) return count;
+
+        size_t name_off = off + CPIO_NEWC_HEADER_SIZE;
+        if (name_off + namesize > total) return count;
+        const char *name = blob + name_off;
+
+        /* TRAILER!!! marks end of archive. */
+        if (namesize >= 11 &&
+            strncmp(name, "TRAILER!!!", 10) == 0 && name[10] == '\0')
+            return count;
+
+        size_t data_off = cpio_align4(name_off + namesize);
+        if (data_off + filesize > total) return count;
+
+        /* Only seed regular files (S_IFREG = 0o100000 = 0x8000); skip
+         * dirs / symlinks / special files. */
+        if ((mode & 0xF000u) == 0x8000u && filesize <= RAMFS_FILE_CAP) {
+            /* `name` may include path separators (e.g. "bin/sh");
+             * v1 ramfs is flat-namespace, so we just store the name
+             * verbatim — vfs_simple's caller addresses files via
+             * the same string.  When we add hierarchical paths we'll
+             * tweak the parser side rather than the storage side. */
+            char path[RAMFS_NAME_MAX + 1];
+            path[0] = '/';
+            size_t copy = namesize ? namesize - 1 : 0;
+            if (copy >= RAMFS_NAME_MAX - 1) copy = RAMFS_NAME_MAX - 2;
+            memcpy(path + 1, name, copy);
+            path[1 + copy] = '\0';
+
+            struct ramfs_file *f = ramfs_create_file(s, path);
+            if (f) {
+                memcpy(f->data, blob + data_off, filesize);
+                f->size = filesize;
+                count++;
+            }
+        }
+
+        off = cpio_align4(data_off + filesize);
+    }
+    return count;
+}
+
 static int ramfs_init(void *self)
 {
     struct ramfs_state *s = self;
@@ -260,6 +378,20 @@ static int ramfs_init(void *self)
      * doesn't have to know about the calloc. */
     for (unsigned i = 0; i < RAMFS_MAX_FILES; i++) s->files[i].in_use = 0;
     for (unsigned i = 0; i < RAMFS_MAX_OPEN;  i++) s->opens[i].in_use = 0;
+
+    /* Slice 7.6b: if a non-empty initramfs blob was linked in (test
+     * builds embed one via `.incbin`; production builds leave the
+     * weak symbols at 0), parse it and seed the file table.  The
+     * `&__sym[0]` form is to evade gcc's `-Warray-compare` when both
+     * sides are array-typed weak externs — we want the address
+     * comparison the linker actually resolves, not the array-decay-
+     * to-pointer warning. */
+    const char *blob_start = &__ramfs_initramfs_blob_start[0];
+    const char *blob_end   = &__ramfs_initramfs_blob_end[0];
+    if (blob_start && blob_end && blob_end > blob_start) {
+        size_t total = (size_t)(blob_end - blob_start);
+        ramfs_slurp_initramfs(s, blob_start, total);
+    }
 
     s->init_called++;
     return NX_OK;

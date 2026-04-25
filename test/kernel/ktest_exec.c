@@ -30,17 +30,12 @@
 #include "core/mmu/mmu.h"
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
-#include "framework/component.h"
 #include "framework/process.h"
-#include "framework/registry.h"
 #include "framework/syscall.h"
 #include "interfaces/scheduler.h"
-#include "interfaces/vfs.h"
 
 extern char __user_exec_prog_start[];
 extern char __user_exec_prog_end[];
-extern char __init_prog_blob_start[];
-extern char __init_prog_blob_end[];
 
 /* sched_rr test-only helper — drains stranded user-process tasks
  * from the runqueue.  Declared here (not in sched.h) because it's a
@@ -52,37 +47,13 @@ static struct nx_process *g_exec_parent;
 static struct nx_task    *g_exec_task;
 
 /*
- * Seed ramfs with `/init`.  Uses vfs_simple's ops directly (no
- * syscalls — those need a live process context).  The `vfs` slot
- * is bound at bootstrap; look it up and call its ops.
+ * Slice 7.6b: ramfs's `init()` slurps the embedded cpio-newc
+ * initramfs at boot, so `/init` is already present in the live
+ * filesystem before any ktest runs.  Earlier slices (7.4c) had to
+ * hand-seed the file via vfs_simple's ops; that boilerplate is gone.
+ * The cpio's `/init` entry maps to the same `init_prog.elf` blob
+ * `ktest_elf` and `ktest_exec` previously embedded directly.
  */
-static void seed_init_file(void)
-{
-    struct nx_slot *vs = nx_slot_lookup("vfs");
-    if (!vs || !vs->active || !vs->active->descriptor) return;
-    const struct nx_vfs_ops *vops =
-        (const struct nx_vfs_ops *)vs->active->descriptor->iface_ops;
-    void *vself = vs->active->impl;
-    if (!vops) return;
-
-    void *file = NULL;
-    int rc = vops->open(vself, "/init",
-                        NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
-                        NX_VFS_OPEN_CREATE, &file);
-    if (rc != NX_OK) return;
-
-    size_t total = (size_t)(__init_prog_blob_end - __init_prog_blob_start);
-    const uint8_t *src = (const uint8_t *)__init_prog_blob_start;
-    size_t written = 0;
-    while (written < total) {
-        size_t chunk = total - written;
-        if (chunk > 256) chunk = 256;
-        int64_t n = vops->write(vself, file, src + written, chunk);
-        if (n <= 0) break;
-        written += (size_t)n;
-    }
-    vops->close(vself, file);
-}
 
 static void exec_copy_prog_to_window(void *dst)
 {
@@ -127,7 +98,8 @@ KTEST(exec_fork_child_execs_init_parent_waits_for_exit_17)
     void *sself = sched_self_for_test();
     sched_rr_purge_user_tasks(sself, NULL);
 
-    seed_init_file();
+    /* `/init` was seeded by ramfs's initramfs slurp at boot; no
+     * per-test hand-seeding needed (slice 7.6b). */
 
     uint32_t exec_parent_pid;
     g_exec_parent = nx_process_create("exec-parent");

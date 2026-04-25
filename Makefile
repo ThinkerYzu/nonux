@@ -178,7 +178,11 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix.c \
                  test/kernel/ktest_posix_pipe.c \
                  test/kernel/ktest_posix_signal.c \
-                 test/kernel/ktest_posix_pipe_xproc.c
+                 test/kernel/ktest_posix_pipe_xproc.c \
+                 test/kernel/ktest_initramfs.c \
+                 test/kernel/ktest_posix_main.c \
+                 test/kernel/ktest_posix_libc.c \
+                 test/kernel/ktest_posix_printf.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -194,7 +198,11 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_prog_blob.S \
                  test/kernel/posix_pipe_prog_blob.S \
                  test/kernel/posix_signal_prog_blob.S \
-                 test/kernel/posix_pipe_xproc_prog_blob.S
+                 test/kernel/posix_pipe_xproc_prog_blob.S \
+                 test/kernel/initramfs_blob.S \
+                 test/kernel/posix_main_prog_blob.S \
+                 test/kernel/posix_libc_prog_blob.S \
+                 test/kernel/posix_printf_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -263,6 +271,110 @@ test/kernel/posix_pipe_xproc_prog.elf: test/kernel/posix_pipe_xproc_prog.o test/
 
 test/kernel/posix_pipe_xproc_prog_blob.o: test/kernel/posix_pipe_xproc_prog_blob.S test/kernel/posix_pipe_xproc_prog.elf
 
+# Slice 7.6b — initramfs.  `tools/pack-initramfs.py` packs a list of
+# entries into a cpio-newc archive; the resulting blob is embedded
+# into kernel-test.bin's .rodata via `.incbin` and surfaced through
+# the weak `__ramfs_initramfs_blob_{start,end}` symbols.  ramfs's
+# init() walks the blob and seeds itself.  Stays test-only (production
+# `kernel.bin` doesn't link `initramfs_blob.S` and so its weak symbols
+# stay 0, skipping the slurp).
+#
+# Manifest of test files:
+#   /init    — init_prog.elf (the slice-7.3 EL0 binary; lets ktest_exec
+#              stop hand-seeding via vfs syscalls).
+#   /banner  — a tiny ASCII payload that ktest_initramfs reads back.
+#              Deliberately not `/hello` — ktest_vfs already creates
+#              that file via vfs_simple's create flow, and we don't
+#              want a registration-order race between the slurp and
+#              that test.
+test/kernel/banner.txt:
+	@printf 'hello from initramfs\n' > $@
+
+test/kernel/initramfs.cpio: tools/pack-initramfs.py \
+                            test/kernel/init_prog.elf \
+                            test/kernel/banner.txt
+	$(PYTHON) tools/pack-initramfs.py $@ \
+	    test/kernel/init_prog.elf:/init \
+	    test/kernel/banner.txt:/banner
+
+test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
+                              test/kernel/initramfs.cpio
+
+# Slice 7.6c.0 — EL0 C-runtime bootstrap.  posix_shim's crt0.S owns
+# the ELF entry symbol `_start` and provides the standard POSIX
+# transition: argc/argv/envp setup, `bl main`, `nx_posix_exit(rv)`.
+# Linked first so `_start` lands at the user-window base.
+components/posix_shim/crt0.o: components/posix_shim/crt0.S
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+# C demo using `int main(int argc, char **argv, char **envp)` entry
+# (instead of the bare `_start` shape every other slice-7.x EL0
+# program uses).  Build flags identical to posix_prog.elf — same
+# linker script, same freestanding stance.  Linker order matters:
+# crt0.o first so `_start` is at offset 0 in the .text section.
+test/kernel/posix_main_prog.o: test/kernel/posix_main_prog.c \
+                               components/posix_shim/posix.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_main_prog.elf: components/posix_shim/crt0.o \
+                                 test/kernel/posix_main_prog.o \
+                                 test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    components/posix_shim/crt0.o test/kernel/posix_main_prog.o
+
+test/kernel/posix_main_prog_blob.o: test/kernel/posix_main_prog_blob.S \
+                                    test/kernel/posix_main_prog.elf
+
+# Slice 7.6c.1 — libnxlibc.a: the POSIX-named C surface packaged as
+# a static archive.  EL0 C programs link with `-lnxlibc` to pull in
+# crt0 + the lowercase POSIX wrappers (`write`, `_exit`, `strlen`,
+# ...).  Slice 7.6c.2's musl pin will replace this archive with
+# musl's `libc.a`; programs don't need to change source.
+AR := $(CROSS)ar
+components/posix_shim/nxlibc.o: components/posix_shim/nxlibc.c \
+                                components/posix_shim/posix.h \
+                                components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+components/posix_shim/libnxlibc.a: components/posix_shim/crt0.o \
+                                   components/posix_shim/nxlibc.o
+	$(AR) rcs $@ components/posix_shim/crt0.o components/posix_shim/nxlibc.o
+
+# C demo that links against libnxlibc.a.  The linker pulls `crt0.o`
+# out of the archive (it's referenced through `_start` — the ELF
+# entry set by `init_prog.ld`) and `nxlibc.o` through the
+# POSIX-named symbols the demo calls.  `-L` + `-l` is the standard
+# GNU ld archive-search incantation.
+test/kernel/posix_libc_prog.o: test/kernel/posix_libc_prog.c \
+                               components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_libc_prog.elf: test/kernel/posix_libc_prog.o \
+                                 components/posix_shim/libnxlibc.a \
+                                 test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_libc_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_libc_prog_blob.o: test/kernel/posix_libc_prog_blob.S \
+                                    test/kernel/posix_libc_prog.elf
+
+# Slice 7.6c.2 — printf demo.  Same flag set + linker shape as
+# posix_libc_prog; just exercises printf / atoi / puts instead.
+test/kernel/posix_printf_prog.o: test/kernel/posix_printf_prog.c \
+                                 components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_printf_prog.elf: test/kernel/posix_printf_prog.o \
+                                   components/posix_shim/libnxlibc.a \
+                                   test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_printf_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_printf_prog_blob.o: test/kernel/posix_printf_prog_blob.S \
+                                      test/kernel/posix_printf_prog.elf
+
 KTEST_S_OBJS  := $(KTEST_S:.S=.o)
 KTEST_OBJS    := $(KTEST_C:.c=.o)
 
@@ -323,6 +435,11 @@ clean:
 	rm -rf gen/ kernel.elf kernel.bin kernel-test.elf kernel-test.bin \
 	       test/kernel/init_prog.elf test/kernel/posix_prog.elf \
 	       test/kernel/posix_pipe_prog.elf test/kernel/posix_signal_prog.elf \
-	       test/kernel/posix_pipe_xproc_prog.elf
+	       test/kernel/posix_pipe_xproc_prog.elf \
+	       test/kernel/posix_main_prog.elf \
+	       test/kernel/posix_libc_prog.elf \
+	       test/kernel/posix_printf_prog.elf \
+	       components/posix_shim/libnxlibc.a \
+	       test/kernel/initramfs.cpio test/kernel/banner.txt
 
 .PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean

@@ -261,4 +261,40 @@ static inline int nx_posix_kill(nx_posix_pid_t pid, int signo)
                               (uint64_t)(unsigned int)signo);
 }
 
+/* ---------- Tiny libc (slice 7.6c.0) ---------------------------------- *
+ *
+ * Just enough freestanding-safe helpers that EL0 C programs don't have
+ * to hand-roll the basics every time.  All `static inline` so the
+ * header stays self-contained — when slice 7.6c.1 lands musl, these
+ * collapse to musl's own implementations and the inlines become
+ * either no-ops or thin wrappers for backwards compat.
+ */
+
+static inline size_t nx_strlen(const char *s)
+{
+    size_t n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static inline int nx_strcmp(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+static inline void *nx_memcpy(void *dst, const void *src, size_t n)
+{
+    char *d = dst; const char *s = src;
+    for (size_t i = 0; i < n; i++) d[i] = s[i];
+    return dst;
+}
+
+static inline void *nx_memset(void *dst, int c, size_t n)
+{
+    unsigned char *d = dst;
+    for (size_t i = 0; i < n; i++) d[i] = (unsigned char)c;
+    return dst;
+}
+
 #endif /* NX_POSIX_SHIM_POSIX_H */

@@ -1,9 +1,15 @@
 # Build artifacts
 *.o
+*.a
 *.elf
 *.bin
 *.img
+*.cpio
 gen/
+
+# Generated test fixtures (slice 7.6b initramfs payload — packer
+# regenerates these from sources every build).
+test/kernel/banner.txt
 
 # Python tooling (tools/ is stdlib-only for v1; venv exists for future
 # deps like jsonschema in slice 3.5).
@@ -14,6 +20,8 @@ __pycache__/
 # Editor
 *.swp
 *~
+\#*\#
+.\#*
 .vscode/
 .idea/
 
