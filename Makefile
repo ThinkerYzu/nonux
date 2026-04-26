@@ -186,16 +186,10 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_argv_push.c \
                  test/kernel/ktest_posix_musl.c \
                  test/kernel/ktest_musl_exec.c \
-                 test/kernel/ktest_posix_musl_printf.c
-# Slice 7.6d.2c: ktest_posix_busybox.c + posix_busybox_help_prog{,_blob}.S
-# are intentionally NOT in KTEST_C / KTEST_S below.  The test would
-# trip an EL0 fault inside busybox's musl init (memset to a NULL-
-# pointer-derived TLS address — see logs/session-52-busybox-exec-attempt.md
-# for the captured ESR/ELR), and our v1 kernel halt_forever's on
-# unhandled EL0 faults, which would break make test 407/407.  The
-# files stay in the tree as the discovery deliverable; 7.6d.3.x
-# wires (a) signal-on-fault + (b) the musl TLS / AUXV gap and re-
-# enables the test.
+                 test/kernel/ktest_posix_musl_printf.c \
+                 test/kernel/ktest_posix_segfault.c \
+                 test/kernel/ktest_posix_undef.c \
+                 test/kernel/ktest_posix_busybox.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -219,9 +213,10 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/argv_parent_prog_blob.S \
                  test/kernel/posix_musl_prog_blob.S \
                  test/kernel/musl_exec_parent_prog_blob.S \
-                 test/kernel/posix_musl_printf_prog_blob.S
-# posix_busybox_help_prog_blob.S deliberately omitted — see comment
-# in KTEST_C above.
+                 test/kernel/posix_musl_printf_prog_blob.S \
+                 test/kernel/posix_segfault_prog_blob.S \
+                 test/kernel/posix_undef_prog_blob.S \
+                 test/kernel/posix_busybox_help_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -469,6 +464,39 @@ test/kernel/posix_busybox_help_prog.elf: test/kernel/posix_busybox_help_prog.o \
 test/kernel/posix_busybox_help_prog_blob.o: test/kernel/posix_busybox_help_prog_blob.S \
                                             test/kernel/posix_busybox_help_prog.elf
 
+# Slice 7.6d.3a — EL0-fault demos.  Each is a libnxlibc-linked C
+# program: parent forks; child trips a fault (NULL write for the
+# segfault demo, `udf #0` for the undef demo); parent waits and
+# observes 128+SIGSEGV / 128+SIGILL via the new `on_sync` fault-
+# conversion path.
+test/kernel/posix_segfault_prog.o: test/kernel/posix_segfault_prog.c \
+                                   components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_segfault_prog.elf: test/kernel/posix_segfault_prog.o \
+                                     components/posix_shim/libnxlibc.a \
+                                     test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_segfault_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_segfault_prog_blob.o: test/kernel/posix_segfault_prog_blob.S \
+                                        test/kernel/posix_segfault_prog.elf
+
+test/kernel/posix_undef_prog.o: test/kernel/posix_undef_prog.c \
+                                components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_undef_prog.elf: test/kernel/posix_undef_prog.o \
+                                  components/posix_shim/libnxlibc.a \
+                                  test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_undef_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_undef_prog_blob.o: test/kernel/posix_undef_prog_blob.S \
+                                     test/kernel/posix_undef_prog.elf
+
 # Slice 7.6c.3c — musl-linked printf demo.  Pulls in musl's
 # vfprintf -> long-double softfloat helpers (__netf2, __fixtfsi,
 # __addtf3, ...) which live in libgcc.a, not musl.  `LIBGCC` is
@@ -660,6 +688,8 @@ clean:
 	       test/kernel/musl_exec_parent_prog.elf \
 	       test/kernel/posix_musl_printf_prog.elf \
 	       test/kernel/posix_busybox_help_prog.elf \
+	       test/kernel/posix_segfault_prog.elf \
+	       test/kernel/posix_undef_prog.elf \
 	       components/posix_shim/libnxlibc.a \
 	       test/kernel/initramfs.cpio test/kernel/banner.txt
 

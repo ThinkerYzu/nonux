@@ -1,0 +1,14 @@
+/*
+ * Slice 7.6d.3a — embed posix_segfault_prog.elf as a byte blob in
+ * kernel-test.bin's .rodata.  Same shape as the other slice-7.x
+ * blob wrappers; consumed by ktest_posix_segfault.c.
+ */
+
+.section .rodata
+.balign 16
+.global __posix_segfault_prog_blob_start
+.global __posix_segfault_prog_blob_end
+
+__posix_segfault_prog_blob_start:
+.incbin "test/kernel/posix_segfault_prog.elf"
+__posix_segfault_prog_blob_end:
