@@ -67,6 +67,14 @@
 struct nx_elf_info {
     uint64_t entry;        /* program entry point VA */
     uint16_t segment_count; /* number of PT_LOAD segments */
+    /* Slice 7.6d.3c — needed to push AT_PHDR/AT_PHENT/AT_PHNUM
+     * AUXV entries in sys_exec.  musl's static_init_tls walks the
+     * phdr table via AT_PHDR + AT_PHNUM + AT_PHENT to find
+     * PT_TLS; without these, the loop never runs and downstream
+     * TLS setup gets garbage state. */
+    uint64_t phoff;        /* file offset of program-header table */
+    uint16_t phentsize;    /* size of one program header (56 for ELF64) */
+    uint16_t phnum;        /* number of program headers */
 };
 
 /*

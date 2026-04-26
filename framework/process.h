@@ -103,6 +103,25 @@ struct nx_process {
 #define NX_PROCESS_HEAP_OFFSET  (6u << 20)             /* 6 MiB into window */
 #define NX_PROCESS_HEAP_LIMIT   ((7u << 20) + (1u << 19))  /* 7.5 MiB into window */
 
+/* Slice 7.6d.3c — kernel-pre-initialized TLS area for musl-linked
+ * (and any other libc-using) EL0 programs.  Lives in the unused gap
+ * between code (busybox segment 2 ends at ~+1.91 MiB) and the brk
+ * heap region (+6 MiB).  TPIDR_EL0 is set to `mmu_user_window_base()
+ * + NX_PROCESS_TLS_OFFSET` before the first eret to EL0 in any
+ * process.  musl's `__init_libc` reads `errno` (at offset 0x20 of
+ * `struct pthread`) on every syscall return path; without a valid
+ * TLS pointer pointing at zeroed memory, the very first errno write
+ * faults at VA `0x20` (slice 7.6d.2c captured this exact failure).
+ *
+ * 4 KiB is plenty for musl's pre-`__set_thread_area` lifetime: musl
+ * touches `errno` (offset 0x20), the canary, and a handful of small
+ * fields, all within the first ~256 bytes of `struct pthread`.  Once
+ * `__init_libc` calls `__set_thread_area(td)`, musl writes its own
+ * properly-allocated `struct pthread` address into TPIDR_EL0 and the
+ * kernel's pre-init buffer is dead. */
+#define NX_PROCESS_TLS_OFFSET   (5u << 20)             /* 5 MiB into window */
+#define NX_PROCESS_TLS_SIZE     4096u                  /* one page */
+
 /*
  * The always-present kernel process (pid 0).  Used as the fallback
  * for `nx_process_current` when there's no scheduled task yet (host

@@ -19,6 +19,9 @@
 #include "core/sched/sched.h"
 #include "framework/process.h"
 #if !__STDC_HOSTED__
+#include "core/mmu/mmu.h"          /* mmu_user_window_base() */
+#endif
+#if !__STDC_HOSTED__
 #include "core/cpu/exception.h"
 #endif
 
@@ -183,6 +186,17 @@ struct nx_task *nx_task_create(const char *name,
     t->process = (caller && caller->process) ? caller->process
                                              : &g_kernel_process;
 
+    /* Slice 7.6d.3c: initial TPIDR_EL0 points at the kernel-pre-
+     * initialized zero TLS area at user_window_base + TLS_OFFSET.
+     * sched_check_resched will load this into the CPU's TPIDR_EL0
+     * when this task first runs.  See framework/process.h for the
+     * rationale. */
+#if !__STDC_HOSTED__
+    t->tpidr_el0 = mmu_user_window_base() + NX_PROCESS_TLS_OFFSET;
+#else
+    t->tpidr_el0 = 0;
+#endif
+
     return t;
 }
 
@@ -268,6 +282,16 @@ struct nx_task *nx_task_create_forked(const char *name,
     struct nx_task *caller = nx_task_current();
     t->process = (caller && caller->process) ? caller->process
                                              : &g_kernel_process;
+
+    /* Slice 7.6d.3c: fork copies the parent's current TPIDR_EL0 to
+     * the child.  In real Linux this is what happens — fork preserves
+     * TLS.  If the parent's musl has already called __set_thread_area
+     * and TPIDR_EL0 points at musl's struct pthread, the child gets
+     * the same pointer; the *contents* it points at are also copied
+     * via mmu_copy_user_backing (assuming the pthread struct sits in
+     * the user backing, which it does for musl's mallocng-backed
+     * allocator). */
+    asm volatile ("mrs %0, tpidr_el0" : "=r"(t->tpidr_el0));
     return t;
 #endif
 }

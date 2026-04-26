@@ -1068,10 +1068,20 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
 
         /* Pointer area below the AT_RANDOM pad.  Slot count:
          *   1 (argc) + argc (argv body) + 1 (argv NULL)
-         *   + 1 (envp NULL) + 6 (AUXV: 3 pairs × 2)
-         *   = argc + 9 slots × 8 bytes.
-         * Round sp down to 16 for AAPCS. */
-        uint64_t fixed_size = 8u * (9u + argc);
+         *   + 1 (envp NULL) + 12 (AUXV: 6 pairs × 2)
+         *   = argc + 15 slots × 8 bytes.
+         * Round sp down to 16 for AAPCS.  Slice 7.6d.3c added the
+         * AT_PHDR / AT_PHENT / AT_PHNUM trio (3 pairs) on top of
+         * the slice-7.6c.3b AT_PAGESZ + AT_RANDOM + AT_NULL — needed
+         * because musl's static_init_tls walks the phdr table via
+         * those AT_* values to find PT_TLS.  Without them, the
+         * walk loops zero times and downstream TLS-allocation math
+         * gets garbage state, eventually faulting on a NULL+0x20
+         * write.  AT_PHDR is computed as `window_base + e_phoff` —
+         * for our static-no-pie binaries the ELF's first PT_LOAD
+         * starts at file offset 0 and maps to window_base, so
+         * file offset e_phoff lives at VA window_base + e_phoff. */
+        uint64_t fixed_size = 8u * (15u + argc);
         uint64_t sp_offset  = (at_random_offset - fixed_size) & ~(uint64_t)15u;
 
         uint64_t *u = (uint64_t *)((char *)new_backing + sp_offset);
@@ -1084,8 +1094,14 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
         u[4 + argc] = 4096;
         u[5 + argc] = 25;           /* AT_RANDOM */
         u[6 + argc] = window_base + at_random_offset;
-        u[7 + argc] = 0;            /* AT_NULL */
-        u[8 + argc] = 0;
+        u[7 + argc] = 3;            /* AT_PHDR */
+        u[8 + argc] = window_base + info.phoff;
+        u[9 + argc] = 4;            /* AT_PHENT */
+        u[10 + argc] = info.phentsize;
+        u[11 + argc] = 5;           /* AT_PHNUM */
+        u[12 + argc] = info.phnum;
+        u[13 + argc] = 0;           /* AT_NULL */
+        u[14 + argc] = 0;
 
         new_sp = window_base + sp_offset;
     } else {
@@ -1114,6 +1130,23 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
      * stays reachable because every address-space root shares the
      * kernel identity map. */
     mmu_switch_address_space(new_root);
+
+    /* Slice 7.6d.3c: reset TPIDR_EL0 to the kernel-pre-init TLS
+     * area in the new address space.  exec replaces the entire
+     * image — if the pre-exec process had run musl and called
+     * `__set_thread_area(td)`, TPIDR_EL0 would be pointing into
+     * the now-freed old user_backing.  The new image's musl
+     * `__init_libc` reads TPIDR_EL0 immediately, so we have to
+     * point it at a valid zeroed region in the new address space.
+     * The corresponding nx_task field is updated too so the next
+     * context switch out + back in restores the correct value. */
+    {
+        uint64_t fresh_tls =
+            mmu_user_window_base() + NX_PROCESS_TLS_OFFSET;
+        asm volatile ("msr tpidr_el0, %0" :: "r"(fresh_tls));
+        struct nx_task *self = nx_task_current();
+        if (self) self->tpidr_el0 = fresh_tls;
+    }
 
     /* 10. Reclaim the old address space. */
     mmu_destroy_address_space(old_root);

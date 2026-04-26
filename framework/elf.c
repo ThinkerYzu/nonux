@@ -125,6 +125,9 @@ int nx_elf_parse(const void *blob, size_t len, struct nx_elf_info *out)
     if (out) {
         out->entry         = h->e_entry;
         out->segment_count = count_pt_load(h, blob);
+        out->phoff         = h->e_phoff;
+        out->phentsize     = h->e_phentsize;
+        out->phnum         = h->e_phnum;
     }
     return NX_OK;
 }

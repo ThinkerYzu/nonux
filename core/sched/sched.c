@@ -205,6 +205,19 @@ void sched_check_resched(void)
         next->process->ttbr0_root != 0) {
         mmu_switch_address_space(next->process->ttbr0_root);
     }
+
+    /* Slice 7.6d.3c: save outgoing task's TPIDR_EL0, restore the
+     * incoming task's.  TPIDR_EL0 is per-CPU, used by EL0 libcs to
+     * point at thread-local storage (notably musl's `struct pthread`
+     * for `errno` resolution).  Without per-task save/restore, EL0
+     * code would see whoever ran last on this CPU — corrupting any
+     * libc that touches TLS.  Only matters once musl's
+     * `__set_thread_area` has run (before that, all tasks point at
+     * the kernel-pre-init TLS area which is the same across all
+     * processes), but the save/restore is cheap (2 system-register
+     * accesses) and the alternative is a subtle bug class. */
+    asm volatile ("mrs %0, tpidr_el0" : "=r"(curr->tpidr_el0));
+    asm volatile ("msr tpidr_el0, %0" :: "r"(next->tpidr_el0));
 #endif
 
     cpu_switch_to(curr, next);

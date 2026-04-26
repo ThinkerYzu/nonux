@@ -9,6 +9,7 @@
 #else
 #include "core/lib/kheap.h"
 #include "core/lib/lib.h"
+#include "framework/process.h"          /* NX_PROCESS_TLS_OFFSET, _SIZE */
 #endif
 
 /*
@@ -336,6 +337,20 @@ uint64_t mmu_create_address_space(void)
     }
     uint64_t user_pa = ((uint64_t)(uintptr_t)raw + USER_BLOCK_SIZE - 1) &
                        ~(USER_BLOCK_SIZE - 1);
+
+    /* Slice 7.6d.3c: zero the kernel-pre-initialized TLS area at
+     * offset NX_PROCESS_TLS_OFFSET into the user backing.  PMM hands
+     * out un-zeroed pages; musl's `__init_libc` reads `errno` (at
+     * `(struct pthread *)TPIDR_EL0->errno_val`, struct offset 0x20)
+     * on basically every syscall return.  Garbage there → musl
+     * thinks errno is some bizarre value and tries to use it as a
+     * pointer for some internal check, faulting elsewhere.  Zeroing
+     * `NX_PROCESS_TLS_SIZE` bytes ensures the first TLS-relative
+     * read returns 0 (the documented "no error" / quiescent state)
+     * until musl's `__set_thread_area` overwrites TPIDR_EL0 with
+     * its own buffer. */
+    memset((void *)(uintptr_t)(user_pa + NX_PROCESS_TLS_OFFSET),
+           0, NX_PROCESS_TLS_SIZE);
 
     /* Populate L1: [0] shares kernel l2_mmio, [1] points at new L2_ram. */
     for (int i = 0; i < 512; i++) l1[i] = 0;

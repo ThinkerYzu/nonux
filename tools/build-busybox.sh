@@ -42,6 +42,14 @@ mkdir -p "$SYSROOT/lib"
 for f in libc.a crt1.o crti.o crtn.o; do
     [ -L "$SYSROOT/lib/$f" ] || ln -sf "../../lib/$f" "$SYSROOT/lib/$f"
 done
+# musl bundles libm + libpthread + librt + ldl into libc.a — no
+# separate archives.  busybox's link line passes `-lm` (and may pass
+# `-lpthread` etc. depending on config), and `-lm` would otherwise
+# resolve to glibc's libm at the cross-toolchain path.  Symlink
+# `lib<x>.a → libc.a` for each libname busybox might ask for.
+for stub in libm.a libpthread.a librt.a libdl.a libutil.a libresolv.a libcrypt.a; do
+    [ -L "$SYSROOT/lib/$stub" ] || ln -sf libc.a "$SYSROOT/lib/$stub"
+done
 
 # 3. Stage our config + let busybox auto-fill anything new.  busybox
 # 1.36.1's kconfig predates `olddefconfig`, so feed `oldconfig` empty
@@ -72,12 +80,18 @@ set -o pipefail
 # spells out 0x48000000 has to move with it.
 USER_WINDOW_BASE="0x48000000"
 
+# Slice 7.6d.3c: use a CC wrapper instead of plain `--sysroot=` so the
+# linker picks musl's libc.a + crt set ahead of the cross-toolchain's
+# bundled glibc.  See tools/musl-aarch64-gcc.sh for the rationale.
+MUSL_GCC="$ROOT/tools/musl-aarch64-gcc.sh"
+
 make -C "$BUSYBOX_DIR" \
     -j "$JOBS" \
     ARCH=arm64 \
     CROSS_COMPILE="$CROSS" \
-    EXTRA_CFLAGS="--sysroot=$SYSROOT" \
-    EXTRA_LDFLAGS="--sysroot=$SYSROOT -static -Wl,-Ttext-segment=$USER_WINDOW_BASE" \
+    CC="$MUSL_GCC" \
+    HOSTCC=cc \
+    EXTRA_LDFLAGS="-static -Wl,-Ttext-segment=$USER_WINDOW_BASE" \
     SKIP_STRIP=y
 
 # 5. Sanity check.  busybox's own Makefile prints a size summary;

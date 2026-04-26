@@ -87,6 +87,17 @@ struct nx_task {
     size_t              kstack_size;
     struct nx_list_node sched_node;
     struct nx_process  *process;
+    /*
+     * Slice 7.6d.3c: per-task TPIDR_EL0 value.  Save/restored on
+     * context switch in sched_check_resched.  Initialized to
+     * `mmu_user_window_base() + NX_PROCESS_TLS_OFFSET` for fresh
+     * tasks; carried across fork (child inherits parent's value);
+     * reset to the fresh TLS_ADDR by sys_exec (new image gets a
+     * fresh TLS).  Once musl's `__init_libc` runs `__set_thread_area
+     * (td)`, the value here tracks musl's allocated `struct pthread`
+     * pointer for the rest of the task's life.
+     */
+    uint64_t            tpidr_el0;
 };
 
 _Static_assert(offsetof(struct nx_task, cpu_ctx) == 0,
