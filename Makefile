@@ -189,7 +189,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_musl_printf.c \
                  test/kernel/ktest_posix_segfault.c \
                  test/kernel/ktest_posix_undef.c \
-                 test/kernel/ktest_posix_busybox.c
+                 test/kernel/ktest_posix_busybox.c \
+                 test/kernel/ktest_posix_busybox_sh.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -216,7 +217,8 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_musl_printf_prog_blob.S \
                  test/kernel/posix_segfault_prog_blob.S \
                  test/kernel/posix_undef_prog_blob.S \
-                 test/kernel/posix_busybox_help_prog_blob.S
+                 test/kernel/posix_busybox_help_prog_blob.S \
+                 test/kernel/posix_busybox_sh_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -464,6 +466,24 @@ test/kernel/posix_busybox_help_prog.elf: test/kernel/posix_busybox_help_prog.o \
 test/kernel/posix_busybox_help_prog_blob.o: test/kernel/posix_busybox_help_prog_blob.S \
                                             test/kernel/posix_busybox_help_prog.elf
 
+# Slice 7.6d.N.0 — first attempt at exec'ing busybox AS A SHELL.
+# Same recipe as posix_busybox_help_prog but the program drives
+# busybox via { "sh", "-c", "exit 42", NULL } so basename(argv[0])
+# routes to the ash applet (CONFIG_SH_IS_ASH=y).
+test/kernel/posix_busybox_sh_prog.o: test/kernel/posix_busybox_sh_prog.c \
+                                     components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_prog.elf: test/kernel/posix_busybox_sh_prog.o \
+                                       components/posix_shim/libnxlibc.a \
+                                       test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_prog_blob.o: test/kernel/posix_busybox_sh_prog_blob.S \
+                                          test/kernel/posix_busybox_sh_prog.elf
+
 # Slice 7.6d.3a — EL0-fault demos.  Each is a libnxlibc-linked C
 # program: parent forks; child trips a fault (NULL write for the
 # segfault demo, `udf #0` for the undef demo); parent waits and
@@ -688,6 +708,7 @@ clean:
 	       test/kernel/musl_exec_parent_prog.elf \
 	       test/kernel/posix_musl_printf_prog.elf \
 	       test/kernel/posix_busybox_help_prog.elf \
+	       test/kernel/posix_busybox_sh_prog.elf \
 	       test/kernel/posix_segfault_prog.elf \
 	       test/kernel/posix_undef_prog.elf \
 	       components/posix_shim/libnxlibc.a \
