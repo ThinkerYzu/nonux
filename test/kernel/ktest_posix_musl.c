@@ -37,6 +37,7 @@
 #include "core/mmu/mmu.h"
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
+#include "framework/console.h"
 #include "framework/elf.h"
 #include "framework/process.h"
 #include "framework/syscall.h"
@@ -99,9 +100,12 @@ KTEST(posix_musl_prog_runs_main_through_init_libc_and_exits_57)
     KASSERT_NOT_NULL(g_musl_task);
 
     /* Wait for the process to exit.  Marker `[musl-ok]` reaches the
-     * live log via the slice-7.6c.3c magic-fd-handle: write(1, ...)
-     * routes to NX_SYS_DEBUG_WRITE.  At least one debug_write call
-     * is required for the test to pass. */
+     * live log via the slice-7.6d.N.6b CONSOLE handle: write(1, ...)
+     * resolves to slot 0's pre-installed CONSOLE entry and dispatches
+     * through nx_console_write.  At least one console_write call is
+     * required for the test to pass.  (Pre-7.6d.N.6b this counter
+     * tracked debug_write because fd 1 routed through the magic-fd
+     * fallback; the rename reflects the new path.) */
     int found = 0;
     for (int i = 0; i < 4096; i++) {
         struct nx_process *p = nx_process_lookup_by_pid(host_pid);
@@ -113,7 +117,7 @@ KTEST(posix_musl_prog_runs_main_through_init_libc_and_exits_57)
         nx_task_yield();
     }
     KASSERT(found);
-    KASSERT(nx_syscall_debug_write_calls() >= 1);
+    KASSERT(nx_console_write_calls() >= 1);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

@@ -119,7 +119,15 @@ int nx_channel_recv(struct nx_channel_endpoint *e,
     if (!e || !buf) return NX_EINVAL;
     if (cap == 0)  return NX_EINVAL;
     if (e->closed) return NX_EBUSY;
-    if (e->head == e->tail) return NX_EAGAIN;   /* empty */
+    if (e->head == e->tail) {
+        /* Empty queue.  POSIX pipe semantic: if the writer side
+         * (peer endpoint) is fully closed, this is EOF (return 0).
+         * Otherwise it's transient — caller can retry.  Slice
+         * 7.6d.N.6b: cat reads from a pipe whose writer (echo) has
+         * exited; without this branch cat sees NX_EAGAIN forever. */
+        if (peer_of_const(e)->closed) return 0;
+        return NX_EAGAIN;
+    }
 
     struct channel_msg *m = &e->ring[e->head];
     if ((size_t)m->len > cap) return NX_ENOMEM;

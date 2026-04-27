@@ -28,6 +28,7 @@
 #include "core/mmu/mmu.h"
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
+#include "framework/console.h"
 #include "framework/elf.h"
 #include "framework/process.h"
 #include "framework/syscall.h"
@@ -96,10 +97,13 @@ KTEST(musl_exec_parent_forks_and_execs_musl_child_returns_57)
         nx_task_yield();
     }
     KASSERT(found);
-    /* At least 3 debug_writes: parent's [musl-exec-parent], child's
-     * [musl-ok] (via slice-7.6c.3c stdio plumbing), parent's
-     * [musl-exec-ok]. */
-    KASSERT(nx_syscall_debug_write_calls() >= 3);
+    /* Three markers: parent's [musl-exec-parent] + [musl-exec-ok] both
+     * go through libnxlibc's nxlibc_write fd=1 shortcut → NX_SYS_DEBUG_WRITE
+     * (debug_write_calls path); child's [musl-ok] goes through musl's
+     * write(1) → NX_SYS_WRITE → CONSOLE handle → nx_console_write
+     * (console_write_calls path, slice 7.6d.N.6b).  Combined ≥ 3. */
+    KASSERT(nx_syscall_debug_write_calls() >= 2);
+    KASSERT(nx_console_write_calls() >= 1);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

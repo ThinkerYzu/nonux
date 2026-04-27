@@ -28,6 +28,7 @@
 #include "core/mmu/mmu.h"
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
+#include "framework/console.h"
 #include "framework/elf.h"
 #include "framework/process.h"
 #include "framework/syscall.h"
@@ -94,9 +95,12 @@ KTEST(posix_musl_printf_emits_every_conversion_and_exits_67)
         nx_task_yield();
     }
     KASSERT(found);
-    /* musl's vfprintf write-flushes the formatted output as a
-     * single buffered write; expect at least one debug_write. */
-    KASSERT(nx_syscall_debug_write_calls() >= 1);
+    /* musl's vfprintf write-flushes the formatted output as a single
+     * buffered write through fd 1 → CONSOLE handle (slice 7.6d.N.6b)
+     * → nx_console_write.  Pre-7.6d.N.6b this hit the magic-fd
+     * fallback to NX_SYS_DEBUG_WRITE; the counter rename reflects
+     * the new dispatch path. */
+    KASSERT(nx_console_write_calls() >= 1);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

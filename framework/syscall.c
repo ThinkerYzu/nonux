@@ -1,5 +1,6 @@
 #include "framework/syscall.h"
 #include "framework/channel.h"
+#include "framework/console.h"
 #include "framework/handle.h"
 #include "framework/process.h"
 #include "framework/registry.h"
@@ -16,6 +17,7 @@
 #include "interfaces/scheduler.h"
 #endif
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -90,6 +92,7 @@ void nx_syscall_reset_for_test(void)
     struct nx_process *p = nx_process_current();
     nx_handle_table_init(&p->handles);
     __atomic_store_n(&g_debug_write_calls, 0, __ATOMIC_RELAXED);
+    nx_console_reset_for_test();
 }
 
 uint64_t nx_syscall_debug_write_calls(void)
@@ -241,6 +244,15 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
     nx_handle_t h = (nx_handle_t)a0;
     struct nx_handle_table *t = nx_syscall_current_table();
 
+    /* Slice 7.6d.N.6b — POSIX STDIN_FILENO = 0 routes to slot 2 (encoded
+     * value 0 has no natural form; see sys_read for the same routing
+     * + rationale).  Reconstruct the encoded handle for slot 2 with the
+     * slot's current generation so `nx_handle_close` resolves it. */
+    if (h == 0) {
+        if (!t || t->entries[2].type == NX_HANDLE_INVALID) return NX_ENOENT;
+        h = (t->entries[2].generation << 8) | (uint32_t)(2 + 1);
+    }
+
     /* Type-aware close: look up first so we can drop the object's
      * own refcount before the slot itself is freed.  If lookup fails
      * (stale handle), pass straight to nx_handle_close which returns
@@ -268,6 +280,10 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
             free(object);
 #endif
         }
+        /* HANDLE_CONSOLE: nothing to free — the underlying object is the
+         * `g_nx_console` sentinel, shared across every slot 0/1/2 in
+         * every process.  The handle slot itself is freed by the
+         * `nx_handle_close` call below. */
     }
     return nx_handle_close(t, h);
 }
@@ -522,35 +538,57 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     void *obj;
     int rc;
 
-    /* Slice 7.6c.3c — magic stdin fd 0.  When fd 0 has no allocated
-     * handle, report EOF (0 bytes) — there's no console input source
-     * in v1.  Slice 7.6d.N.6 extension: h == 0 has no encoded form
-     * (encoded 0 = NX_HANDLE_INVALID), so the standard lookup returns
-     * NX_EINVAL.  ash uses dup2(_, 0) to redirect stdin to a pipe;
-     * dup3 with newfd=0 installs at slot 0 with gen=0.  Look up slot
-     * 0 directly here so a dup3'd stdin resolves to its real handle,
-     * and an empty slot 0 still falls through to EOF. */
+    /* Slice 7.6d.N.6b — POSIX STDIN_FILENO = 0 routes to slot 2 (the
+     * pre-installed CONSOLE read end) since encoded value 0 is
+     * reserved for NX_HANDLE_INVALID and `nx_handle_lookup` would
+     * reject it as a bad encoding.  Reading slot 2 directly bypasses
+     * the encoded-value generation check; a dup3-redirected stdin
+     * still resolves here because dup3 installs at slot 2 with gen 0
+     * when newfd == 0.  No magic fall-through to EOF — if slot 2 is
+     * empty (which only happens before nx_process_create runs, e.g.
+     * the bare g_kernel_process used in host fixtures that bypass
+     * nx_process_create), a normal-shape NX_ENOENT is returned. */
     if (h == 0) {
-        if (t && t->entries[0].type != NX_HANDLE_INVALID) {
-            type   = t->entries[0].type;
-            rights = t->entries[0].rights;
-            obj    = t->entries[0].object;
-            rc     = NX_OK;
-        } else {
-            return 0;  /* EOF — nothing piped onto stdin */
-        }
+        if (!t || t->entries[2].type == NX_HANDLE_INVALID) return NX_ENOENT;
+        type   = t->entries[2].type;
+        rights = t->entries[2].rights;
+        obj    = t->entries[2].object;
+        rc     = NX_OK;
     } else {
         rc = nx_handle_lookup(t, h, &type, &rights, &obj);
         if (rc != NX_OK) return rc;
     }
     if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
 
+    if (type == NX_HANDLE_CONSOLE) {
+        /* v1: UART RX not wired — nx_console_read returns 0 = EOF.
+         * Skip the user-buffer copy on the EOF case to avoid faulting
+         * on a NULL `buf` when cap > 0. */
+        int got = nx_console_read(0, cap);
+        return (nx_status_t)got;
+    }
+
     if (type == NX_HANDLE_CHANNEL) {
         /* Pipe read — bounded by the channel's 256-byte message size,
-         * same as sys_channel_recv. */
+         * same as sys_channel_recv.  Slice 7.6d.N.6b: convert
+         * NX_EAGAIN (empty + writers still attached) into a blocking
+         * yield-loop so POSIX read semantics hold for shell pipelines.
+         * Empty + writers all closed returns 0 = EOF directly from
+         * nx_channel_recv (channel.c).  Host build doesn't have a
+         * scheduler, so the loop falls through after one attempt —
+         * host pipe tests don't exercise the blocking case. */
         if (cap > NX_CHANNEL_MSG_MAX) cap = NX_CHANNEL_MSG_MAX;
         uint8_t staging[NX_CHANNEL_MSG_MAX];
-        int got = nx_channel_recv(obj, staging, cap);
+        int got;
+        for (;;) {
+            got = nx_channel_recv(obj, staging, cap);
+#if !__STDC_HOSTED__
+            if (got != NX_EAGAIN) break;
+            nx_task_yield();
+#else
+            break;
+#endif
+        }
         if (got < 0) return got;
         rc = copy_to_user(buf, staging, (size_t)got);
         if (rc != NX_OK) return rc;
@@ -587,26 +625,21 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     uint32_t rights;
     void *obj;
     int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
-
-    /* Slice 7.6c.3c — magic stdio fds.  When fd 1 (stdout) or fd 2
-     * (stderr) HAS NO ALLOCATED HANDLE, route to NX_SYS_DEBUG_WRITE
-     * so musl/busybox-style programs get console output without
-     * first opening anything.  libnxlibc does the same trick at the
-     * libc layer; doing it kernel-side here handles musl-linked
-     * programs uniformly (musl doesn't know about our libnxlibc
-     * magic).  Critically, the lookup-then-fallback ordering means
-     * that if a program legitimately allocates fd 1 or 2 to a
-     * channel/file (e.g. NX_SYS_PIPE returns 1 + 2 in a fresh
-     * handle table), the regular dispatch wins.  Real stdio
-     * ownership (per-process file table entries pointing at a
-     * /dev/console-equivalent) is a Phase-9 follow-up — at that
-     * point this fallback becomes dead code and gets removed. */
-    if (rc == NX_ENOENT && (h == 1 || h == 2)) {
-        return sys_debug_write((uint64_t)(uintptr_t)buf, (uint64_t)len,
-                               0, 0, 0, 0);
-    }
     if (rc != NX_OK) return rc;
     if ((rights & NX_RIGHT_WRITE) != NX_RIGHT_WRITE) return NX_EPERM;
+
+    if (type == NX_HANDLE_CONSOLE) {
+        /* Slice 7.6d.N.6b — STDOUT/STDERR routed through the pre-
+         * installed CONSOLE handles at slots 0/1.  Per-byte UART
+         * write inside nx_console_write; copy_from_user the payload
+         * into a kernel staging buffer first so we don't ask the
+         * UART to dereference user pointers across a TTBR0 flip. */
+        if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
+        uint8_t staging[NX_FILE_IO_MAX];
+        rc = copy_from_user(staging, buf, len);
+        if (rc != NX_OK) return rc;
+        return (nx_status_t)nx_console_write(staging, len);
+    }
 
     if (type == NX_HANDLE_CHANNEL) {
         if (len > NX_CHANNEL_MSG_MAX) len = NX_CHANNEL_MSG_MAX;
@@ -763,21 +796,19 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
     /*
      * Slice 7.6 prereq: duplicate the parent's CHANNEL handles into
      * the child's handle table.  Each duplicate bumps the matching
-     * endpoint's `handle_refs` so a single endpoint can survive
-     * close calls from both processes — the close-on-fork pattern
-     * (parent keeps write-side, child keeps read-side, after each
-     * has dropped the irrelevant fd) needs both handles live until
-     * each side voluntarily closes.
+     * endpoint's handle_refs so a single endpoint can survive close
+     * calls from both processes — the close-on-fork pipe pattern.
      *
-     * HANDLE_FILE is intentionally NOT duplicated yet — each
-     * `vfs_simple` open carries per-cursor state (current offset,
-     * etc.) that's specific to that handle, so a naive alias would
-     * make `lseek` from one process visible to the other.  A real
-     * file dup needs the underlying driver to grow a per-open
-     * `dup` op or for the framework to track per-handle cursors
-     * outside the driver — both bigger than this slice.  v1's
-     * fork therefore inherits the parent's *channel* handles and
-     * leaves files behind.
+     * HANDLE_FILE is intentionally NOT duplicated (per-cursor state).
+     * HANDLE_CONSOLE doesn't need duplication — `nx_process_create`
+     * pre-installs CONSOLE at child slots 0/1/2 with the same shape
+     * as the parent's, so the child's stdin/stdout/stderr already
+     * mirror the parent's at fork time.  (Edge case: parent dup3'd
+     * a CHANNEL onto slot 0/1/2 before fork → child still gets the
+     * pre-installed CONSOLE there, NOT the parent's redirected
+     * CHANNEL.  Workloads in 7.6d.N.6b dup3 AFTER fork in each
+     * child, so this isn't currently exercised.  Slot-position-
+     * preserving inheritance is a follow-up.)
      */
     struct nx_handle_table *parent_tbl = &caller->process->handles;
     struct nx_handle_table *child_tbl  = &child->handles;
@@ -790,11 +821,6 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
         int rc = nx_handle_alloc(child_tbl, src->type,
                                  src->rights, src->object, &dup_h);
         if (rc != NX_OK) {
-            /* Child's table is full — drop the retain we just
-             * issued, then bail out.  The child's already-allocated
-             * entries are torn down by `nx_process_destroy`'s
-             * handle-table walk below.  Same NX_ENOMEM the caller
-             * would have seen if process_fork itself had failed. */
             nx_channel_endpoint_close(src->object);
             nx_process_destroy(child);
             return NX_ENOMEM;
@@ -858,14 +884,40 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
     uint32_t  pid         = (uint32_t)a0;
     int      *user_status = (int *)(uintptr_t)a1;
 
-    struct nx_process *target = nx_process_lookup_by_pid(pid);
-    if (!target || target == &g_kernel_process) return NX_ENOENT;
-
     struct nx_process *caller = nx_process_current();
-    if (target == caller) return NX_EINVAL;
+    struct nx_process *target = NULL;
 
-    while (target->state != NX_PROCESS_STATE_EXITED)
-        nx_task_yield();
+    /* Slice 7.6d.N.6b: pid == (uint32_t)-1 (POSIX waitpid for any
+     * child).  ash uses this for shell pipelines.  Scan the live
+     * process table for any process whose `parent_pid` matches the
+     * caller; prefer EXITED children so a ready zombie reaps
+     * immediately, otherwise yield and retry until one becomes
+     * ready.  Returns NX_ENOENT (≈ Linux ECHILD) if the caller has
+     * no children at all. */
+    if (pid == (uint32_t)-1) {
+        for (;;) {
+            struct nx_process *any_child = NULL;
+            struct nx_process *exited_child =
+                nx_process_find_exited_child(caller, &any_child);
+            if (exited_child) { target = exited_child; pid = target->pid; break; }
+            if (!any_child) {
+                /* Linux ECHILD = 10.  Returning the NX_E* equivalent
+                 * (NX_ENOENT = -4) would translate to musl errno=EINTR
+                 * which ash treats as "interrupted, retry" → infinite
+                 * spin.  Return -10 directly to match the POSIX
+                 * "no more children" contract. */
+                return -10;
+            }
+            nx_task_yield();
+        }
+    } else {
+        target = nx_process_lookup_by_pid(pid);
+        if (!target || target == &g_kernel_process) return NX_ENOENT;
+        if (target == caller) return NX_EINVAL;
+
+        while (target->state != NX_PROCESS_STATE_EXITED)
+            nx_task_yield();
+    }
 
     /* Deliver exit_code to user if requested.  Bad user pointer is
      * non-fatal — we still return the pid so the caller learns
@@ -874,6 +926,11 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
         int kstatus = target->exit_code;
         (void)copy_to_user(user_status, &kstatus, sizeof kstatus);
     }
+    /* Slice 7.6d.N.6b: mark as reaped so a subsequent waitpid(-1)
+     * doesn't return the same EXITED child again.  Real reap-on-wait
+     * (free the process struct) is still a follow-up — for now we
+     * just hide the zombie from `nx_process_find_exited_child`. */
+    target->reaped = true;
     return (nx_status_t)pid;
 #endif
 }
@@ -1937,16 +1994,17 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
      * framework/handle.c's encode_handle: low 8 bits = idx + 1, high
      * 24 = generation.  Special case: newfd == 0 (POSIX STDIN_FILENO)
      * has no encoded form in our scheme — encoded value 0 is reserved
-     * for NX_HANDLE_INVALID.  ash uses dup2(_, 0) to redirect stdin
-     * to a pipe read end; treat newfd=0 as "install at slot 0 with
-     * gen=0" so subsequent read(0, ...) can find it via the matching
-     * h==0 special case in sys_read.  Slot 0's encoded handle would
-     * normally be 1; we lie here so dup3's return value matches what
-     * ash passed in. */
+     * for NX_HANDLE_INVALID.  Slice 7.6d.N.6b reserves slot 2 for the
+     * pre-installed CONSOLE STDIN handle, and the matching h==0
+     * special case in sys_read / sys_handle_close routes to that
+     * slot.  ash uses dup2(_, 0) to redirect stdin to a pipe read
+     * end; install at slot 2 with gen=0 so subsequent read(0, ...)
+     * picks up the redirected handle.  We lie about the returned
+     * encoded value so it equals what ash passed in. */
     size_t   new_idx;
     uint32_t new_gen;
     if (newfd == 0) {
-        new_idx = 0;
+        new_idx = 2;
         new_gen = 0;
     } else {
         uint32_t enc = newfd & 0xffu;

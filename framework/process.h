@@ -4,6 +4,7 @@
 #include "framework/handle.h"
 #include "framework/registry.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /*
@@ -46,9 +47,23 @@ enum nx_process_state {
 
 struct nx_process {
     uint32_t                pid;
+    /* Slice 7.6d.N.6b: tracks the parent pid so `sys_wait(pid=-1)`
+     * (POSIX waitpid for any child) can pick a child of the caller.
+     * 0 means "no parent" — i.e. the process was spawned outside
+     * of a fork (init, the test parents that nx_process_create
+     * directly) so waitpid(-1) won't see it as a child of anyone.
+     * Set in `nx_process_fork`. */
+    uint32_t                parent_pid;
     char                    name[NX_PROCESS_NAME_MAX];
     enum nx_process_state   state;
     int                     exit_code;
+    /* Slice 7.6d.N.6b: set to true when `sys_wait` has already
+     * delivered this process's exit status to its parent.  Subsequent
+     * `waitpid(-1)` calls skip reaped children (otherwise they'd see
+     * the same EXITED child forever, since v1 doesn't free zombies).
+     * Real reap-on-wait would free the storage entirely; for now we
+     * just hide the zombie from waitpid. */
+    bool                    reaped;
     struct nx_handle_table  handles;
     /*
      * TTBR0 root (slice 7.2).  Physical address of the L1 page table
@@ -249,5 +264,20 @@ void nx_process_reset_for_test(void);
  * copy — `ttbr0_root` stays 0 on both parent and child.
  */
 struct nx_process *nx_process_fork(struct nx_process *parent);
+
+/*
+ * Slice 7.6d.N.6b — POSIX waitpid(-1) helper.  Scan the live process
+ * table for any process whose `parent_pid` matches `parent->pid`.
+ * Returns the first EXITED child found.  If none EXITED, sets
+ * `*any_active_child` to non-NULL when at least one ACTIVE child
+ * exists (so the caller knows to keep waiting); leaves it NULL when
+ * the caller has no children at all (return NX_ENOENT ≈ ECHILD).
+ *
+ * `any_active_child` may be NULL if the caller doesn't care about
+ * the distinction.
+ */
+struct nx_process *nx_process_find_exited_child(
+    const struct nx_process *parent,
+    struct nx_process **any_active_child);
 
 #endif /* NX_FRAMEWORK_PROCESS_H */

@@ -44,6 +44,7 @@ FW_C     := framework/registry.c \
             framework/handle.c \
             framework/syscall.c \
             framework/channel.c \
+            framework/console.c \
             framework/process.c \
             framework/elf.c
 
@@ -193,25 +194,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh.c \
                  test/kernel/ktest_posix_busybox_sh_echo.c \
                  test/kernel/ktest_posix_busybox_sh_echo_seq.c \
-                 test/kernel/ktest_posix_busybox_sh_ls.c
-# Slice 7.6d.N.6 — `busybox sh -c "echo hello | cat"` first-pipe attempt
-# captured a hang.  pipe2 + clone + dup3 + readv mappings landed; sys_dup3
-# implements close-then-replace at a target slot; sys_read special-cases
-# h=0 (STDIN) by direct slot-0 lookup.  Test currently doesn't reach a
-# clean exit because the handle-encoding model (slot 0 = encoded handle 1
-# = "fd 1" in POSIX terms) collides with pipe()'s natural slot 0/1
-# allocation: stage 1's `dup2(pipe_write, STDOUT_FILENO)` overwrites the
-# pipe READ end (slot 0) while still holding its own write-end ref, then
-# echo's stdout falls through magic-fd to UART instead of into the pipe;
-# stage 2 cat's stdin similarly never gets a real pipe read end.  Cat
-# also exercises an unmapped sendfile (svc 71) and rt_sigprocmask (135)
-# that the slice's pass-through diagnostic surfaced; both return EPERM
-# and cat appears to busy-loop somewhere downstream.  Holding the test
-# out of KTEST_C until slice 7.6d.N.6b reserves slots 0/1/2 in
-# nx_handle_alloc so pipe() returns slots 3+ and the standard POSIX-fd
-# semantics work end-to-end.  See logs/session-61-... for the full
-# arc + the .c/.S blob still in tree (built but unused).
-#                test/kernel/ktest_posix_busybox_sh_pipe.c
+                 test/kernel/ktest_posix_busybox_sh_ls.c \
+                 test/kernel/ktest_posix_busybox_sh_pipe.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -242,7 +226,8 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_busybox_sh_prog_blob.S \
                  test/kernel/posix_busybox_sh_echo_prog_blob.S \
                  test/kernel/posix_busybox_sh_echo_seq_prog_blob.S \
-                 test/kernel/posix_busybox_sh_ls_prog_blob.S
+                 test/kernel/posix_busybox_sh_ls_prog_blob.S \
+                 test/kernel/posix_busybox_sh_pipe_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin

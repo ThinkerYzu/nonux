@@ -52,6 +52,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/handle.c \
         ../../framework/syscall.c \
         ../../framework/channel.c \
+        ../../framework/console.c \
         ../../framework/process.c \
         ../../framework/elf.c \
         ../../core/sched/task.c \

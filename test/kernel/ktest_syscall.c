@@ -132,11 +132,19 @@ KTEST(syscall_handle_close_through_svc_closes_handle_in_kernel_table)
     KASSERT_EQ_U(nx_handle_lookup(t, h, 0, 0, 0), NX_ENOENT);
 }
 
-KTEST(syscall_handle_close_invalid_handle_returns_einval)
+KTEST(syscall_handle_close_zero_handle_with_no_stdin_returns_enoent)
 {
+    /* Slice 7.6d.N.6b: handle value 0 (= NX_HANDLE_INVALID encoded form,
+     * = POSIX STDIN_FILENO) is now routed to slot 2 — the pre-installed
+     * CONSOLE STDIN slot in user processes.  Inside ktest the current
+     * process is g_kernel_process, which doesn't pre-install console
+     * handles, so slot 2 is empty and the close returns NX_ENOENT.
+     * (Pre-7.6d.N.6b this returned NX_EINVAL because h=0 had no
+     * encoded form; the rename + value rotation reflect the new
+     * lookup-then-close semantic.) */
     nx_syscall_reset_for_test();
     int64_t rc = svc1(NX_SYS_HANDLE_CLOSE, NX_HANDLE_INVALID);
-    KASSERT_EQ_U((uint64_t)rc, (uint64_t)(int64_t)NX_EINVAL);
+    KASSERT_EQ_U((uint64_t)rc, (uint64_t)(int64_t)NX_ENOENT);
 }
 
 KTEST(syscall_resumes_at_instruction_after_svc)

@@ -36,7 +36,7 @@ TEST(process_current_defaults_to_kernel_process_with_no_task)
     ASSERT_EQ_PTR(nx_process_current(), &g_kernel_process);
 }
 
-TEST(process_create_allocates_fresh_pid_and_empty_handle_table)
+TEST(process_create_allocates_fresh_pid_and_pre_installs_console_handles)
 {
     nx_process_reset_for_test();
 
@@ -45,7 +45,11 @@ TEST(process_create_allocates_fresh_pid_and_empty_handle_table)
     ASSERT_EQ_U(p1->pid, 1);                /* first user pid is 1 */
     ASSERT(strcmp(p1->name, "proc1") == 0);
     ASSERT(p1->state == NX_PROCESS_STATE_ACTIVE);
-    ASSERT_EQ_U(nx_handle_table_count(&p1->handles), 0);
+    /* Slice 7.6d.N.6b: nx_process_create pre-installs three CONSOLE
+     * handles at slots 0/1/2 (encoded values 1/2/3) so STDOUT_FILENO=1
+     * and STDERR_FILENO=2 round-trip through real handle dispatch and
+     * pipe() allocations naturally land at slot 3+. */
+    ASSERT_EQ_U(nx_handle_table_count(&p1->handles), 3);
 
     struct nx_process *p2 = nx_process_create("proc2");
     ASSERT_NOT_NULL(p2);
@@ -70,14 +74,16 @@ TEST(process_destroy_closes_outstanding_handles)
 
     /* Seed a couple of VMO handles.  Destroy should release them via
      * nx_handle_close (VMO has no type-aware destructor, so this just
-     * exercises the table-walk path). */
+     * exercises the table-walk path).  Pre-installed CONSOLE handles
+     * (slice 7.6d.N.6b) account for 3 of the count; the two VMOs land
+     * at slots 3 and 4 for a total of 5. */
     static int dummy1, dummy2;
     nx_handle_t h1, h2;
     ASSERT_EQ_U(nx_handle_alloc(&p->handles, NX_HANDLE_VMO, NX_RIGHTS_ALL,
                                 &dummy1, &h1), NX_OK);
     ASSERT_EQ_U(nx_handle_alloc(&p->handles, NX_HANDLE_VMO, NX_RIGHTS_ALL,
                                 &dummy2, &h2), NX_OK);
-    ASSERT_EQ_U(nx_handle_table_count(&p->handles), 2);
+    ASSERT_EQ_U(nx_handle_table_count(&p->handles), 5);
 
     nx_process_destroy(p);
     /* The process is gone — no way to inspect its table after destroy,
