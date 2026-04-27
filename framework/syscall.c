@@ -520,16 +520,29 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     enum nx_handle_type type;
     uint32_t rights;
     void *obj;
-    int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
+    int rc;
 
     /* Slice 7.6c.3c — magic stdin fd 0.  When fd 0 has no allocated
      * handle, report EOF (0 bytes) — there's no console input source
-     * in v1.  Symmetric with the sys_write magic for fd 1/2: a
-     * program that legitimately allocates fd 0 (e.g. via dup) gets
-     * the regular dispatch.  Real /dev/console-input is a Phase-9
-     * follow-up. */
-    if (rc == NX_ENOENT && h == 0) return 0;
-    if (rc != NX_OK) return rc;
+     * in v1.  Slice 7.6d.N.6 extension: h == 0 has no encoded form
+     * (encoded 0 = NX_HANDLE_INVALID), so the standard lookup returns
+     * NX_EINVAL.  ash uses dup2(_, 0) to redirect stdin to a pipe;
+     * dup3 with newfd=0 installs at slot 0 with gen=0.  Look up slot
+     * 0 directly here so a dup3'd stdin resolves to its real handle,
+     * and an empty slot 0 still falls through to EOF. */
+    if (h == 0) {
+        if (t && t->entries[0].type != NX_HANDLE_INVALID) {
+            type   = t->entries[0].type;
+            rights = t->entries[0].rights;
+            obj    = t->entries[0].object;
+            rc     = NX_OK;
+        } else {
+            return 0;  /* EOF — nothing piped onto stdin */
+        }
+    } else {
+        rc = nx_handle_lookup(t, h, &type, &rights, &obj);
+        if (rc != NX_OK) return rc;
+    }
     if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
 
     if (type == NX_HANDLE_CHANNEL) {
@@ -1367,6 +1380,56 @@ static nx_status_t sys_writev(uint64_t a0, uint64_t a1, uint64_t a2,
 }
 
 /*
+ * NX_SYS_READV — (nx_handle_t h, const struct iovec *iov, int iovcnt)
+ * → total bytes read / NX_E*.
+ *
+ * Slice 7.6d.N.6.  Symmetric pair to sys_writev.  musl's
+ * `__stdio_read` flushes buffered input via SYS_readv — cat's main
+ * loop reads chunks of stdin via fread → __stdio_read → readv.
+ * Without this syscall, cat sees -ENOSYS (which our v1 collides
+ * with -EPERM but the failure shape is the same: cat aborts with
+ * "read error").
+ *
+ * Implementation mirrors sys_writev: walk the iovec, dispatch each
+ * entry through sys_read so the magic-fd / handle-table / CHANNEL
+ * / FILE branches apply.  Stop on first short read per Linux readv
+ * convention.  iovcnt cap NX_IOV_MAX_LOCAL = 16.
+ */
+static nx_status_t sys_readv(uint64_t a0, uint64_t a1, uint64_t a2,
+                             uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+    nx_handle_t h     = (nx_handle_t)a0;
+    const void *iovs  = (const void *)(uintptr_t)a1;
+    int         count = (int)a2;
+
+    if (count < 0) return NX_EINVAL;
+    if (count == 0) return 0;
+    if ((unsigned int)count > NX_IOV_MAX_LOCAL) return NX_EINVAL;
+
+    struct nx_iovec_user kiov[NX_IOV_MAX_LOCAL];
+    int rc = copy_from_user(kiov, iovs,
+                            (size_t)count * sizeof(struct nx_iovec_user));
+    if (rc != NX_OK) return rc;
+
+    int64_t total = 0;
+    for (int i = 0; i < count; i++) {
+        if (kiov[i].iov_len == 0) continue;
+        nx_status_t got = sys_read((uint64_t)h,
+                                   kiov[i].iov_base,
+                                   kiov[i].iov_len,
+                                   0, 0, 0);
+        if (got < 0) return total > 0 ? (nx_status_t)total : got;
+        total += got;
+        /* Short read (including 0 = EOF): match Linux readv —
+         * stop and return running total.  cat's loop will treat
+         * 0 as EOF and exit cleanly. */
+        if ((uint64_t)got < kiov[i].iov_len) break;
+    }
+    return (nx_status_t)total;
+}
+
+/*
  * NX_SYS_BRK — (uint64_t requested) → new break (slice 7.6c.3c).
  *
  * Linux brk(2) semantics: requested == 0 returns the current break;
@@ -1820,6 +1883,116 @@ static nx_status_t sys_openat(uint64_t a0, uint64_t a1, uint64_t a2,
     return sys_open(a1, (uint64_t)nx_flags, 0, 0, 0, 0);
 }
 
+/*
+ * NX_SYS_DUP3 — (int oldfd, int newfd, int flags) → newfd | -errno.
+ *
+ * Slice 7.6d.N.6 minimum.  ash uses dup3 to redirect stdin/stdout to
+ * pipe ends before exec'ing pipeline stages: e.g. for `echo | cat`,
+ * stage 1 does `dup3(pipe_write, STDOUT_FILENO, 0)` so subsequent
+ * `write(1, ...)` lands in the pipe.
+ *
+ * Encoding subtlety: our handles encode `(generation << 8) | (idx + 1)`.
+ * ash treats newfd as an opaque integer that must keep working as the
+ * caller's literal handle value after dup3 returns.  We honour that by
+ * decoding newfd's embedded generation and forcing the slot's gen to
+ * match — so the encoded handle for the slot equals newfd exactly,
+ * regardless of how many close/alloc cycles the slot lived through
+ * before.  This breaks the usual "stale-handle protection bumps gen"
+ * invariant for THIS slot, but the caller is explicitly replacing —
+ * any pre-dup3 handle value to the same slot was about to be invalid
+ * anyway.
+ */
+static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+    nx_handle_t oldfd = (nx_handle_t)a0;
+    nx_handle_t newfd = (nx_handle_t)a1;
+    int flags = (int)a2;
+    (void)flags;  /* O_CLOEXEC etc. ignored in v1 */
+
+    /* POSIX: dup3 with oldfd == newfd returns -EINVAL (unlike dup2 which
+     * returns newfd unchanged).  ash uses dup2 (= dup3 with flags=0) and
+     * doesn't hit this case in normal pipeline setup, but match the
+     * Linux semantic anyway. */
+    if (oldfd == newfd) {
+        /* dup2 (flags=0) returns newfd; dup3 returns -EINVAL.  We can't
+         * tell here which was the libc call (musl unconditionally
+         * issues SYS_dup3) — pick the dup2 semantic since that's the
+         * common path for ash and the failure mode is more friendly. */
+        return (nx_status_t)newfd;
+    }
+
+    struct nx_handle_table *t = nx_syscall_current_table();
+    if (!t) return NX_EINVAL;
+
+    /* 1. Look up oldfd. */
+    enum nx_handle_type src_type;
+    uint32_t            src_rights;
+    void               *src_object = 0;
+    int rc = nx_handle_lookup(t, oldfd, &src_type, &src_rights, &src_object);
+    if (rc != NX_OK) return rc;
+
+    /* 2. Decode newfd's slot index + generation.  Layout matches
+     * framework/handle.c's encode_handle: low 8 bits = idx + 1, high
+     * 24 = generation.  Special case: newfd == 0 (POSIX STDIN_FILENO)
+     * has no encoded form in our scheme — encoded value 0 is reserved
+     * for NX_HANDLE_INVALID.  ash uses dup2(_, 0) to redirect stdin
+     * to a pipe read end; treat newfd=0 as "install at slot 0 with
+     * gen=0" so subsequent read(0, ...) can find it via the matching
+     * h==0 special case in sys_read.  Slot 0's encoded handle would
+     * normally be 1; we lie here so dup3's return value matches what
+     * ash passed in. */
+    size_t   new_idx;
+    uint32_t new_gen;
+    if (newfd == 0) {
+        new_idx = 0;
+        new_gen = 0;
+    } else {
+        uint32_t enc = newfd & 0xffu;
+        if (enc == 0 || enc > NX_HANDLE_TABLE_CAPACITY) return NX_EINVAL;
+        new_idx = (size_t)(enc - 1);
+        new_gen = newfd >> 8;
+    }
+
+    /* 3. If newfd's slot has an entry, close its object.  Don't bump
+     * the slot's generation — we're about to overwrite it with a
+     * specific generation embedded in newfd. */
+    struct nx_handle_entry *e = &t->entries[new_idx];
+    if (e->type != NX_HANDLE_INVALID) {
+        if (e->type == NX_HANDLE_CHANNEL) {
+            nx_channel_endpoint_close(e->object);
+        } else if (e->type == NX_HANDLE_FILE) {
+            const struct nx_vfs_ops *vops; void *vself;
+            if (resolve_vfs(&vops, &vself) == NX_OK)
+                vops->close(vself, e->object);
+        } else if (e->type == NX_HANDLE_DIR) {
+#if !__STDC_HOSTED__
+            free(e->object);
+#endif
+        }
+        /* count stays the same — we're replacing one entry with one. */
+    } else {
+        t->count++;
+    }
+
+    /* 4. For channel handles, retain the source endpoint — the new
+     * slot now holds an additional reference. */
+    if (src_type == NX_HANDLE_CHANNEL) {
+        nx_channel_endpoint_retain(src_object);
+    }
+
+    /* 5. Install the source's (type, rights, object) at the destination
+     * slot, forcing generation to match newfd's encoded gen.  After
+     * this, the encoded handle for `new_idx` equals newfd exactly. */
+    e->type       = src_type;
+    e->rights     = src_rights;
+    e->object     = src_object;
+    e->generation = new_gen;
+
+    return (nx_status_t)newfd;
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -1847,6 +2020,8 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_FSTATAT]        = sys_fstatat,
     [NX_SYS_GETDENTS64]     = sys_getdents64,
     [NX_SYS_OPENAT]         = sys_openat,
+    [NX_SYS_DUP3]           = sys_dup3,
+    [NX_SYS_READV]          = sys_readv,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

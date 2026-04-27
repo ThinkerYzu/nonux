@@ -220,6 +220,49 @@ enum nx_syscall_number {
                                   *   aarch64 so this entry is
                                   *   what every libc-driven open
                                   *   reaches.  Slice 7.6d.N.5. */
+    NX_SYS_DUP3           = 24,  /* (int oldfd, int newfd, int flags)
+                                  *   → newfd on success (the encoded
+                                  *   handle value), or small Linux-
+                                  *   errno on failure.  Slice
+                                  *   7.6d.N.6: ash uses dup3 to
+                                  *   redirect stdin/stdout to pipe
+                                  *   ends before exec'ing pipeline
+                                  *   stages.  `flags` ignored
+                                  *   (O_CLOEXEC isn't a thing in v1
+                                  *   — handles aren't inherited
+                                  *   across exec by default since
+                                  *   exec replaces the whole table).
+                                  *   Replaces newfd's slot atomically:
+                                  *   if it had an entry, that entry's
+                                  *   object is closed (channel endpoint
+                                  *   decref, file vfs close, dir
+                                  *   cursor free).  Then a copy of
+                                  *   oldfd's (type, rights, object) is
+                                  *   installed at newfd's slot, with
+                                  *   the slot's generation explicitly
+                                  *   set to match newfd's encoded gen
+                                  *   so the encoded handle returned
+                                  *   exactly equals newfd (callers
+                                  *   like ash assume the literal value
+                                  *   they passed in keeps working).
+                                  *   For channel handles, retains the
+                                  *   endpoint refcount so close-on-
+                                  *   exec / close-on-pipeline-cleanup
+                                  *   stays balanced. */
+    NX_SYS_READV          = 25,  /* (int fd, const struct iovec *iov,
+                                  *    int iovcnt)
+                                  *   → total bytes read / -errno.
+                                  *   Slice 7.6d.N.6: musl's
+                                  *   `__stdio_read` flushes buffered
+                                  *   input via SYS_readv (cat's
+                                  *   read loop hits this).  Mirror
+                                  *   of NX_SYS_WRITEV: walk iovec,
+                                  *   dispatch each entry through
+                                  *   sys_read so the magic-fd /
+                                  *   handle-table / CHANNEL / FILE
+                                  *   branches apply.  Cap iovcnt at
+                                  *   16; stop on first short read
+                                  *   per Linux readv semantic. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

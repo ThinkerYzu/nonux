@@ -14,18 +14,22 @@
  *
  * Number-only mapping; argument layouts must already match.  Mapped
  * syscalls today:
+ *   __NR_dup3        (24)  -> NX_SYS_DUP3          (24)   [flags ignored]
  *   __NR_openat      (56)  -> NX_SYS_OPENAT        (23)
  *   __NR_close       (57)  -> NX_SYS_HANDLE_CLOSE  (2)
+ *   __NR_pipe2       (59)  -> NX_SYS_PIPE          (15)   [drops flags]
  *   __NR_getdents64  (61)  -> NX_SYS_GETDENTS64    (22)
  *   __NR_lseek       (62)  -> NX_SYS_SEEK          (9)
  *   __NR_read        (63)  -> NX_SYS_READ          (7)
  *   __NR_write       (64)  -> NX_SYS_WRITE         (8)
+ *   __NR_readv       (65)  -> NX_SYS_READV         (25)
  *   __NR_writev      (66)  -> NX_SYS_WRITEV        (18)
  *   __NR_exit        (93)  -> NX_SYS_EXIT          (11)
  *   __NR_exit_group  (94)  -> NX_SYS_EXIT          (11)   [v1 alias]
  *   __NR_kill       (129)  -> NX_SYS_SIGNAL        (16)
  *   __NR_brk        (214)  -> NX_SYS_BRK           (17)
  *   __NR_munmap     (215)  -> NX_SYS_MUNMAP        (20)   [v1 no-op success]
+ *   __NR_clone      (220)  -> NX_SYS_FORK          (12)   [musl fork() drops flags]
  *   __NR_execve     (221)  -> NX_SYS_EXEC          (14)
  *   __NR_mmap       (222)  -> NX_SYS_MMAP          (19)   [anon-private only]
  *   __NR_wait4      (260)  -> NX_SYS_WAIT          (13)   [drops options+rusage]
@@ -45,19 +49,23 @@
 static inline long __nx_translate(long n)
 {
 	switch (n) {
+	case 24:  return 24;  /* __NR_dup3        -> NX_SYS_DUP3   [flags ignored] */
 	case 56:  return 23;  /* __NR_openat      -> NX_SYS_OPENAT */
 	case 57:  return 2;   /* __NR_close       -> NX_SYS_HANDLE_CLOSE */
+	case 59:  return 15;  /* __NR_pipe2       -> NX_SYS_PIPE   [flags ignored] */
 	case 61:  return 22;  /* __NR_getdents64  -> NX_SYS_GETDENTS64 */
 	case 79:  return 21;  /* __NR_newfstatat  -> NX_SYS_FSTATAT */
 	case 62:  return 9;   /* __NR_lseek       -> NX_SYS_SEEK */
 	case 63:  return 7;   /* __NR_read        -> NX_SYS_READ */
 	case 64:  return 8;   /* __NR_write       -> NX_SYS_WRITE */
+	case 65:  return 25;  /* __NR_readv       -> NX_SYS_READV */
 	case 66:  return 18;  /* __NR_writev      -> NX_SYS_WRITEV */
 	case 93:  return 11;  /* __NR_exit        -> NX_SYS_EXIT */
 	case 94:  return 11;  /* __NR_exit_group  -> NX_SYS_EXIT */
 	case 129: return 16;  /* __NR_kill        -> NX_SYS_SIGNAL */
 	case 214: return 17;  /* __NR_brk         -> NX_SYS_BRK */
 	case 215: return 20;  /* __NR_munmap      -> NX_SYS_MUNMAP */
+	case 220: return 12;  /* __NR_clone       -> NX_SYS_FORK   [flags ignored] */
 	case 221: return 14;  /* __NR_execve      -> NX_SYS_EXEC */
 	case 222: return 19;  /* __NR_mmap        -> NX_SYS_MMAP */
 	case 260: return 13;  /* __NR_wait4       -> NX_SYS_WAIT */
