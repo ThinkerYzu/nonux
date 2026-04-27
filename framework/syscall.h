@@ -18,8 +18,10 @@
  *   x0..x5  arguments
  *   x0      return value (sign-extended nx_status_t)
  *
- * Unknown syscall numbers and invalid argument pointers return
- * NX_EINVAL; handle operations pass through to the current owner's
+ * Unknown syscall numbers return NX_ENOSYS (Linux-compat -38) so musl
+ * surfaces them as `errno = ENOSYS` instead of EPERM; invalid argument
+ * pointers (and other in-handler errors) return NX_EINVAL or other
+ * NX_E* codes.  Handle operations pass through to the current owner's
  * handle table (for slice 5.4 that's a single process-agnostic global
  * table; slice 5.5 moves it per-task).
  */

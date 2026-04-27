@@ -41,7 +41,7 @@ static void reset_frame(struct trap_frame_host *tf)
 
 /* --- dispatch table validation -------------------------------------- */
 
-TEST(syscall_unknown_number_returns_einval_on_host)
+TEST(syscall_unknown_number_returns_enosys_on_host)
 {
     nx_syscall_reset_for_test();
     struct trap_frame_host tf;
@@ -50,19 +50,19 @@ TEST(syscall_unknown_number_returns_einval_on_host)
     reset_frame(&tf);
     tf.x[8] = 0;
     CALL_DISPATCH(&tf);
-    ASSERT_EQ_U(tf.x[0], (uint64_t)(int64_t)NX_EINVAL);
+    ASSERT_EQ_U(tf.x[0], (uint64_t)(int64_t)NX_ENOSYS);
 
     /* Out-of-range high. */
     reset_frame(&tf);
     tf.x[8] = 9999;
     CALL_DISPATCH(&tf);
-    ASSERT_EQ_U(tf.x[0], (uint64_t)(int64_t)NX_EINVAL);
+    ASSERT_EQ_U(tf.x[0], (uint64_t)(int64_t)NX_ENOSYS);
 
     /* Exactly at sentinel. */
     reset_frame(&tf);
     tf.x[8] = NX_SYSCALL_COUNT;
     CALL_DISPATCH(&tf);
-    ASSERT_EQ_U(tf.x[0], (uint64_t)(int64_t)NX_EINVAL);
+    ASSERT_EQ_U(tf.x[0], (uint64_t)(int64_t)NX_ENOSYS);
 }
 
 TEST(syscall_null_trap_frame_is_noop)

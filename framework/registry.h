@@ -42,6 +42,16 @@
 #define NX_EPERM    -10    /* caller attempted an operation it lacks rights for */
 #define NX_EAGAIN   -11    /* non-blocking op would block (e.g. empty channel recv) */
 
+/*
+ * Linux-ABI errno value, intentionally outside the NX_E* sequence above.
+ * Used by `nx_syscall_dispatch` for unknown syscall numbers so musl's
+ * `__syscall_ret` translates the value to userspace `errno = ENOSYS`
+ * ("Function not implemented") instead of `EPERM` ("Operation not
+ * permitted") — which is what the rest of the NX_E* codes would resolve
+ * to since `NX_EINVAL = -1` collides with Linux `EPERM = -1`.
+ */
+#define NX_ENOSYS   -38
+
 /* ---------- Enums --------------------------------------------------------- */
 
 enum nx_lifecycle_state {

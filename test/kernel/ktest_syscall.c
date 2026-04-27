@@ -64,16 +64,18 @@ static inline int64_t svc2(uint64_t num, uint64_t a0, uint64_t a1)
 
 /* ---- Tests ---------------------------------------------------------- */
 
-KTEST(syscall_unknown_number_returns_einval)
+KTEST(syscall_unknown_number_returns_enosys)
 {
     nx_syscall_reset_for_test();
     /* Reserved slot 0 and out-of-range values both reject with
-     * NX_EINVAL — proves the dispatcher validates against the table
-     * bounds before reading a function pointer. */
-    KASSERT_EQ_U((uint64_t)svc0(0),      (uint64_t)(int64_t)NX_EINVAL);
-    KASSERT_EQ_U((uint64_t)svc0(9999),   (uint64_t)(int64_t)NX_EINVAL);
+     * NX_ENOSYS — proves the dispatcher validates against the table
+     * bounds before reading a function pointer.  Linux-compat value
+     * (-38) so musl surfaces unmapped syscalls as `errno = ENOSYS`
+     * instead of `EPERM` (which is what NX_EINVAL = -1 collides with). */
+    KASSERT_EQ_U((uint64_t)svc0(0),      (uint64_t)(int64_t)NX_ENOSYS);
+    KASSERT_EQ_U((uint64_t)svc0(9999),   (uint64_t)(int64_t)NX_ENOSYS);
     KASSERT_EQ_U((uint64_t)svc0(NX_SYSCALL_COUNT),
-                 (uint64_t)(int64_t)NX_EINVAL);
+                 (uint64_t)(int64_t)NX_ENOSYS);
 }
 
 KTEST(syscall_debug_write_returns_byte_count)

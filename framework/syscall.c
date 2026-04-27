@@ -45,7 +45,7 @@ struct trap_frame {
  * the six AArch64-ABI argument registers (x0..x5) as raw uint64_t and
  * returns an nx_status_t; each handler is responsible for type-
  * converting its own args.  A NULL slot is reserved (NX_SYS_RESERVED_0
- * at number 0) so stray `svc #0` with x8 unset gets a crisp NX_EINVAL
+ * at number 0) so stray `svc #0` with x8 unset gets a crisp NX_ENOSYS
  * rather than silently invoking op 0.
  *
  * The table is const, so dispatch is lock-free by construction.  The
@@ -1996,7 +1996,7 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
-    [NX_SYS_RESERVED_0]     = NULL,             /* caught below → NX_EINVAL */
+    [NX_SYS_RESERVED_0]     = NULL,             /* caught below → NX_ENOSYS */
     [NX_SYS_DEBUG_WRITE]    = sys_debug_write,
     [NX_SYS_HANDLE_CLOSE]   = sys_handle_close,
     [NX_SYS_CHANNEL_CREATE] = sys_channel_create,
@@ -2052,7 +2052,7 @@ void nx_syscall_dispatch(struct trap_frame *tf)
 
     g_current_tf = tf;
     if (num >= NX_SYSCALL_COUNT || g_syscall_table[num] == NULL) {
-        rc = NX_EINVAL;
+        rc = NX_ENOSYS;
     } else {
         rc = g_syscall_table[num](tf->x[0], tf->x[1], tf->x[2],
                                   tf->x[3], tf->x[4], tf->x[5]);
