@@ -38,8 +38,11 @@ __cp_begin:
 	cbnz w0,__cp_cancel
 
 	// Linux syscall nr in x1 -> NX_SYS_* in x8.  Unmapped -> -ENOSYS.
+	cmp x1, #56;   b.eq .Lnx_openat
 	cmp x1, #57;   b.eq .Lnx_close
+	cmp x1, #61;   b.eq .Lnx_getdents64
 	cmp x1, #62;   b.eq .Lnx_lseek
+	cmp x1, #79;   b.eq .Lnx_fstatat
 	cmp x1, #63;   b.eq .Lnx_read
 	cmp x1, #64;   b.eq .Lnx_write
 	cmp x1, #66;   b.eq .Lnx_writev
@@ -54,8 +57,11 @@ __cp_begin:
 	movn x0, #37          // -ENOSYS = -38
 	ret
 
+.Lnx_openat:   mov x8, #23; b .Lnx_run    // NX_SYS_OPENAT
 .Lnx_close:    mov x8, #2;  b .Lnx_run    // NX_SYS_HANDLE_CLOSE
+.Lnx_getdents64: mov x8, #22; b .Lnx_run  // NX_SYS_GETDENTS64
 .Lnx_lseek:    mov x8, #9;  b .Lnx_run    // NX_SYS_SEEK
+.Lnx_fstatat:  mov x8, #21; b .Lnx_run    // NX_SYS_FSTATAT
 .Lnx_read:     mov x8, #7;  b .Lnx_run    // NX_SYS_READ
 .Lnx_write:    mov x8, #8;  b .Lnx_run    // NX_SYS_WRITE
 .Lnx_writev:   mov x8, #18; b .Lnx_run    // NX_SYS_WRITEV

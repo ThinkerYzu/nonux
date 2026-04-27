@@ -14,7 +14,9 @@
  *
  * Number-only mapping; argument layouts must already match.  Mapped
  * syscalls today:
+ *   __NR_openat      (56)  -> NX_SYS_OPENAT        (23)
  *   __NR_close       (57)  -> NX_SYS_HANDLE_CLOSE  (2)
+ *   __NR_getdents64  (61)  -> NX_SYS_GETDENTS64    (22)
  *   __NR_lseek       (62)  -> NX_SYS_SEEK          (9)
  *   __NR_read        (63)  -> NX_SYS_READ          (7)
  *   __NR_write       (64)  -> NX_SYS_WRITE         (8)
@@ -27,6 +29,7 @@
  *   __NR_execve     (221)  -> NX_SYS_EXEC          (14)
  *   __NR_mmap       (222)  -> NX_SYS_MMAP          (19)   [anon-private only]
  *   __NR_wait4      (260)  -> NX_SYS_WAIT          (13)   [drops options+rusage]
+ *   __NR_newfstatat  (79)  -> NX_SYS_FSTATAT       (21)   [ash PATH walk]
  *
  * Unmapped syscalls (and everything else) return -ENOSYS (-38) so
  * musl's wrappers translate to errno=ENOSYS at the call site.  Slice
@@ -42,7 +45,10 @@
 static inline long __nx_translate(long n)
 {
 	switch (n) {
+	case 56:  return 23;  /* __NR_openat      -> NX_SYS_OPENAT */
 	case 57:  return 2;   /* __NR_close       -> NX_SYS_HANDLE_CLOSE */
+	case 61:  return 22;  /* __NR_getdents64  -> NX_SYS_GETDENTS64 */
+	case 79:  return 21;  /* __NR_newfstatat  -> NX_SYS_FSTATAT */
 	case 62:  return 9;   /* __NR_lseek       -> NX_SYS_SEEK */
 	case 63:  return 7;   /* __NR_read        -> NX_SYS_READ */
 	case 64:  return 8;   /* __NR_write       -> NX_SYS_WRITE */

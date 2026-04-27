@@ -54,6 +54,7 @@ enum nx_handle_type {
     NX_HANDLE_THREAD,         /* thread */
     NX_HANDLE_IRQ,            /* interrupt source */
     NX_HANDLE_FILE,           /* file via VFS (Phase 6) */
+    NX_HANDLE_DIR,            /* directory cursor (slice 7.6d.N.5) */
 
     NX_HANDLE_TYPE_COUNT,     /* sentinel — keep last */
 };

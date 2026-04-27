@@ -191,7 +191,9 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_undef.c \
                  test/kernel/ktest_posix_busybox.c \
                  test/kernel/ktest_posix_busybox_sh.c \
-                 test/kernel/ktest_posix_busybox_sh_echo.c
+                 test/kernel/ktest_posix_busybox_sh_echo.c \
+                 test/kernel/ktest_posix_busybox_sh_echo_seq.c \
+                 test/kernel/ktest_posix_busybox_sh_ls.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -220,7 +222,9 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_undef_prog_blob.S \
                  test/kernel/posix_busybox_help_prog_blob.S \
                  test/kernel/posix_busybox_sh_prog_blob.S \
-                 test/kernel/posix_busybox_sh_echo_prog_blob.S
+                 test/kernel/posix_busybox_sh_echo_prog_blob.S \
+                 test/kernel/posix_busybox_sh_echo_seq_prog_blob.S \
+                 test/kernel/posix_busybox_sh_ls_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -319,7 +323,8 @@ test/kernel/initramfs.cpio: tools/pack-initramfs.py \
 	    test/kernel/banner.txt:/banner \
 	    test/kernel/argv_child_prog.elf:/argv_child \
 	    test/kernel/posix_musl_prog.elf:/musl_prog \
-	    $(BUSYBOX_BIN):/bin/busybox
+	    $(BUSYBOX_BIN):/bin/busybox \
+	    $(BUSYBOX_BIN):/bin/ls
 
 test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
                               test/kernel/initramfs.cpio
@@ -503,6 +508,43 @@ test/kernel/posix_busybox_sh_echo_prog.elf: test/kernel/posix_busybox_sh_echo_pr
 
 test/kernel/posix_busybox_sh_echo_prog_blob.o: test/kernel/posix_busybox_sh_echo_prog_blob.S \
                                                test/kernel/posix_busybox_sh_echo_prog.elf
+
+# Slice 7.6d.N.3 — busybox `sh -c "echo a; echo b"` discovery.
+# Same recipe as posix_busybox_sh_echo_prog; only the embedded
+# -c string differs (multi-statement script via `;` separator).
+# Discovery-driven escalation past slice 7.6d.N.2's single-
+# statement `echo hello` baseline.
+test/kernel/posix_busybox_sh_echo_seq_prog.o: test/kernel/posix_busybox_sh_echo_seq_prog.c \
+                                              components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_echo_seq_prog.elf: test/kernel/posix_busybox_sh_echo_seq_prog.o \
+                                                components/posix_shim/libnxlibc.a \
+                                                test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_echo_seq_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_echo_seq_prog_blob.o: test/kernel/posix_busybox_sh_echo_seq_prog_blob.S \
+                                                   test/kernel/posix_busybox_sh_echo_seq_prog.elf
+
+# Slice 7.6d.N.4 — busybox `sh -c "ls /"` discovery.  First
+# non-builtin escalation: ash forks + execve's `/bin/ls` (a
+# duplicate cpio entry pointing at the same busybox blob; busybox
+# dispatches to the `ls` applet via `basename(argv[0])`).
+test/kernel/posix_busybox_sh_ls_prog.o: test/kernel/posix_busybox_sh_ls_prog.c \
+                                        components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_ls_prog.elf: test/kernel/posix_busybox_sh_ls_prog.o \
+                                          components/posix_shim/libnxlibc.a \
+                                          test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_ls_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_ls_prog_blob.o: test/kernel/posix_busybox_sh_ls_prog_blob.S \
+                                             test/kernel/posix_busybox_sh_ls_prog.elf
 
 # Slice 7.6d.3a — EL0-fault demos.  Each is a libnxlibc-linked C
 # program: parent forks; child trips a fault (NULL write for the
@@ -700,7 +742,7 @@ KTEST_LOG := test/kernel-output.log
 
 test-kernel: kernel-test.bin
 	@rm -f $(KTEST_LOG)
-	@-timeout --preserve-status 15 \
+	@-timeout --preserve-status 90 \
 	    $(QEMU) -M virt,gic-version=2 -cpu cortex-a53 \
 	    -display none -serial file:$(KTEST_LOG) -monitor none \
 	    -m $(QEMU_MEM) -semihosting -kernel kernel-test.bin; \
@@ -730,6 +772,8 @@ clean:
 	       test/kernel/posix_busybox_help_prog.elf \
 	       test/kernel/posix_busybox_sh_prog.elf \
 	       test/kernel/posix_busybox_sh_echo_prog.elf \
+	       test/kernel/posix_busybox_sh_echo_seq_prog.elf \
+	       test/kernel/posix_busybox_sh_ls_prog.elf \
 	       test/kernel/posix_segfault_prog.elf \
 	       test/kernel/posix_undef_prog.elf \
 	       components/posix_shim/libnxlibc.a \

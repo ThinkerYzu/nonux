@@ -165,6 +165,61 @@ enum nx_syscall_number {
                                   *   fails (it treats failure as
                                   *   fatal); we leak the page until
                                   *   process exit. */
+    NX_SYS_FSTATAT        = 21,  /* (int dirfd, const char *path,
+                                  *    struct nx_user_stat *buf,
+                                  *    int flags)
+                                  *   → 0 on success (buf populated),
+                                  *   -2 (Linux ENOENT) if the path
+                                  *   doesn't resolve in vfs, or
+                                  *   another small Linux-errno on
+                                  *   bad args.  Slice 7.6d.N.4
+                                  *   minimum: ash uses this to walk
+                                  *   PATH looking for executables.
+                                  *   We populate just enough fields
+                                  *   for ash's `S_ISREG && X_OK`
+                                  *   check: `st_mode = S_IFREG |
+                                  *   0755`, `st_size = file size`,
+                                  *   everything else 0.  `dirfd` is
+                                  *   ignored (treated as AT_FDCWD)
+                                  *   because vfs_simple takes
+                                  *   absolute paths only.  Slice
+                                  *   7.6d.N.5 special-cases path "/"
+                                  *   to return `S_IFDIR | 0755` so
+                                  *   `ls` (and busybox's opendir)
+                                  *   can recognise the root as a
+                                  *   directory. */
+    NX_SYS_GETDENTS64     = 22,  /* (int fd, struct linux_dirent64 *buf,
+                                  *    size_t count)
+                                  *   → bytes written on success
+                                  *   (0 at EOF), or small Linux
+                                  *   errno on failure.  Slice
+                                  *   7.6d.N.5: `fd` must reference
+                                  *   a HANDLE_DIR (allocated by
+                                  *   sys_open when called with
+                                  *   path "/").  Records emitted
+                                  *   in Linux ABI shape (variable-
+                                  *   length, 8-byte aligned).  v1:
+                                  *   every entry is reported as
+                                  *   DT_REG; ls's plain mode
+                                  *   doesn't care about d_type. */
+    NX_SYS_OPENAT         = 23,  /* (int dirfd, const char *path,
+                                  *    int flags, mode_t mode)
+                                  *   Linux-shape wrapper over
+                                  *   sys_open.  `dirfd` ignored
+                                  *   (vfs_simple takes absolute
+                                  *   paths only), `mode` ignored
+                                  *   (no permission bits in v1).
+                                  *   `flags` interpreted as the
+                                  *   Linux O_* bit-field — at
+                                  *   least O_RDONLY (0) /
+                                  *   O_WRONLY (1) / O_RDWR (2) /
+                                  *   O_CREAT (0o100) /
+                                  *   O_DIRECTORY (0o200000).
+                                  *   musl's `open()` becomes
+                                  *   `openat(AT_FDCWD, ...)` on
+                                  *   aarch64 so this entry is
+                                  *   what every libc-driven open
+                                  *   reaches.  Slice 7.6d.N.5. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

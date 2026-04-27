@@ -258,6 +258,15 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
             const struct nx_vfs_ops *vops; void *vself;
             if (resolve_vfs(&vops, &vself) == NX_OK)
                 vops->close(vself, object);
+        } else if (type == NX_HANDLE_DIR) {
+            /* Slice 7.6d.N.5 — free the directory cursor.  No vfs
+             * dispatch: the cursor is a kheap-allocated state struct
+             * owned by the syscall layer.  Host build has no kheap;
+             * the HANDLE_DIR path is unreachable on host because
+             * sys_open's `/` branch is gated under !__STDC_HOSTED__. */
+#if !__STDC_HOSTED__
+            free(object);
+#endif
         }
     }
     return nx_handle_close(t, h);
@@ -394,6 +403,18 @@ static nx_status_t sys_channel_recv(uint64_t a0, uint64_t a1, uint64_t a2,
  * Slice 6.4 adds `NX_RIGHT_SEEK` alongside the seek op.
  */
 
+/*
+ * Slice 7.6d.N.5 — directory cursor.  Bare-bones state struct
+ * holding just the readdir cookie; allocated when sys_open is
+ * called with path == "/" and freed by sys_handle_close on the
+ * HANDLE_DIR.  The flat-namespace ramfs has only one possible
+ * directory ("/"), so there's no path field — every cursor
+ * iterates the global file table.
+ */
+struct nx_dir_cursor {
+    uint32_t cookie;
+};
+
 static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5)
 {
@@ -404,6 +425,28 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return rc;
+
+#if !__STDC_HOSTED__
+    /* Slice 7.6d.N.5: directory open.  Path "/" gets a HANDLE_DIR
+     * with a fresh cursor; ls / busybox's opendir → getdents64
+     * loop reads through it.  vfs_simple has no directory inode
+     * for "/" so we'd otherwise NX_ENOENT, blocking the entire
+     * directory-listing flow.  Host build has no kheap so this
+     * path falls through to vfs_simple's normal path resolution
+     * (which returns NX_ENOENT for "/" on host fixtures too —
+     * matching the pre-slice-7.6d.N.5 behaviour). */
+    if (kpath[0] == '/' && kpath[1] == '\0') {
+        struct nx_dir_cursor *cur = malloc(sizeof *cur);
+        if (!cur) return NX_ENOMEM;
+        cur->cookie = 0;
+
+        struct nx_handle_table *t = nx_syscall_current_table();
+        nx_handle_t h = NX_HANDLE_INVALID;
+        rc = nx_handle_alloc(t, NX_HANDLE_DIR, NX_RIGHT_READ, cur, &h);
+        if (rc != NX_OK) { free(cur); return rc; }
+        return (nx_status_t)h;
+    }
+#endif
 
     const struct nx_vfs_ops *vops; void *vself;
     rc = resolve_vfs(&vops, &vself);
@@ -1491,6 +1534,292 @@ static nx_status_t sys_munmap(uint64_t a0, uint64_t a1, uint64_t a2,
     return NX_OK;
 }
 
+/*
+ * Slice 7.6d.N.4 — minimal `fstatat` for ash's PATH walk.
+ *
+ * ash's `find_command()` stat()s each PATH-prefixed candidate
+ * (`/sbin/ls`, `/usr/sbin/ls`, `/bin/ls`, ...) before invoking
+ * execve, and bails with "command not found" if every candidate
+ * stat fails.  Without this syscall every candidate's stat
+ * returns -ENOSYS (or whatever musl's translate-fail produces),
+ * and ash never reaches execve even when `/bin/ls` exists.
+ *
+ * Linux struct stat layout on aarch64 — kernel-side only fills
+ * the fields ash actually reads (mode + size); the rest stay
+ * zero-initialized via kbuf clearing.
+ *
+ * Returns Linux errno values directly (-2 for ENOENT, -22 for
+ * EINVAL).  Our internal NX_E* don't match Linux numbering;
+ * other syscalls escape that mismatch because their callers
+ * are libnxlibc/musl wrappers that don't strictly check errno.
+ * ash's path-search loop DOES check errno: ENOENT means "next
+ * candidate" while other values can mean "fatal" (e.g. EACCES
+ * on a real Unix means "found but not executable, stop").  So
+ * here we deliberately return Linux errno.
+ *
+ * Implementation: open the path read-only via vfs.  If open
+ * succeeds the file exists; we seek to end to read the size,
+ * then close.  Hand-build the stat buf in kernel memory and
+ * copy_to_user.  AT_FDCWD (dirfd = -100) is implicit because
+ * vfs_simple takes absolute paths only — `dirfd` is ignored.
+ *
+ * `flags` (e.g. AT_SYMLINK_NOFOLLOW) is also ignored — vfs has
+ * no symlinks in v1.
+ */
+struct nx_user_stat_aarch64 {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    uint32_t st_mode;
+    uint32_t st_nlink;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint64_t st_rdev;
+    uint64_t __pad;
+    int64_t  st_size;
+    int32_t  st_blksize;
+    int32_t  __pad2;
+    int64_t  st_blocks;
+    int64_t  st_atim_sec;  int64_t st_atim_nsec;
+    int64_t  st_mtim_sec;  int64_t st_mtim_nsec;
+    int64_t  st_ctim_sec;  int64_t st_ctim_nsec;
+    uint32_t __unused[2];
+};
+
+#define NX_LINUX_ENOENT     (-2)
+#define NX_LINUX_EBADF      (-9)
+#define NX_LINUX_EINVAL    (-22)
+#define NX_LINUX_S_IFREG  0100000u
+#define NX_LINUX_S_IFDIR   040000u
+#define NX_LINUX_FILE_MODE (NX_LINUX_S_IFREG | 0755u)
+#define NX_LINUX_DIR_MODE  (NX_LINUX_S_IFDIR | 0755u)
+#define NX_LINUX_DT_REG     8u
+#define NX_LINUX_DT_DIR     4u
+
+static nx_status_t sys_fstatat(uint64_t a0, uint64_t a1, uint64_t a2,
+                               uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a3; (void)a4; (void)a5;
+    const char *user_path = (const char *)(uintptr_t)a1;
+    void       *user_buf  = (void *)(uintptr_t)a2;
+
+    if (!user_path || !user_buf) return NX_LINUX_EINVAL;
+
+    char kpath[NX_PATH_MAX];
+    int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+
+    /* Slice 7.6d.N.5: special-case "/" as the root directory.
+     * vfs_simple has no directory inode for "/" (flat namespace,
+     * files at top level), so going through vops->open would
+     * NX_ENOENT and ash/ls would conclude "/" doesn't exist. */
+    int is_root_dir = (kpath[0] == '/' && kpath[1] == '\0');
+
+    int64_t size = 0;
+    uint32_t mode = NX_LINUX_FILE_MODE;
+    if (is_root_dir) {
+        mode = NX_LINUX_DIR_MODE;
+    } else {
+        const struct nx_vfs_ops *vops; void *vself;
+        rc = resolve_vfs(&vops, &vself);
+        if (rc != NX_OK) return NX_LINUX_EINVAL;
+
+        void *file = 0;
+        rc = vops->open(vself, kpath, NX_VFS_OPEN_READ, &file);
+        if (rc != NX_OK) return NX_LINUX_ENOENT;
+
+        size = vops->seek(vself, file, 0, NX_VFS_SEEK_END);
+        vops->close(vself, file);
+        if (size < 0) size = 0;
+    }
+
+    struct nx_user_stat_aarch64 kbuf;
+    memset(&kbuf, 0, sizeof kbuf);
+    kbuf.st_mode = mode;
+    kbuf.st_nlink = 1;
+    kbuf.st_size = size;
+    kbuf.st_blksize = 512;
+    kbuf.st_blocks = (size + 511) / 512;
+
+    rc = copy_to_user(user_buf, &kbuf, sizeof kbuf);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+    return NX_OK;
+}
+
+/*
+ * Slice 7.6d.N.5 — `getdents64` for ash's `ls /`.
+ *
+ * Linux ABI: `int getdents64(int fd, struct linux_dirent64 *buf,
+ * size_t count)` — packs as many variable-length records as fit
+ * in `count` bytes, returns total bytes written, 0 at EOF, or
+ * a small negative -errno.
+ *
+ * The fd must point at a HANDLE_DIR (allocated by sys_open with
+ * path "/").  The cursor lives inside the handle's per-handle
+ * object, so successive calls advance through the namespace.
+ *
+ * Layout per record:
+ *
+ *   uint64_t d_ino;        +0
+ *   int64_t  d_off;        +8   (cookie of NEXT entry — opaque
+ *                                seek hint, not actually used by
+ *                                ls but included for ABI fidelity)
+ *   uint16_t d_reclen;    +16   (record length, 8-byte aligned)
+ *   uint8_t  d_type;      +18   (DT_REG, DT_DIR, ...)
+ *   char     d_name[];    +19   (NUL-terminated)
+ *
+ * v1: every entry from ramfs is reported as DT_REG (no real
+ * type info in our flat namespace).  ls's plain (non-`-l`) mode
+ * doesn't care about d_type — it just prints names.
+ */
+struct nx_linux_dirent64 {
+    uint64_t d_ino;
+    int64_t  d_off;
+    uint16_t d_reclen;
+    uint8_t  d_type;
+    char     d_name[1];     /* trailing flexible array */
+};
+
+static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
+                                  uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+#if __STDC_HOSTED__
+    (void)a0; (void)a1; (void)a2;
+    return NX_LINUX_EINVAL;
+#else
+    nx_handle_t  h        = (nx_handle_t)a0;
+    void        *user_buf = (void *)(uintptr_t)a1;
+    size_t       cap      = (size_t)a2;
+    if (!user_buf || cap == 0) return NX_LINUX_EINVAL;
+
+    struct nx_handle_table *t = nx_syscall_current_table();
+    enum nx_handle_type type;
+    void               *obj = 0;
+    int rc = nx_handle_lookup(t, h, &type, 0, &obj);
+    if (rc != NX_OK || type != NX_HANDLE_DIR || !obj)
+        return NX_LINUX_EBADF;
+
+    struct nx_dir_cursor *cur = (struct nx_dir_cursor *)obj;
+
+    const struct nx_vfs_ops *vops; void *vself;
+    rc = resolve_vfs(&vops, &vself);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+
+    /* Pack entries into a kernel staging buffer first.  Cap to a
+     * single page so the staging stays bounded; ls calls
+     * getdents64 in a loop until it returns 0, so a partial
+     * fill is fine. */
+    enum { STAGING_MAX = 4096 };
+    uint8_t staging[STAGING_MAX];
+    size_t  out_off = 0;
+    if (cap > STAGING_MAX) cap = STAGING_MAX;
+
+    for (;;) {
+        struct nx_fs_dirent kent;
+        rc = vops->readdir(vself, &cur->cookie, &kent);
+        if (rc == NX_ENOENT) break;          /* end of dir */
+        if (rc != NX_OK) return NX_LINUX_EINVAL;
+
+        /* Compute name length from the fixed-size 64-byte field. */
+        size_t name_len = 0;
+        while (name_len < sizeof kent.name - 1 && kent.name[name_len])
+            name_len++;
+        if (name_len == 0) continue;          /* skip empty slot */
+
+        /* Strip leading '/' from ramfs entries — getdents64
+         * returns basenames, not absolute paths.  Our ramfs
+         * stores names without the '/' but `ramfs_create_file`
+         * (and the cpio loader) keeps the leading '/' for some
+         * entries.  Be defensive. */
+        const char *src = kent.name;
+        if (src[0] == '/') { src++; name_len--; }
+
+        /* d_reclen rounded up to 8-byte alignment.  Header is
+         * 19 bytes (8+8+2+1) + name + '\0' + alignment pad. */
+        size_t hdr   = (size_t)((char *)&((struct nx_linux_dirent64 *)0)->d_name);
+        size_t want  = hdr + name_len + 1;
+        size_t reclen = (want + 7u) & ~7u;
+
+        if (out_off + reclen > cap) {
+            /* No room — rewind cookie so the next call resumes
+             * with this entry.  Cookie is just an index over the
+             * flat table, so the rewind is "decrement by 1" after
+             * advancing for the entry we just read. */
+            cur->cookie--;
+            break;
+        }
+
+        struct nx_linux_dirent64 *e =
+            (struct nx_linux_dirent64 *)(staging + out_off);
+        e->d_ino   = cur->cookie;             /* opaque-but-stable */
+        e->d_off   = cur->cookie;             /* same — ls doesn't use */
+        e->d_reclen = (uint16_t)reclen;
+        e->d_type  = NX_LINUX_DT_REG;         /* v1: all-regular */
+        memcpy(e->d_name, src, name_len);
+        e->d_name[name_len] = '\0';
+        /* Zero any alignment padding so user reads are deterministic. */
+        for (size_t p = hdr + name_len + 1; p < reclen; p++)
+            ((char *)e)[p] = 0;
+
+        out_off += reclen;
+    }
+
+    if (out_off > 0) {
+        rc = copy_to_user(user_buf, staging, out_off);
+        if (rc != NX_OK) return NX_LINUX_EINVAL;
+    }
+    return (nx_status_t)out_off;
+#endif
+}
+
+/*
+ * Slice 7.6d.N.5 — Linux-shape openat wrapper.
+ *
+ * musl's `open()` becomes `openat(AT_FDCWD, path, flags, mode)`
+ * on aarch64 (no plain `open` syscall).  The Linux ABI:
+ *   - dirfd at a0 (we ignore — vfs_simple is absolute-only)
+ *   - path  at a1
+ *   - flags at a2 (Linux O_* bits, not our NX_VFS_OPEN_*)
+ *   - mode  at a3 (ignored — no perms in v1)
+ *
+ * Linux O_* (octal):  O_RDONLY=0, O_WRONLY=1, O_RDWR=2,
+ *                     O_CREAT=0o100, O_DIRECTORY=0o200000.
+ *
+ * Our NX_VFS_OPEN_*:  READ=1, WRITE=2, CREATE=4.
+ *
+ * Conversion table is small enough to inline here.
+ */
+#define NX_LINUX_O_RDONLY     0u
+#define NX_LINUX_O_WRONLY     1u
+#define NX_LINUX_O_RDWR       2u
+#define NX_LINUX_O_CREAT   0100u
+#define NX_LINUX_O_DIRECTORY 0200000u
+
+static nx_status_t sys_openat(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a3; (void)a4; (void)a5;
+    /* Forward to sys_open with the Linux flags converted to
+     * our NX_VFS_OPEN_* shape.  sys_open already special-cases
+     * "/" → HANDLE_DIR (slice 7.6d.N.5 above), so opendir's
+     * `openat(AT_FDCWD, "/", O_RDONLY|O_DIRECTORY)` lands on
+     * the directory-cursor path automatically. */
+    uint32_t lin_flags = (uint32_t)a2;
+    uint32_t nx_flags  = 0;
+    uint32_t lin_acc   = lin_flags & 3u;
+    if (lin_acc == NX_LINUX_O_RDONLY)
+        nx_flags |= NX_VFS_OPEN_READ;
+    else if (lin_acc == NX_LINUX_O_WRONLY)
+        nx_flags |= NX_VFS_OPEN_WRITE;
+    else if (lin_acc == NX_LINUX_O_RDWR)
+        nx_flags |= NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE;
+    if (lin_flags & NX_LINUX_O_CREAT) nx_flags |= NX_VFS_OPEN_CREATE;
+    /* O_DIRECTORY is informational — sys_open's "/" branch
+     * already returns HANDLE_DIR.  Other O_* bits (O_CLOEXEC,
+     * O_NONBLOCK, O_TRUNC, ...) are quietly dropped. */
+    return sys_open(a1, (uint64_t)nx_flags, 0, 0, 0, 0);
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -1515,6 +1844,9 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_WRITEV]         = sys_writev,
     [NX_SYS_MMAP]           = sys_mmap,
     [NX_SYS_MUNMAP]         = sys_munmap,
+    [NX_SYS_FSTATAT]        = sys_fstatat,
+    [NX_SYS_GETDENTS64]     = sys_getdents64,
+    [NX_SYS_OPENAT]         = sys_openat,
 };
 
 /* ---------- Entry point ---------------------------------------------- */
