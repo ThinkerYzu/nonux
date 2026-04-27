@@ -269,10 +269,18 @@ int mmu_is_enabled(void)
  * the heap that carries the bookkeeping.  The caller holds an L1 root
  * (uint64_t PA); we find the bookkeeping via a tiny lookup table.
  */
-/* v1 cap.  Bumped from 16 → 32 in slice 7.6c.4 alongside
- * NX_PROCESS_TABLE_CAPACITY (same reason: cumulative test usage of
- * stranded processes hit the previous cap). */
-#define MMU_MAX_ADDRESS_SPACES  32u
+/* v1 cap.  Bumped 16 → 32 in slice 7.6c.4 alongside
+ * NX_PROCESS_TABLE_CAPACITY; bumped again 32 → 64 in slice 7.6d.N.2
+ * after the cumulative test sweep (now exec'ing busybox three times
+ * for `--help` / `sh -c "exit 42"` / `sh -c "echo hello"`) crossed
+ * the 32 threshold and `sys_exec` started returning NX_ENOMEM from
+ * `mmu_create_address_space`.  The leak is total: the test harness's
+ * `sched_rr_purge_user_tasks` only `nx_list_remove`s tasks from the
+ * runqueue — task struct + kstack + owning `nx_process` + this MMU
+ * address space's L1/L2 pages + 8 MiB user backing all stay
+ * allocated.  Real fix is reap-on-wait (deferred since slice 7.4);
+ * the cap bump is the v1 hack we keep using. */
+#define MMU_MAX_ADDRESS_SPACES  64u
 
 struct mmu_address_space {
     uint64_t  l1_root_pa;     /* == (uintptr_t)l1_page */

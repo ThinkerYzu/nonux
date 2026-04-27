@@ -124,6 +124,47 @@ enum nx_syscall_number {
                                   *   without this syscall musl's
                                   *   stdout silently swallows
                                   *   output. */
+    NX_SYS_MMAP           = 19,  /* (void *addr, size_t length,
+                                  *    int prot, int flags,
+                                  *    int fd,   off_t offset)
+                                  *   → user VA on success, small
+                                  *   negative -errno on failure
+                                  *   (musl's __syscall_ret turns
+                                  *   either of those into
+                                  *   MAP_FAILED + errno).
+                                  *   v1 supports the mallocng shape
+                                  *   only: addr ignored, fd must be
+                                  *   -1, offset 0, flags must
+                                  *   include MAP_ANONYMOUS|MAP_PRIVATE,
+                                  *   no MAP_FIXED, no per-page
+                                  *   protection (the user window is
+                                  *   uniformly EL0-RW).  Length is
+                                  *   rounded up to a 4 KiB page.
+                                  *   The kernel picks the address
+                                  *   from a per-process bump arena
+                                  *   carved out of the unused window
+                                  *   region [+2 MiB, +5 MiB).  See
+                                  *   NX_PROCESS_MMAP_{OFFSET,LIMIT}
+                                  *   in framework/process.h.  Pages
+                                  *   are zeroed on the way out so
+                                  *   MAP_ANONYMOUS's zero-init
+                                  *   contract holds (the underlying
+                                  *   user_window backing is a
+                                  *   straight malloc and may carry
+                                  *   stale bytes from earlier exec
+                                  *   cycles or from un-touched
+                                  *   memcpy alignment slack). */
+    NX_SYS_MUNMAP         = 20,  /* (void *addr, size_t length)
+                                  *   → 0 unconditionally.  v1
+                                  *   doesn't reclaim mmap'd pages —
+                                  *   PMM reclaim happens at process
+                                  *   exit when the whole user_window
+                                  *   backing is freed.  Returning a
+                                  *   no-op success matches mallocng's
+                                  *   expectation that munmap never
+                                  *   fails (it treats failure as
+                                  *   fatal); we leak the page until
+                                  *   process exit. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

@@ -23,17 +23,20 @@
  *   __NR_exit_group  (94)  -> NX_SYS_EXIT          (11)   [v1 alias]
  *   __NR_kill       (129)  -> NX_SYS_SIGNAL        (16)
  *   __NR_brk        (214)  -> NX_SYS_BRK           (17)
+ *   __NR_munmap     (215)  -> NX_SYS_MUNMAP        (20)   [v1 no-op success]
  *   __NR_execve     (221)  -> NX_SYS_EXEC          (14)
+ *   __NR_mmap       (222)  -> NX_SYS_MMAP          (19)   [anon-private only]
  *   __NR_wait4      (260)  -> NX_SYS_WAIT          (13)   [drops options+rusage]
  *
  * Unmapped syscalls (and everything else) return -ENOSYS (-38) so
  * musl's wrappers translate to errno=ENOSYS at the call site.  Slice
- * 7.6c.3b/c will tackle the harder cases — openat (needs dirfd
- * stripping), pipe2 (drops flags), clone (only the SIGCHLD-only fork
- * shape), brk/mmap (needs kernel-side allocator), clock_gettime
- * (needs kernel-side timekeeping plumbing), set_tid_address (needs a
- * tid concept).  The translation table is the only thing that
- * changes; all other musl source stays vanilla.
+ * 7.6c.3b/c tackled the easier translations; slice 7.6d.N.1 added
+ * mmap/munmap because mallocng needs them.  Future targets (when
+ * busybox surfaces them): rt_sigaction (needs signal-handler
+ * dispatch), getuid/geteuid (trivial stubs), clock_gettime (needs
+ * kernel-side timekeeping plumbing), set_tid_address (needs a tid
+ * concept).  The translation table is the only thing that changes;
+ * all other musl source stays vanilla.
  */
 
 static inline long __nx_translate(long n)
@@ -48,7 +51,9 @@ static inline long __nx_translate(long n)
 	case 94:  return 11;  /* __NR_exit_group  -> NX_SYS_EXIT */
 	case 129: return 16;  /* __NR_kill        -> NX_SYS_SIGNAL */
 	case 214: return 17;  /* __NR_brk         -> NX_SYS_BRK */
+	case 215: return 20;  /* __NR_munmap      -> NX_SYS_MUNMAP */
 	case 221: return 14;  /* __NR_execve      -> NX_SYS_EXEC */
+	case 222: return 19;  /* __NR_mmap        -> NX_SYS_MMAP */
 	case 260: return 13;  /* __NR_wait4       -> NX_SYS_WAIT */
 	default:  return -1;
 	}

@@ -47,7 +47,9 @@ __cp_begin:
 	cmp x1, #94;   b.eq .Lnx_exit
 	cmp x1, #129;  b.eq .Lnx_kill
 	cmp x1, #214;  b.eq .Lnx_brk
+	cmp x1, #215;  b.eq .Lnx_munmap
 	cmp x1, #221;  b.eq .Lnx_execve
+	cmp x1, #222;  b.eq .Lnx_mmap
 	cmp x1, #260;  b.eq .Lnx_wait
 	movn x0, #37          // -ENOSYS = -38
 	ret
@@ -60,7 +62,9 @@ __cp_begin:
 .Lnx_exit:     mov x8, #11; b .Lnx_run    // NX_SYS_EXIT
 .Lnx_kill:     mov x8, #16; b .Lnx_run    // NX_SYS_SIGNAL
 .Lnx_brk:      mov x8, #17; b .Lnx_run    // NX_SYS_BRK
+.Lnx_munmap:   mov x8, #20; b .Lnx_run    // NX_SYS_MUNMAP
 .Lnx_execve:   mov x8, #14; b .Lnx_run    // NX_SYS_EXEC
+.Lnx_mmap:     mov x8, #19; b .Lnx_run    // NX_SYS_MMAP
 .Lnx_wait:     mov x8, #13;               // NX_SYS_WAIT, fall through
 
 .Lnx_run:

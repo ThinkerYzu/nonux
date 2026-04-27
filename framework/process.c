@@ -41,10 +41,17 @@ struct nx_process g_kernel_process = {
  */
 /* v1 cap.  Was 16; bumped to 32 in slice 7.6c.4 because the test
  * harness's stranded-task convention leaves processes in the table
- * across tests, and the argv-push round-trip's parent + forked-
- * child trio pushed cumulative usage past 16.  Real reap on
- * `wait()` would let us drop this back. */
-#define NX_PROCESS_TABLE_CAPACITY 32
+ * across tests; bumped again 32 → 64 in slice 7.6d.N.2 after the
+ * cumulative test sweep (now exec'ing busybox three times for
+ * `--help` / `sh -c "exit 42"` / `sh -c "echo hello"`) crossed
+ * the 32 threshold.  Note the harness's `sched_rr_purge_user_tasks`
+ * only unlinks tasks from the scheduler runqueue — it doesn't call
+ * `nx_process_destroy`, so the process + its handle table + MMU
+ * address space + 8 MiB user backing all stay allocated.  Real
+ * reap on `wait()` (call `nx_process_destroy(child)` when
+ * `sys_wait` collects status) would let us drop this back;
+ * tracked under slice 7.7 follow-ups. */
+#define NX_PROCESS_TABLE_CAPACITY 64
 
 static struct nx_process *g_process_table[NX_PROCESS_TABLE_CAPACITY];
 static uint32_t            g_pid_next = 1;    /* pid 0 reserved for kernel */
@@ -111,10 +118,12 @@ struct nx_process *nx_process_create(const char *name)
         free(p);
         return NULL;
     }
-    p->brk_addr = mmu_user_window_base() + NX_PROCESS_HEAP_OFFSET;
+    p->brk_addr  = mmu_user_window_base() + NX_PROCESS_HEAP_OFFSET;
+    p->mmap_bump = mmu_user_window_base() + NX_PROCESS_MMAP_OFFSET;
 #else
     p->ttbr0_root = 0;
     p->brk_addr   = 0;
+    p->mmap_bump  = 0;
 #endif
 
     return p;
@@ -229,6 +238,11 @@ struct nx_process *nx_process_fork(struct nx_process *parent)
      * for-byte; we just propagate the high-water mark so the
      * child's mallocng knows where to continue from. */
     child->brk_addr = parent->brk_addr;
+    /* Same logic for the mmap arena bump pointer (slice 7.6d.N.1) —
+     * the parent's mmap'd pages are byte-copied into the child by
+     * mmu_copy_user_backing, and the child's mallocng inherits the
+     * same view of "what's been allocated". */
+    child->mmap_bump = parent->mmap_bump;
     /* Handle table left empty — see the header comment for rationale. */
     return child;
 }

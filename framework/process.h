@@ -81,12 +81,27 @@ struct nx_process {
      * allocation; we just track the high-water mark per process.
      */
     uint64_t                brk_addr;
+    /*
+     * mmap bump pointer (slice 7.6d.N.1).  User-VA of the next
+     * unallocated byte in the process's anonymous-mmap arena —
+     * always `>= base + NX_PROCESS_MMAP_OFFSET` and
+     * `<= base + NX_PROCESS_MMAP_LIMIT`.  Initialized in
+     * nx_process_create / sys_exec to the arena base; grown by
+     * `NX_SYS_MMAP = 19`.  Never shrinks (`NX_SYS_MUNMAP` is a
+     * no-op in v1); reset on exec.  musl's mallocng calls
+     * `mmap(MAP_PRIVATE|MAP_ANONYMOUS)` for every slab allocation
+     * (no brk-only fallback) — without this arena ash exits 1 with
+     * `out of memory` before reaching even its first builtin.
+     */
+    uint64_t                mmap_bump;
 };
 
-/* Heap layout within the 8 MiB user window (slice 7.6d.2b grew the
+/* Layout within the 8 MiB user window (slice 7.6d.2b grew the
  * window from 2 MiB to 8 MiB so a static-linked busybox image
  * (~1.91 MiB text+data) leaves room for stack + heap):
- *   [base ..        +6 MiB)   code + data + bss (loaded by exec/elf)
+ *   [base ..        +2 MiB)   code + data + bss (loaded by exec/elf)
+ *   [base + 2 MiB . +5 MiB)   anonymous mmap arena (slice 7.6d.N.1)
+ *   [base + 5 MiB . +5 MiB+4K) kernel-pre-init TLS area
  *   [base + 6 MiB . +7.5 MiB) heap (NX_SYS_BRK)
  *   [base + 7.5 MiB ..top)    stack (sp_el0 starts at top - alignment)
  *
@@ -95,13 +110,28 @@ struct nx_process {
  * of bytes per run).  Real /proc-style heap grows-on-demand lands
  * with a future "user-window-grows-via-PMM" slice.
  *
- * The 6 MiB code-segment ceiling is generous: busybox's two LOAD
- * segments span end-to-end ~1.91 MiB, so we have ~4 MiB of headroom
- * before any future binary collides with the heap base.  Bumping
- * further would push the heap into the stack region.
+ * The 2 MiB code-segment ceiling fits busybox's two LOAD segments
+ * end-to-end (~1.91 MiB); larger binaries would collide with the
+ * mmap arena base and a future slice would have to shuffle the
+ * layout.  The 3 MiB mmap arena is sized for ash's startup
+ * allocations; mallocng's first slab is 64 KiB, growing
+ * geometrically.
  */
 #define NX_PROCESS_HEAP_OFFSET  (6u << 20)             /* 6 MiB into window */
 #define NX_PROCESS_HEAP_LIMIT   ((7u << 20) + (1u << 19))  /* 7.5 MiB into window */
+
+/* Slice 7.6d.N.1 — anonymous-mmap arena.  Lives in the unused gap
+ * between busybox's text+data+bss end (~+1.91 MiB) and the
+ * kernel-pre-init TLS area (+5 MiB).  3 MiB is enough for ash's
+ * startup mallocng allocations; mallocng's first slab is 64 KiB,
+ * additional slabs grow geometrically — busybox `sh -c "exit 42"`
+ * touches one or two slabs total.  Address chosen by the kernel
+ * via a per-process bump pointer (`nx_process.mmap_bump`); no
+ * MAP_FIXED, no per-page protection, no reclaim.  `munmap` is a
+ * no-op in v1 — pages are reclaimed at process exit when the
+ * whole 8 MiB user_window backing is freed. */
+#define NX_PROCESS_MMAP_OFFSET  (2u << 20)             /* 2 MiB into window */
+#define NX_PROCESS_MMAP_LIMIT   (5u << 20)             /* 5 MiB into window */
 
 /* Slice 7.6d.3c — kernel-pre-initialized TLS area for musl-linked
  * (and any other libc-using) EL0 programs.  Lives in the unused gap

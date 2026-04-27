@@ -992,11 +992,15 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_process *p = nx_process_current();
     uint64_t old_root = p->ttbr0_root;
     uint64_t old_brk  = p->brk_addr;
+    uint64_t old_mmap = p->mmap_bump;
     p->ttbr0_root = new_root;
     /* Slice 7.6c.3c — fresh address space gets a fresh program
      * break.  exec replaces the entire image, so the inherited
      * brk_addr from the pre-exec process is meaningless. */
     p->brk_addr = mmu_user_window_base() + NX_PROCESS_HEAP_OFFSET;
+    /* Slice 7.6d.N.1 — same logic for the mmap arena bump pointer.
+     * The new image's musl will issue its own mmap calls. */
+    p->mmap_bump = mmu_user_window_base() + NX_PROCESS_MMAP_OFFSET;
 
     uint64_t entry = 0;
     rc = nx_elf_load_into_process(p, kbuf, total, &entry);
@@ -1007,6 +1011,7 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
          * address space with its original PC intact. */
         p->ttbr0_root = old_root;
         p->brk_addr   = old_brk;
+        p->mmap_bump  = old_mmap;
         mmu_destroy_address_space(new_root);
         return rc;
     }
@@ -1366,6 +1371,126 @@ static nx_status_t sys_brk(uint64_t a0, uint64_t a1, uint64_t a2,
 #endif
 }
 
+/*
+ * NX_SYS_MMAP — (void *addr, size_t length, int prot, int flags,
+ *                int fd, off_t offset) → user VA / -errno (slice 7.6d.N.1).
+ *
+ * v1 supports the mallocng shape only:
+ *   - addr ignored (kernel always picks)
+ *   - fd must be -1 (no file-backed mappings)
+ *   - offset must be 0
+ *   - flags must include MAP_ANONYMOUS|MAP_PRIVATE; MAP_FIXED rejected
+ *   - prot ignored — the user window is uniformly EL0-RW
+ *
+ * Length is rounded up to a 4 KiB page.  The kernel picks an address
+ * from a per-process bump arena carved out of the unused window
+ * region [+NX_PROCESS_MMAP_OFFSET, +NX_PROCESS_MMAP_LIMIT) — bumped
+ * up; out-of-arena returns -ENOMEM.
+ *
+ * Returns the chosen VA on success.  On failure, returns a small
+ * negative value that musl's __syscall_ret turns into MAP_FAILED +
+ * errno.  Specifically: NX_EINVAL (bad shape) or NX_ENOMEM (arena
+ * exhausted).
+ *
+ * Pages are zeroed on the way out so MAP_ANONYMOUS's zero-init
+ * contract holds — the underlying user_window backing is plain
+ * malloc'd memory and can carry stale bytes from earlier exec
+ * cycles or from un-touched memcpy alignment slack.  We're in the
+ * caller's address space (the SVC trap entered from EL0 and didn't
+ * flip TTBR0), so writing via the user VA from kernel context is
+ * safe and goes to the right physical backing.
+ *
+ * Linux's MAP_ANONYMOUS flag has different numeric values on
+ * different platforms; on aarch64 it's 0x20.  MAP_PRIVATE is 0x02.
+ * MAP_FIXED is 0x10.  We only check MAP_ANONYMOUS + reject
+ * MAP_FIXED; MAP_PRIVATE is implicit.
+ *
+ * The host build returns -ENOSYS-equivalent (NX_EINVAL) — host has
+ * no MMU, no user window, and no test exercises mmap directly.
+ */
+#define NX_MAP_PRIVATE   0x02
+#define NX_MAP_FIXED     0x10
+#define NX_MAP_ANONYMOUS 0x20
+
+static nx_status_t sys_mmap(uint64_t a0, uint64_t a1, uint64_t a2,
+                            uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0;       /* addr — kernel chooses */
+    (void)a2;       /* prot — uniformly EL0-RW */
+    uint64_t length = a1;
+    int      flags  = (int)a3;
+    int      fd     = (int)(int32_t)a4;
+    uint64_t offset = a5;
+
+    if (length == 0) return NX_EINVAL;
+    if (fd != -1)    return NX_EINVAL;
+    if (offset != 0) return NX_EINVAL;
+    if (!(flags & NX_MAP_ANONYMOUS)) return NX_EINVAL;
+    if (flags & NX_MAP_FIXED)        return NX_EINVAL;
+
+    /* Round up to a 4 KiB page.  Length overflow on the rounding
+     * add gets treated as "too big to fit in the arena" further
+     * down; no need for a separate overflow check here. */
+    const uint64_t page = 4096u;
+    uint64_t want = (length + page - 1u) & ~(page - 1u);
+
+    struct nx_process *p = nx_process_current();
+    if (!p) return NX_EINVAL;
+
+#if !__STDC_HOSTED__
+    uint64_t base = mmu_user_window_base();
+    uint64_t lo   = base + NX_PROCESS_MMAP_OFFSET;
+    uint64_t hi   = base + NX_PROCESS_MMAP_LIMIT;
+
+    /* First call: bump_pointer hasn't been touched (or process was
+     * just exec'd).  Initialize lazily so a future caller that
+     * sets `mmap_bump = 0` to mean "reset" still works.  In v1 the
+     * bump is always primed in nx_process_create / sys_exec, but
+     * the lazy init costs nothing and protects against the bump
+     * drifting below `lo` from a hypothetical future munmap. */
+    if (p->mmap_bump < lo || p->mmap_bump > hi) p->mmap_bump = lo;
+
+    if (want > hi - p->mmap_bump) return NX_ENOMEM;
+
+    uint64_t va = p->mmap_bump;
+    p->mmap_bump += want;
+
+    /* Zero the returned region.  We're in the caller's address
+     * space (SVC entered from EL0 doesn't flip TTBR0), so writing
+     * via `va` from kernel context goes to this process's user
+     * backing.  memset rather than a loop because the helper is
+     * written with vector ops on aarch64 — fastest path. */
+    memset((void *)(uintptr_t)va, 0, (size_t)want);
+
+    return (nx_status_t)va;
+#else
+    (void)want;
+    return NX_EINVAL;
+#endif
+}
+
+/*
+ * NX_SYS_MUNMAP — (void *addr, size_t length) → 0 (slice 7.6d.N.1).
+ *
+ * v1 doesn't reclaim mmap'd pages — PMM reclaim happens at process
+ * exit when the whole user_window backing is freed.  Returning a
+ * no-op success matches mallocng's expectation that munmap never
+ * fails (it treats failure as fatal).  We leak the page until
+ * process exit; for ash's startup that's at most a few hundred
+ * KiB held until the parent reaps the child.
+ *
+ * Argument validation is intentionally loose: we don't check that
+ * `addr` falls inside the arena or that `length` matches a prior
+ * mmap call — mallocng can call munmap with arbitrary derived
+ * pointers and we'd rather not fail it.
+ */
+static nx_status_t sys_munmap(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return NX_OK;
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -1388,6 +1513,8 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_SIGNAL]         = sys_signal,
     [NX_SYS_BRK]            = sys_brk,
     [NX_SYS_WRITEV]         = sys_writev,
+    [NX_SYS_MMAP]           = sys_mmap,
+    [NX_SYS_MUNMAP]         = sys_munmap,
 };
 
 /* ---------- Entry point ---------------------------------------------- */
