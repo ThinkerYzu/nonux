@@ -2035,9 +2035,15 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 
     /* 4. For channel handles, retain the source endpoint — the new
-     * slot now holds an additional reference. */
+     * slot now holds an additional reference.  Same for file handles
+     * (slice 7.6d.N.8): the per-open struct now lives in two slots
+     * and must survive the first close. */
     if (src_type == NX_HANDLE_CHANNEL) {
         nx_channel_endpoint_retain(src_object);
+    } else if (src_type == NX_HANDLE_FILE) {
+        const struct nx_vfs_ops *vops; void *vself;
+        if (resolve_vfs(&vops, &vself) == NX_OK && vops->retain)
+            vops->retain(vself, src_object);
     }
 
     /* 5. Install the source's (type, rights, object) at the destination
@@ -2049,6 +2055,114 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     e->generation = new_gen;
 
     return (nx_status_t)newfd;
+}
+
+/*
+ * NX_SYS_FCNTL — (int fd, int cmd, long arg) → cmd-specific / -errno.
+ *
+ * Slice 7.6d.N.8.  Minimal set covering the calls ash makes during
+ * builtin redirection setup:
+ *
+ *   F_DUPFD (0)            — find the lowest free slot whose encoded
+ *   F_DUPFD_CLOEXEC (1030)   handle is ≥ arg, install a copy of fd's
+ *                            (type, rights, object), retain the
+ *                            underlying object (CHANNEL endpoint
+ *                            refcount, FILE per-open refcount), and
+ *                            return the new encoded handle.  CLOEXEC
+ *                            is moot in v1 — handles aren't inherited
+ *                            across exec by default — so both commands
+ *                            collapse to the same body.
+ *   F_GETFD/F_SETFD/        — return 0; we don't track per-handle FD
+ *   F_GETFL/F_SETFL           or open-file flags.  Lets ash think the
+ *                            cloexec bit is set without us having to
+ *                            actually plumb it.
+ *   anything else           — -ENOSYS.
+ *
+ * Encoded-handle reminder: `(generation << 8) | (idx + 1)`.  For a
+ * fresh slot we use generation 0, so the encoded value is `idx + 1`.
+ * F_DUPFD's `arg` is the minimum POSIX fd; with gen 0 that maps to
+ * `idx ≥ arg - 1` (clamped to 0 for arg ≤ 0).
+ */
+#define NX_LINUX_F_DUPFD          0
+#define NX_LINUX_F_GETFD          1
+#define NX_LINUX_F_SETFD          2
+#define NX_LINUX_F_GETFL          3
+#define NX_LINUX_F_SETFL          4
+#define NX_LINUX_F_DUPFD_CLOEXEC  1030
+
+#define NX_LINUX_EBADF   (-9)
+#define NX_LINUX_EINVAL  (-22)
+#define NX_LINUX_EMFILE  (-24)
+
+static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
+                             uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+    nx_handle_t fd  = (nx_handle_t)a0;
+    int         cmd = (int)a1;
+    long        arg = (long)a2;
+
+    switch (cmd) {
+    case NX_LINUX_F_GETFD:
+    case NX_LINUX_F_SETFD:
+    case NX_LINUX_F_GETFL:
+    case NX_LINUX_F_SETFL:
+        /* No per-handle FD/OFD flags in v1.  Stub returning 0 is the
+         * "always-success, no-op" answer ash treats as "the bit you
+         * asked about is clear / was set".  Doesn't break anything as
+         * long as nothing actually relies on FD_CLOEXEC being honoured
+         * across exec — which it isn't in v1, since exec rebuilds the
+         * handle table from scratch in sys_exec. */
+        return 0;
+
+    case NX_LINUX_F_DUPFD:
+    case NX_LINUX_F_DUPFD_CLOEXEC:
+        break;
+
+    default:
+        return -38;  /* ENOSYS */
+    }
+
+    /* F_DUPFD / F_DUPFD_CLOEXEC body. */
+    struct nx_handle_table *t = nx_syscall_current_table();
+    if (!t) return NX_EINVAL;
+
+    enum nx_handle_type src_type;
+    uint32_t            src_rights;
+    void               *src_object = 0;
+    int rc = nx_handle_lookup(t, fd, &src_type, &src_rights, &src_object);
+    if (rc != NX_OK) return NX_LINUX_EBADF;
+
+    /* `arg` is the minimum POSIX fd.  Convert to a min table index:
+     * encoded fd N at generation 0 = idx (N - 1), so idx ≥ arg - 1. */
+    size_t min_idx = (arg <= 0) ? 0 : (size_t)(arg - 1);
+    if (min_idx >= NX_HANDLE_TABLE_CAPACITY) return NX_LINUX_EINVAL;
+
+    /* Find the first free slot at or above min_idx.  Skip slot 2 if
+     * arg ≤ 0 — encoded fd 0 collides with NX_HANDLE_INVALID. */
+    for (size_t i = min_idx; i < NX_HANDLE_TABLE_CAPACITY; i++) {
+        struct nx_handle_entry *e = &t->entries[i];
+        if (e->type != NX_HANDLE_INVALID) continue;
+
+        /* Retain the underlying object before installing the copy. */
+        if (src_type == NX_HANDLE_CHANNEL) {
+            nx_channel_endpoint_retain(src_object);
+        } else if (src_type == NX_HANDLE_FILE) {
+            const struct nx_vfs_ops *vops; void *vself;
+            if (resolve_vfs(&vops, &vself) == NX_OK && vops->retain)
+                vops->retain(vself, src_object);
+        }
+
+        e->type       = src_type;
+        e->rights     = src_rights;
+        e->object     = src_object;
+        e->generation = 0;
+        t->count++;
+
+        /* Encoded handle: (gen << 8) | (idx + 1) with gen = 0. */
+        return (nx_status_t)(i + 1);
+    }
+    return NX_LINUX_EMFILE;
 }
 
 /* ---------- Dispatch table ------------------------------------------- */
@@ -2080,6 +2194,7 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_OPENAT]         = sys_openat,
     [NX_SYS_DUP3]           = sys_dup3,
     [NX_SYS_READV]          = sys_readv,
+    [NX_SYS_FCNTL]          = sys_fcntl,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

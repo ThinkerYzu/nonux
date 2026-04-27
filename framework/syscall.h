@@ -265,6 +265,38 @@ enum nx_syscall_number {
                                   *   branches apply.  Cap iovcnt at
                                   *   16; stop on first short read
                                   *   per Linux readv semantic. */
+    NX_SYS_FCNTL          = 26,  /* (int fd, int cmd, long arg)
+                                  *   → cmd-specific value / -errno.
+                                  *   Slice 7.6d.N.8: ash uses
+                                  *   `fcntl(fd, F_DUPFD_CLOEXEC, 10)`
+                                  *   in `save_fd_on_redirect` to stash
+                                  *   the original stdout before
+                                  *   installing a redirection.  Without
+                                  *   this syscall ash dies with
+                                  *   xfunc_die() before any redirected
+                                  *   output is written.
+                                  *   Supported cmds:
+                                  *     F_DUPFD (0) / F_DUPFD_CLOEXEC
+                                  *       (1030) — find the lowest free
+                                  *       slot whose encoded handle ≥
+                                  *       arg, install a copy of fd's
+                                  *       (type, rights, object), retain
+                                  *       the underlying object (CHANNEL
+                                  *       endpoint refcount, FILE per-
+                                  *       open refcount), and return the
+                                  *       new encoded handle.  CLOEXEC
+                                  *       is moot in v1 (handles aren't
+                                  *       inherited across exec) so both
+                                  *       commands behave identically.
+                                  *     F_GETFD (1) / F_GETFL (3) —
+                                  *       return 0.  F_SETFD (2) /
+                                  *       F_SETFL (4) — return 0 and
+                                  *       ignore the new flags.  We
+                                  *       don't track per-handle FD or
+                                  *       O_* flags.
+                                  *   Other cmds return -ENOSYS so
+                                  *   programs that need real fcntl
+                                  *   surface the gap explicitly. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

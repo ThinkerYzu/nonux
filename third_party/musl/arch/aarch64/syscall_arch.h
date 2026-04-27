@@ -15,6 +15,7 @@
  * Number-only mapping; argument layouts must already match.  Mapped
  * syscalls today:
  *   __NR_dup3        (24)  -> NX_SYS_DUP3          (24)   [flags ignored]
+ *   __NR_fcntl       (25)  -> NX_SYS_FCNTL         (26)
  *   __NR_openat      (56)  -> NX_SYS_OPENAT        (23)
  *   __NR_close       (57)  -> NX_SYS_HANDLE_CLOSE  (2)
  *   __NR_pipe2       (59)  -> NX_SYS_PIPE          (15)   [drops flags]
@@ -50,6 +51,7 @@ static inline long __nx_translate(long n)
 {
 	switch (n) {
 	case 24:  return 24;  /* __NR_dup3        -> NX_SYS_DUP3   [flags ignored] */
+	case 25:  return 26;  /* __NR_fcntl       -> NX_SYS_FCNTL  [F_DUPFD + stubs] */
 	case 56:  return 23;  /* __NR_openat      -> NX_SYS_OPENAT */
 	case 57:  return 2;   /* __NR_close       -> NX_SYS_HANDLE_CLOSE */
 	case 59:  return 15;  /* __NR_pipe2       -> NX_SYS_PIPE   [flags ignored] */

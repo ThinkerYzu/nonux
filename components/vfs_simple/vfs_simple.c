@@ -108,6 +108,15 @@ static void vfs_simple_close(void *self, void *file)
     ops->close(fs_self, file);
 }
 
+static void vfs_simple_retain(void *self, void *file)
+{
+    (void)self;
+    if (!file) return;
+    const struct nx_fs_ops *ops; void *fs_self;
+    if (resolve_root_fs(&ops, &fs_self) != NX_OK) return;
+    if (ops->retain) ops->retain(fs_self, file);
+}
+
 static int64_t vfs_simple_read(void *self, void *file, void *buf, size_t cap)
 {
     (void)self;
@@ -151,6 +160,7 @@ static int vfs_simple_readdir(void *self, uint32_t *cookie,
 const struct nx_vfs_ops vfs_simple_vfs_ops = {
     .open    = vfs_simple_open,
     .close   = vfs_simple_close,
+    .retain  = vfs_simple_retain,
     .read    = vfs_simple_read,
     .write   = vfs_simple_write,
     .seek    = vfs_simple_seek,

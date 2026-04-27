@@ -106,8 +106,29 @@ struct nx_fs_ops {
      * NULL.  After close, the `file` pointer is dead — passing it to
      * any other op is a programmer error (driver may assert / trap /
      * silently corrupt state; well-behaved callers don't do it).
+     *
+     * Slice 7.6d.N.8 introduces refcounted per-open state (see
+     * `retain` below) so a `dup3(file_fd, ...)` + `close(file_fd)`
+     * sequence keeps the duplicated handle alive.  `close` becomes
+     * "decrement the refcount; release when zero".  Callers don't
+     * see the refcount: pair every successful open / retain with
+     * exactly one close.
      */
     void (*close)(void *self, void *file);
+
+    /*
+     * Bump the per-open's reference count (slice 7.6d.N.8).  Used by
+     * the syscall layer when the same per-open state is referenced
+     * from multiple handle slots (POSIX dup / dup2 / dup3 / fcntl
+     * F_DUPFD; future fork-FILE inheritance) — the retained
+     * reference must be paired with a matching `close`.
+     *
+     * Drivers that don't implement refcounting MAY leave this op
+     * NULL; the syscall layer falls back to "no retain" in that
+     * case.  ramfs implements it as a refcount bump on its
+     * per-open struct.
+     */
+    void (*retain)(void *self, void *file);
 
     /*
      * Read up to `cap` bytes from `file` into `buf`, starting at the

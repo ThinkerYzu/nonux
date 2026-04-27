@@ -65,6 +65,11 @@ struct nx_vfs_ops {
     /* Release per-open state.  See `nx_fs_ops.close`. */
     void (*close)(void *self, void *file);
 
+    /* Retain (bump refcount on) per-open state — slice 7.6d.N.8.
+     * See `nx_fs_ops.retain`.  Forwards to the active mount's
+     * driver. */
+    void (*retain)(void *self, void *file);
+
     /* Read / write delegate to the driver's ops.  See `nx_fs_ops.read
      * / .write` for the byte-count return convention. */
     int64_t (*read)(void *self, void *file, void *buf, size_t cap);

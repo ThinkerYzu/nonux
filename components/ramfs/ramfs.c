@@ -77,6 +77,12 @@ struct ramfs_file {
 
 struct ramfs_open {
     int                in_use;
+    /* Refcount for slice 7.6d.N.8's dup-then-close support: a single
+     * per-open struct may be referenced from multiple handle slots
+     * after dup3 / fcntl(F_DUPFD).  open() returns refs=1; retain()
+     * bumps; close() decrements and frees the slot when refs reaches
+     * zero.  POSIX semantic: dup'd fds share the cursor + flags. */
+    int                refs;
     struct ramfs_file *file;
     uint32_t           flags;
     size_t             cursor;
@@ -157,6 +163,7 @@ static int ramfs_op_open(void *self, const char *path, uint32_t flags,
 
     struct ramfs_open *op = ramfs_alloc_open(s);
     if (!op) return NX_ENOMEM;
+    op->refs   = 1;
     op->file   = file;
     op->flags  = flags;
     op->cursor = 0;
@@ -170,10 +177,19 @@ static void ramfs_op_close(void *self, void *file)
     (void)self;
     if (!file) return;
     struct ramfs_open *op = file;
+    if (op->refs > 0 && --op->refs > 0) return;
     op->in_use = 0;
     op->file   = NULL;
     op->flags  = 0;
     op->cursor = 0;
+}
+
+static void ramfs_op_retain(void *self, void *file)
+{
+    (void)self;
+    if (!file) return;
+    struct ramfs_open *op = file;
+    op->refs++;
 }
 
 static int64_t ramfs_op_read(void *self, void *file, void *buf, size_t cap)
@@ -262,6 +278,7 @@ static int ramfs_op_readdir(void *self, uint32_t *cookie,
 const struct nx_fs_ops ramfs_fs_ops = {
     .open    = ramfs_op_open,
     .close   = ramfs_op_close,
+    .retain  = ramfs_op_retain,
     .read    = ramfs_op_read,
     .write   = ramfs_op_write,
     .seek    = ramfs_op_seek,
