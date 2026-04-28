@@ -15,8 +15,10 @@ This module owns:
    destination slot.
 4. **Per-`(src, dst)` hold queue (`g_holds`)** — messages parked
    while the destination is paused with `NX_PAUSE_QUEUE` policy.
-5. **`nx_ipc_dispatch`** — drain helper. Replaced by a pinned
-   per-CPU dispatcher thread in slice 3.9.
+5. **`nx_ipc_dispatch`** — drain helper. Used directly by host
+   tests; on the kernel build, the dispatcher kthread
+   (`framework/dispatcher.c`) calls it from a single owning
+   context.
 6. **Cap scanning** — send-side forged-cap rejection, receive-side
    unclaimed-transfer counting.
 7. **`nx_slot_ref_retain` / `_release`** — promote a received
@@ -56,8 +58,9 @@ the router can scan them generically.
 For async routing, messages are queued on the destination slot's
 inbox. `nx_ipc_dispatch(slot, max)` drains up to `max` messages,
 invoking `handle_msg` on the slot's active component. Host build
-dispatches synchronously on the caller's thread; kernel build
-(slice 3.9) runs a pinned per-CPU dispatcher thread.
+dispatches synchronously on the caller's thread; kernel build runs
+a dispatcher kthread (`framework/dispatcher.c`) that owns the
+drain.
 
 ### Per-edge hold queue
 
@@ -78,11 +81,11 @@ but differ on `mode`), so the key has to be `(src, dst)`.
 Slot dereference — reading `slot->active` or calling through
 `slot->active->ops->...` — is only permitted on a framework-owned
 dispatcher thread. `nx_ipc_send`'s sync shortcut and
-`nx_ipc_dispatch` are the framework's designated dispatcher contexts
-in v1; ISRs and arbitrary kernel threads may **enqueue** messages
-(slice 3.9 adds a lock-free enqueue entry point for that) but never
-dispatch. See the [registry doc](framework-registry.md) for the
-rationale.
+`nx_ipc_dispatch` are the framework's designated dispatcher
+contexts; ISRs and arbitrary kernel threads must **enqueue**
+messages through `nx_ipc_enqueue_from_irq` (a lock-free MPSC entry
+point) and never dispatch. See the [registry doc](framework-registry.md)
+for the rationale.
 
 ---
 
@@ -216,9 +219,10 @@ Returns the number dispatched (including ABORT-dropped ones).
 `slot`'s inbox. For tests / instrumentation.
 
 **Host vs kernel.** Host tests call `nx_ipc_dispatch` explicitly to
-drain. The kernel boot path (slice 3.9) hands dispatch ownership to
-a pinned per-CPU thread; components never call `nx_ipc_dispatch`
-directly in that world. The contract is unchanged.
+drain. The kernel boot path hands dispatch ownership to the
+dispatcher kthread (`framework/dispatcher.c`); components never
+call `nx_ipc_dispatch` directly in that world. The contract is
+unchanged.
 
 ---
 

@@ -2,7 +2,7 @@
 
 A composable, Lego-like microkernel for ARM64. Swap components, benchmark designs, let AI build your kernel.
 
-**Status (2026-04-22):** Phase 4 complete — preemptive multitasking is live under QEMU. `make test` runs 226 tests (51 python + 153 host + 22 kernel) green. The kernel boots, brings up `uart_pl011` + `sched_rr` through the framework bootstrap, promotes the boot context into an idle task, and drives preemption through the timer tick. Framework API reference lives under [`docs/`](docs/); git history (`git log`) is the per-slice narrative, with each commit covering one slice end-to-end.
+**Status (2026-04-28):** Phases 1–6 complete; Phase 7 in progress — `make run-busybox` boots an interactive busybox shell over the QEMU UART with a visible prompt, line editing, pipes, and file redirects. `make test` runs 432 tests (51 python + 277 host + 104 kernel) green; `make test-interactive` runs 3/3 canned shell scripts. The current composition wires five slots: `char_device.serial ← uart_pl011`, `scheduler ← sched_rr`, `memory.page_alloc ← mm_buddy`, `vfs ← vfs_simple`, `filesystem.root ← ramfs`. Framework API reference lives under [`docs/`](docs/); git history (`git log`) is the per-slice narrative, with each commit covering one slice end-to-end.
 
 ## Quick Start
 
@@ -21,7 +21,8 @@ make run-busybox          # interactive busybox shell over UART — Ctrl-A X to 
 tools/run-qemu.sh -t 5    # timed run (the kernel halts in wfe)
 
 # Test
-make test
+make test                 # 432/432 green
+make test-interactive     # canned scripts piped into the busybox shell
 
 # Validate config
 make validate-config

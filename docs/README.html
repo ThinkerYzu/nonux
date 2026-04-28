@@ -177,9 +177,10 @@ registration.</p>
 <p>Internal bookkeeping nodes (the per-slot / per-component entries the
 registry keeps in linked lists) <strong>are</strong> allocated by the
 framework via <code>malloc</code>, because the registry’s own size is a
-function of composition, not compile-time. The kernel side will route
-these through <code>kmalloc</code> / <code>kfree</code> in slice
-3.9.</p>
+function of composition, not compile-time. The kernel build resolves
+<code>malloc</code> / <code>calloc</code> / <code>free</code> to
+<code>core/lib/kheap.c</code> (a PMM-backed slab allocator); the host
+build links against libc’s allocator directly.</p>
 <h2 id="reset-helpers-testing">Reset helpers (testing)</h2>
 <p>Each module exposes a reset function used by the test harness:</p>
 <table>
@@ -214,15 +215,18 @@ queue.</td>
 framework state. On the host build, tests call them at the top of every
 case so state from previous tests is gone.</p>
 <h2 id="thread-model">Thread model</h2>
-<p>Slice 3.6–3.9a runs on a single-threaded model. Slice 3.9a brings the
-framework up inline on the boot thread — composition bring-up, hook
-dispatch, and <code>nx_ipc_dispatch</code> all run on the caller. Slice
-3.9b upgrades the async inbox to an MPSC lock-free queue with a per-CPU
-dispatcher thread once Phase 4 provides kthread spawning; the public
-APIs below don’t change across that upgrade, only the synchronisation
-primitives inside <code>registry.c</code> / <code>ipc.c</code>.</p>
-<p><code>pause_state</code> on <code>struct nx_slot</code> is already
-<code>_Atomic</code> so the SMP upgrade is a barrier swap, not a
+<p>The framework comes up on the boot thread
+(<code>nx_framework_bootstrap</code> runs composition bring-up inline).
+Once Phase 4’s scheduler is alive, <code>nx_dispatcher_init</code>
+spawns a dispatcher kthread that drains the async-IPC inbox via the
+Vyukov-style MPSC enqueue point (<code>nx_ipc_enqueue_from_irq</code>) —
+ISRs and arbitrary kernel threads enqueue messages there but never
+dispatch. Synchronous <code>nx_ipc_send</code> shortcuts and
+<code>nx_ipc_dispatch</code> calls still execute on the caller’s thread;
+the slot-resolve-locality rule (see <a
+href="framework-ipc.html">framework-ipc.md</a>) keeps that consistent.</p>
+<p><code>pause_state</code> on <code>struct nx_slot</code> is
+<code>_Atomic</code> so the future SMP upgrade is a barrier swap, not a
 restructure.</p>
 <h2 id="see-also">See also</h2>
 <ul>

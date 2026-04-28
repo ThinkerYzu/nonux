@@ -75,10 +75,10 @@ int nx_framework_bootstrap(void);
 | `NX_ELOOP`    | Cycle or missing required dep — no forward progress possible.   |
 | other `NX_E*` | Whatever `nx_slot_swap` / `nx_resolve_deps` / `nx_component_init` / `nx_component_enable` returned first. |
 
-On non-OK return, the composition is partially up. Slice 3.9a
-treats any failure as fatal — `core/boot/boot.c` logs the error
-and falls through to the idle loop. Slice 3.9b will add a real
-rollback path once dispatcher kthreads exist.
+On non-OK return, the composition is partially up. The kernel boot
+path treats any failure as fatal — `core/boot/boot.c` logs the
+error and halts. A real rollback path that tears down the partial
+composition is a future Phase 8 (runtime recomposition) deliverable.
 
 ## How the section is populated
 
@@ -136,11 +136,11 @@ to "walk the section, register components, leave them all unbound."
 ## Memory model
 
 Bootstrap allocations go through the kernel heap (`core/lib/kheap.c`,
-`malloc` / `calloc` / `free`). For slice 3.9a the heap is a simple
-PMM-backed slab allocator — small allocations (≤ 256 B) bump out of
-a page, large allocations take contiguous PMM runs. `free` returns
-pages to the PMM for large allocations and is a no-op for slab
-chunks (boot-time composition doesn't churn the heap).
+`malloc` / `calloc` / `free`). The heap is a simple PMM-backed slab
+allocator — small allocations (≤ 256 B) bump out of a page, large
+allocations take contiguous PMM runs. `free` returns pages to the
+PMM for large allocations and is a no-op for slab chunks (boot-time
+composition doesn't churn the heap).
 
 Host builds link against libc's `malloc` / `calloc` / `free`
 directly. The framework's `#if __STDC_HOSTED__` guards pick the
@@ -177,11 +177,11 @@ irq_enable_local();  wfi          ← or ktest_main under -DNX_KTEST
    time your ops fire.
 4. **Bootstrap is a one-shot.** Calling it twice is undefined — the
    second call would see slots already registered (`NX_EEXIST`) and
-   components already allocated. Slice 3.9b's hot-swap story goes
-   through recomposition, not re-bootstrap.
+   components already allocated. Hot-swap (Phase 8) goes through
+   runtime recomposition, not re-bootstrap.
 5. **Partial failure is fatal.** Components already brought up stay
-   up; the caller is expected to panic / log / halt. Rollback lands
-   with 3.9b.
+   up; the caller is expected to panic / log / halt. Tear-down of
+   the partial composition is a Phase 8 deliverable.
 
 ## Testing
 

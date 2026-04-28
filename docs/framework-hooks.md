@@ -36,7 +36,7 @@ enum nx_hook_point {
 };
 ```
 
-**When each fires (slice 3.8):**
+**When each fires:**
 
 | Point                         | Call site                                        | Before / after             |
 |-------------------------------|--------------------------------------------------|----------------------------|
@@ -46,15 +46,13 @@ enum nx_hook_point {
 | `NX_HOOK_COMPONENT_DISABLE`   | `nx_component_disable`                           | Before the state transition |
 | `NX_HOOK_COMPONENT_PAUSE`     | `nx_component_pause`                             | Before the pause protocol steps |
 | `NX_HOOK_COMPONENT_RESUME`    | `nx_component_resume`                            | Before `ops->resume`       |
-| `NX_HOOK_SLOT_SWAPPED`        | Registry's swap path (runtime dispatch in 3.9)   | After the swap applies     |
+| `NX_HOOK_SLOT_SWAPPED`        | Registry's swap path                             | After the swap applies     |
 
 **Lifecycle hook semantics.** All four lifecycle hooks
 (`ENABLE / DISABLE / PAUSE / RESUME`) fire **before** the state
 transition and before any `ops->` callback. An `ABORT` return
 causes the verb to return `NX_EABORT` with no state change, no
-event emission, no `ops->` call. `NX_HOOK_COMPONENT_ENABLE` fires
-even though slice 3.9's boot walker hasn't wired `ops->enable`
-into the lifecycle verb yet — the hook runs regardless.
+event emission, no `ops->` call.
 
 **IPC hook semantics.**
 
@@ -259,10 +257,8 @@ This means:
 ### Registry
 
 The registry's swap path emits `NX_EV_SLOT_SWAPPED` as a change
-event. Runtime dispatch of `NX_HOOK_SLOT_SWAPPED` (i.e. translating
-the event into a hook dispatch) lands with slice 3.9 — today the
-hook point exists but isn't fired from the framework, only from
-manual test dispatches.
+event and dispatches `NX_HOOK_SLOT_SWAPPED` so subscribers observe
+the swap on the same code path that records it.
 
 ---
 

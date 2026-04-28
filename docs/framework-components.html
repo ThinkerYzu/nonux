@@ -152,8 +152,8 @@ pipeline translates each manifest into a
 <code>gen/&lt;name&gt;_deps.h</code> header that the component
 <code>#include</code>s and passes to <code>NX_COMPONENT_REGISTER</code>.
 The resulting descriptor lives in the <code>nx_components</code> linker
-section; the boot walker (slice 3.9) walks that section and brings
-components up in dependency order.</p>
+section; the boot walker walks that section and brings components up in
+dependency order.</p>
 <hr />
 <h2 id="lifecycle-state-machine">Lifecycle state machine</h2>
 <pre><code>  UNINIT ──init──► INIT ──►──┐
@@ -261,7 +261,9 @@ point returned <code>NX_HOOK_ABORT</code>.</td>
 <code>ops-&gt;pause_hook</code> or <code>ops-&gt;pause</code> returns
 when they fail. The component stays in <code>ACTIVE</code> in that case;
 slot pause state may be mid-protocol (see the pause section below).
-Slice 3.9 adds kernel-side rollback.</p>
+Kernel-side rollback on <code>pause_hook</code> /
+<code>ops-&gt;pause</code> failure is wired through
+<code>nx_component_pause</code>.</p>
 <p><strong>Extra for <code>destroy</code>:</strong></p>
 <table>
 <colgroup>
@@ -338,8 +340,8 @@ side.</p>
 <p><strong>Host-side caveat.</strong> On the host build, the 1 ms
 deadline DESIGN calls for on <code>pause_hook</code> is not enforced —
 the host has no timer and the protocol trusts the hook’s return. The
-kernel boot path (slice 3.9) enforces the deadline via the dispatcher
-thread’s monotonic clock.</p>
+kernel build enforces the deadline via the dispatcher thread’s monotonic
+clock (<code>core/cpu/monotonic.h</code>).</p>
 <hr />
 <h2
 id="struct-nx_component_ops"><code>struct nx_component_ops</code></h2>
@@ -359,7 +361,7 @@ id="struct-nx_component_ops"><code>struct nx_component_ops</code></h2>
 <code>self = component-&gt;impl</code>.</strong> This is the component’s
 private state pointer. All ops are optional — a NULL slot is a no-op as
 far as the framework is concerned.</p>
-<p><strong>Which ops are called today (slice 3.9a):</strong></p>
+<p><strong>Which ops are called today:</strong></p>
 <table>
 <colgroup>
 <col style="width: 17%" />

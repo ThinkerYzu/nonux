@@ -20,7 +20,7 @@ Components declare their dependencies in a manifest; the build
 pipeline translates each manifest into a `gen/<name>_deps.h` header
 that the component `#include`s and passes to `NX_COMPONENT_REGISTER`.
 The resulting descriptor lives in the `nx_components` linker section;
-the boot walker (slice 3.9) walks that section and brings components
+the boot walker walks that section and brings components
 up in dependency order.
 
 ---
@@ -101,7 +101,8 @@ int nx_component_destroy(struct nx_component *c);  /* READY  → DESTROYED */
 **Extra for `pause`:** whatever non-zero code `ops->pause_hook` or
 `ops->pause` returns when they fail. The component stays in
 `ACTIVE` in that case; slot pause state may be mid-protocol (see
-the pause section below). Slice 3.9 adds kernel-side rollback.
+the pause section below). Kernel-side rollback on `pause_hook` /
+`ops->pause` failure is wired through `nx_component_pause`.
 
 **Extra for `destroy`:**
 
@@ -162,9 +163,9 @@ a component is being prepared off to the side.
 
 **Host-side caveat.** On the host build, the 1 ms deadline DESIGN
 calls for on `pause_hook` is not enforced — the host has no timer
-and the protocol trusts the hook's return. The kernel boot path
-(slice 3.9) enforces the deadline via the dispatcher thread's
-monotonic clock.
+and the protocol trusts the hook's return. The kernel build
+enforces the deadline via the dispatcher thread's monotonic clock
+(`core/cpu/monotonic.h`).
 
 ---
 
@@ -189,7 +190,7 @@ struct nx_component_ops {
 component's private state pointer. All ops are optional — a NULL
 slot is a no-op as far as the framework is concerned.
 
-**Which ops are called today (slice 3.9a):**
+**Which ops are called today:**
 
 | Op            | Called from                                                             |
 |---------------|-------------------------------------------------------------------------|

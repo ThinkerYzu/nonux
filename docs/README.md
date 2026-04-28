@@ -47,8 +47,9 @@ being at least as long as the registration.
 Internal bookkeeping nodes (the per-slot / per-component entries the
 registry keeps in linked lists) **are** allocated by the framework via
 `malloc`, because the registry's own size is a function of
-composition, not compile-time. The kernel side will route these
-through `kmalloc` / `kfree` in slice 3.9.
+composition, not compile-time. The kernel build resolves `malloc` /
+`calloc` / `free` to `core/lib/kheap.c` (a PMM-backed slab allocator);
+the host build links against libc's allocator directly.
 
 ## Reset helpers (testing)
 
@@ -66,15 +67,17 @@ every case so state from previous tests is gone.
 
 ## Thread model
 
-Slice 3.6–3.9a runs on a single-threaded model. Slice 3.9a brings
-the framework up inline on the boot thread — composition bring-up,
-hook dispatch, and `nx_ipc_dispatch` all run on the caller. Slice
-3.9b upgrades the async inbox to an MPSC lock-free queue with a
-per-CPU dispatcher thread once Phase 4 provides kthread spawning;
-the public APIs below don't change across that upgrade, only the
-synchronisation primitives inside `registry.c` / `ipc.c`.
+The framework comes up on the boot thread (`nx_framework_bootstrap`
+runs composition bring-up inline). Once Phase 4's scheduler is alive,
+`nx_dispatcher_init` spawns a dispatcher kthread that drains the
+async-IPC inbox via the Vyukov-style MPSC enqueue point
+(`nx_ipc_enqueue_from_irq`) — ISRs and arbitrary kernel threads
+enqueue messages there but never dispatch. Synchronous `nx_ipc_send`
+shortcuts and `nx_ipc_dispatch` calls still execute on the caller's
+thread; the slot-resolve-locality rule (see [framework-ipc.md](framework-ipc.md))
+keeps that consistent.
 
-`pause_state` on `struct nx_slot` is already `_Atomic` so the SMP
+`pause_state` on `struct nx_slot` is `_Atomic` so the future SMP
 upgrade is a barrier swap, not a restructure.
 
 ## See also

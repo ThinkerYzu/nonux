@@ -177,7 +177,7 @@ callback.</p></li>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>    NX_HOOK_SLOT_SWAPPED<span class="op">,</span>           <span class="co">/* registry: active impl changed */</span></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    NX_HOOK_POINT_COUNT<span class="op">,</span>            <span class="co">/* sentinel — keep last */</span></span>
 <span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="op">};</span></span></code></pre></div>
-<p><strong>When each fires (slice 3.8):</strong></p>
+<p><strong>When each fires:</strong></p>
 <table>
 <colgroup>
 <col style="width: 28%" />
@@ -224,7 +224,7 @@ callback.</p></li>
 </tr>
 <tr class="odd">
 <td><code>NX_HOOK_SLOT_SWAPPED</code></td>
-<td>Registry’s swap path (runtime dispatch in 3.9)</td>
+<td>Registry’s swap path</td>
 <td>After the swap applies</td>
 </tr>
 </tbody>
@@ -234,10 +234,7 @@ callback.</p></li>
 <strong>before</strong> the state transition and before any
 <code>ops-&gt;</code> callback. An <code>ABORT</code> return causes the
 verb to return <code>NX_EABORT</code> with no state change, no event
-emission, no <code>ops-&gt;</code> call.
-<code>NX_HOOK_COMPONENT_ENABLE</code> fires even though slice 3.9’s boot
-walker hasn’t wired <code>ops-&gt;enable</code> into the lifecycle verb
-yet — the hook runs regardless.</p>
+emission, no <code>ops-&gt;</code> call.</p>
 <p><strong>IPC hook semantics.</strong></p>
 <ul>
 <li><p><code>NX_HOOK_IPC_SEND</code> fires before edge lookup.
@@ -438,10 +435,8 @@ transition.</p></li>
 </ul>
 <h3 id="registry">Registry</h3>
 <p>The registry’s swap path emits <code>NX_EV_SLOT_SWAPPED</code> as a
-change event. Runtime dispatch of <code>NX_HOOK_SLOT_SWAPPED</code>
-(i.e. translating the event into a hook dispatch) lands with slice 3.9 —
-today the hook point exists but isn’t fired from the framework, only
-from manual test dispatches.</p>
+change event and dispatches <code>NX_HOOK_SLOT_SWAPPED</code> so
+subscribers observe the swap on the same code path that records it.</p>
 <hr />
 <h2 id="dispatcher-context-discipline">Dispatcher-context
 discipline</h2>

@@ -172,7 +172,9 @@ async messages per destination slot.</p></li>
 (<code>g_holds</code>)</strong> — messages parked while the destination
 is paused with <code>NX_PAUSE_QUEUE</code> policy.</p></li>
 <li><p><strong><code>nx_ipc_dispatch</code></strong> — drain helper.
-Replaced by a pinned per-CPU dispatcher thread in slice 3.9.</p></li>
+Used directly by host tests; on the kernel build, the dispatcher kthread
+(<code>framework/dispatcher.c</code>) calls it from a single owning
+context.</p></li>
 <li><p><strong>Cap scanning</strong> — send-side forged-cap rejection,
 receive-side unclaimed-transfer counting.</p></li>
 <li><p><strong><code>nx_slot_ref_retain</code> /
@@ -211,8 +213,8 @@ must have a registered connection edge to every slot it passes a cap to
 inbox. <code>nx_ipc_dispatch(slot, max)</code> drains up to
 <code>max</code> messages, invoking <code>handle_msg</code> on the
 slot’s active component. Host build dispatches synchronously on the
-caller’s thread; kernel build (slice 3.9) runs a pinned per-CPU
-dispatcher thread.</p>
+caller’s thread; kernel build runs a dispatcher kthread
+(<code>framework/dispatcher.c</code>) that owns the drain.</p>
 <h3 id="per-edge-hold-queue">Per-edge hold queue</h3>
 <p>When the destination slot is paused and the connection’s policy is
 <code>NX_PAUSE_QUEUE</code>, the router stashes the message into a
@@ -230,10 +232,11 @@ to be <code>(src, dst)</code>.</p>
 through <code>slot-&gt;active-&gt;ops-&gt;...</code> — is only permitted
 on a framework-owned dispatcher thread. <code>nx_ipc_send</code>’s sync
 shortcut and <code>nx_ipc_dispatch</code> are the framework’s designated
-dispatcher contexts in v1; ISRs and arbitrary kernel threads may
-<strong>enqueue</strong> messages (slice 3.9 adds a lock-free enqueue
-entry point for that) but never dispatch. See the <a
-href="framework-registry.html">registry doc</a> for the rationale.</p>
+dispatcher contexts; ISRs and arbitrary kernel threads must
+<strong>enqueue</strong> messages through
+<code>nx_ipc_enqueue_from_irq</code> (a lock-free MPSC entry point) and
+never dispatch. See the <a href="framework-registry.html">registry doc</a>
+for the rationale.</p>
 <hr />
 <h2 id="types">Types</h2>
 <h3 id="enum-nx_cap_kind-nx_cap_ownership"><code>enum nx_cap_kind</code>
@@ -394,9 +397,10 @@ next message either).</p></li>
 queued on <code>slot</code>’s inbox. For tests / instrumentation.</p>
 <p><strong>Host vs kernel.</strong> Host tests call
 <code>nx_ipc_dispatch</code> explicitly to drain. The kernel boot path
-(slice 3.9) hands dispatch ownership to a pinned per-CPU thread;
-components never call <code>nx_ipc_dispatch</code> directly in that
-world. The contract is unchanged.</p>
+hands dispatch ownership to the dispatcher kthread
+(<code>framework/dispatcher.c</code>); components never call
+<code>nx_ipc_dispatch</code> directly in that world. The contract is
+unchanged.</p>
 <hr />
 <h2 id="pause-policy-inspection">Pause policy inspection</h2>
 <div class="sourceCode" id="cb6"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">size_t</span> nx_ipc_hold_queue_depth<span class="op">(</span><span class="kw">struct</span> nx_slot <span class="op">*</span>src<span class="op">,</span> <span class="kw">struct</span> nx_slot <span class="op">*</span>dst<span class="op">);</span></span>
