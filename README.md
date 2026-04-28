@@ -17,7 +17,7 @@ sudo apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
 
 # Build and run
 make
-make run                  # interactive — Ctrl-A X to exit
+make run-busybox          # interactive busybox shell over UART — Ctrl-A X to exit
 tools/run-qemu.sh -t 5    # timed run (the kernel halts in wfe)
 
 # Test
