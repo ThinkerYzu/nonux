@@ -402,9 +402,46 @@ enum nx_syscall_number {
                                   *  shape so musl's `mkdir(2)` reports
                                   *  the right errno.  Mapped from
                                   *  Linux `__NR_mkdirat = 34`. */
+    NX_SYS_PPOLL          = 41,  /* (struct pollfd *fds, nfds_t nfds,
+                                  *   const struct timespec *timeout,
+                                  *   const sigset_t *sigmask, size_t sigsz)
+                                  *  → number of ready fds, 0 on timeout,
+                                  *  Linux -errno on error.  Slice 7.8b:
+                                  *  built on slice 7.8a's waitq primitive.
+                                  *  Per-handle-type readiness via the
+                                  *  pollset-listener mechanism in
+                                  *  channel.c (per-endpoint waitq) and
+                                  *  console.c (singleton RX waitq); FILE
+                                  *  / DIR are always-ready.  v1 caps
+                                  *  `nfds` at NX_PPOLL_MAX_FDS = 32 and
+                                  *  ignores the sigmask argument
+                                  *  (atomic-signal-mask not implemented
+                                  *  yet — same v1 semantics as our other
+                                  *  signal stubs).  Mapped from Linux
+                                  *  `__NR_ppoll = 73`. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
+
+/*
+ * struct pollfd — Linux-shape, 8 bytes on aarch64.  POSIX defines
+ * `events` and `revents` as `short`; Linux + glibc + musl all use
+ * 16-bit signed.  We match.
+ */
+struct nx_pollfd {
+    int   fd;
+    short events;
+    short revents;
+};
+
+#define NX_POLLIN     0x001
+#define NX_POLLPRI    0x002    /* not used in v1; kept for header compat */
+#define NX_POLLOUT    0x004
+#define NX_POLLERR    0x008
+#define NX_POLLHUP    0x010
+#define NX_POLLNVAL   0x020
+
+#define NX_PPOLL_MAX_FDS  32   /* v1 cap; bump when a workload demands. */
 
 /*
  * Signal numbers — POSIX-compatible values.  Both are polite in v1

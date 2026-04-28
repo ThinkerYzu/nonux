@@ -210,7 +210,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_mkdir.c \
                  test/kernel/ktest_console_rx.c \
                  test/kernel/ktest_procfs.c \
-                 test/kernel/ktest_waitq.c
+                 test/kernel/ktest_waitq.c \
+                 test/kernel/ktest_posix_ppoll.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -227,6 +228,7 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_pipe_prog_blob.S \
                  test/kernel/posix_signal_prog_blob.S \
                  test/kernel/posix_pipe_xproc_prog_blob.S \
+                 test/kernel/posix_ppoll_prog_blob.S \
                  test/kernel/initramfs_blob.S \
                  test/kernel/posix_main_prog_blob.S \
                  test/kernel/posix_libc_prog_blob.S \
@@ -301,6 +303,15 @@ test/kernel/posix_pipe_prog.elf: test/kernel/posix_pipe_prog.o test/kernel/init_
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/posix_pipe_prog.o
 
 test/kernel/posix_pipe_prog_blob.o: test/kernel/posix_pipe_prog_blob.S test/kernel/posix_pipe_prog.elf
+
+# Slice 7.8b ppoll demo — same recipe as posix_pipe_prog.elf.
+test/kernel/posix_ppoll_prog.o: test/kernel/posix_ppoll_prog.c components/posix_shim/posix.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_ppoll_prog.elf: test/kernel/posix_ppoll_prog.o test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ test/kernel/posix_ppoll_prog.o
+
+test/kernel/posix_ppoll_prog_blob.o: test/kernel/posix_ppoll_prog_blob.S test/kernel/posix_ppoll_prog.elf
 
 # Slice 7.5 signal demo — parent fork + SIGTERM to child.
 test/kernel/posix_signal_prog.o: test/kernel/posix_signal_prog.c components/posix_shim/posix.h
@@ -1085,6 +1096,7 @@ clean:
 	       test/kernel/init_prog.elf test/kernel/posix_prog.elf \
 	       test/kernel/posix_pipe_prog.elf test/kernel/posix_signal_prog.elf \
 	       test/kernel/posix_pipe_xproc_prog.elf \
+	       test/kernel/posix_ppoll_prog.elf \
 	       test/kernel/posix_main_prog.elf \
 	       test/kernel/posix_libc_prog.elf \
 	       test/kernel/posix_printf_prog.elf \

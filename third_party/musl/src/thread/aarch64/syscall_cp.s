@@ -52,6 +52,7 @@ __cp_begin:
 	cmp x1, #64;   b.eq .Lnx_write
 	cmp x1, #65;   b.eq .Lnx_readv
 	cmp x1, #66;   b.eq .Lnx_writev
+	cmp x1, #73;   b.eq .Lnx_ppoll
 	cmp x1, #93;   b.eq .Lnx_exit
 	cmp x1, #94;   b.eq .Lnx_exit
 	cmp x1, #129;  b.eq .Lnx_kill
@@ -90,6 +91,7 @@ __cp_begin:
 .Lnx_write:    mov x8, #8;  b .Lnx_run    // NX_SYS_WRITE
 .Lnx_readv:    mov x8, #25; b .Lnx_run    // NX_SYS_READV
 .Lnx_writev:   mov x8, #18; b .Lnx_run    // NX_SYS_WRITEV
+.Lnx_ppoll:    mov x8, #41; b .Lnx_run    // NX_SYS_PPOLL  [slice 7.8b]
 .Lnx_exit:     mov x8, #11; b .Lnx_run    // NX_SYS_EXIT
 .Lnx_kill:     mov x8, #16; b .Lnx_run    // NX_SYS_SIGNAL
 .Lnx_rt_sigaction:   mov x8, #27; b .Lnx_run  // NX_SYS_RT_SIGACTION   [stub]

@@ -10,7 +10,8 @@
 #include "core/sched/sched.h" /* nx_task_yield */
 #endif
 #include "framework/process.h"
-#include "framework/syscall.h"  /* NX_SIGTERM */
+#include "framework/syscall.h"  /* NX_SIGTERM, NX_POLL* */
+#include "framework/pollset.h"
 
 /*
  * Console implementation — slice 7.6d.N.6b (write half) + 7.6d.N.final.a
@@ -65,6 +66,17 @@ static _Atomic size_t  g_rx_tail;
  */
 static _Atomic int     g_eof_pending;
 static _Atomic int     g_intr_pending;
+
+/*
+ * Slice 7.8b — RX-readiness pollset listeners.  Singleton list (the
+ * console is a singleton).  The RX ISR walks this after pushing one
+ * or more bytes / arming a control flag; sys_ppoll registers a
+ * listener via `nx_console_register_pollset` and unregisters before
+ * returning.
+ */
+static struct nx_list_head g_console_pollset_listeners = {
+    { &g_console_pollset_listeners.n, &g_console_pollset_listeners.n }
+};
 
 static inline size_t rx_count(void)
 {
@@ -172,6 +184,10 @@ size_t nx_console_test_inject_bytes(const char *buf, size_t len)
         if (!rx_push_one(buf[i])) break;
         pushed++;
     }
+    /* Slice 7.8b: same wake the live RX ISR does — pollset
+     * watchers want the readiness transition, not the "byte arrived
+     * via the IRQ path" specifically. */
+    if (pushed > 0) nx_pollset_wake_all(&g_console_pollset_listeners);
     return pushed;
 }
 
@@ -191,6 +207,10 @@ void nx_console_test_inject_intr(void)
 void nx_console_test_inject_eof(void)
 {
     __atomic_store_n(&g_eof_pending, 1, __ATOMIC_RELEASE);
+    /* Slice 7.8b: EOF is a readiness transition for ppoll
+     * (POLLIN-via-EOF mirrors the ring-non-empty case for the
+     * "would not return EAGAIN" predicate).  Wake watchers. */
+    nx_pollset_wake_all(&g_console_pollset_listeners);
 }
 
 /*
@@ -206,6 +226,34 @@ void nx_console_test_inject_eof(void)
  * the byte loop); MUST NOT be called from an ISR because
  * `nx_process_lookup_by_pid` walks the (non-IRQ-safe) process table.
  */
+/* ---------- Slice 7.8b: pollset integration ---------------------------- */
+
+void nx_console_register_pollset(struct nx_pollset_listener *l)
+{
+    if (!l) return;
+    nx_list_add_tail(&g_console_pollset_listeners, &l->node);
+}
+
+void nx_console_unregister_pollset(struct nx_pollset_listener *l)
+{
+    if (!l) return;
+    nx_list_remove(&l->node);
+}
+
+short nx_console_readiness(short want)
+{
+    short revents = 0;
+    if (want & NX_POLLIN) {
+        if (rx_count() > 0 ||
+            __atomic_load_n(&g_eof_pending, __ATOMIC_ACQUIRE))
+            revents |= NX_POLLIN;
+    }
+    /* Writes are unconditional — the UART's TX FIFO is fast and our
+     * `nx_console_write` is synchronous.  Always ready for output. */
+    if (want & NX_POLLOUT) revents |= NX_POLLOUT;
+    return revents;
+}
+
 int nx_console_drain_intr(void)
 {
     if (!__atomic_exchange_n(&g_intr_pending, 0, __ATOMIC_ACQ_REL))
@@ -267,6 +315,7 @@ static void nx_console_rx_isr(void *data)
      * Ctrl-C (0x03) and Ctrl-D (0x04) are interpreted as control
      * events instead of pushed into the byte ring — see
      * `g_eof_pending` / `g_intr_pending` for what each one triggers. */
+    int wake = 0;
     while (!(uart_rd(UART_FR) & UART_FR_RXFE)) {
         char c = (char)(uart_rd(UART_DR) & 0xFF);
         if (c == 0x03) {
@@ -275,13 +324,20 @@ static void nx_console_rx_isr(void *data)
         }
         if (c == 0x04) {
             __atomic_store_n(&g_eof_pending, 1, __ATOMIC_RELEASE);
+            wake = 1;   /* EOF readiness for ppoll */
             continue;
         }
-        rx_push_one(c);
+        if (rx_push_one(c)) wake = 1;
     }
     /* Clear receive + receive-timeout interrupts.  Leave the rest
      * masked so we don't touch TX state. */
     uart_wr(UART_ICR, UART_IMSC_RXIM | UART_IMSC_RTIM);
+    /* Slice 7.8b: wake pollset watchers after the FIFO has been
+     * drained into the ring + the IRQ has been acked.  Doing the
+     * wake last means a re-entrant ISR (shouldn't happen on
+     * single-CPU + masked IRQ, but defensive) wouldn't see a
+     * partial state. */
+    if (wake) nx_pollset_wake_all(&g_console_pollset_listeners);
 }
 
 void nx_console_init(void)

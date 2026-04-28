@@ -132,4 +132,25 @@ void     nx_console_reset_for_test(void);
  */
 int nx_console_drain_intr(void);
 
+/*
+ * Slice 7.8b — pollset integration.
+ *
+ *   `nx_console_register_pollset(listener)` adds a borrowed listener
+ *   to the singleton console's RX-readiness watcher list.  After
+ *   registration the RX ISR (or `_inject_bytes` from a host test, or
+ *   `_inject_eof`) wakes every listener's parent waitq when a byte
+ *   becomes available in the ring (or EOF arms).
+ *
+ *   `nx_console_unregister_pollset(listener)` unlinks the listener.
+ *
+ *   `nx_console_readiness(want)` computes POLLIN if the RX ring is
+ *   non-empty OR a Ctrl-D EOF is queued; POLLOUT is always set
+ *   (writes are unconditional).
+ */
+struct nx_pollset_listener;
+
+void  nx_console_register_pollset(struct nx_pollset_listener *l);
+void  nx_console_unregister_pollset(struct nx_pollset_listener *l);
+short nx_console_readiness(short want);
+
 #endif /* NX_FRAMEWORK_CONSOLE_H */

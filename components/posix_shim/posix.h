@@ -61,6 +61,27 @@ typedef int64_t   nx_posix_ssize_t;
 #define NX_POSIX_SYS_EXEC          14
 #define NX_POSIX_SYS_PIPE          15
 #define NX_POSIX_SYS_SIGNAL        16
+#define NX_POSIX_SYS_PPOLL         41
+
+/* Slice 7.8b — pollfd shape + flag bits.  Mirror of the Linux ABI
+ * (struct pollfd is 8 bytes; events/revents are 16-bit).  Used by
+ * EL0 programs that issue NX_POSIX_SYS_PPOLL directly. */
+struct nx_posix_pollfd {
+    int   fd;
+    short events;
+    short revents;
+};
+
+#define NX_POSIX_POLLIN     0x001
+#define NX_POSIX_POLLOUT    0x004
+#define NX_POSIX_POLLERR    0x008
+#define NX_POSIX_POLLHUP    0x010
+#define NX_POSIX_POLLNVAL   0x020
+
+struct nx_posix_timespec {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
 
 /* Signal numbers — subset supported by v1's NX_SYS_SIGNAL.  Values
  * match POSIX.  Real signal handlers land with a later slice; today
@@ -136,6 +157,21 @@ static inline int64_t nx_posix_svc3(uint64_t nr, uint64_t a0,
     asm volatile ("svc #0"
                   : "+r"(x0)
                   : "r"(x8), "r"(x1), "r"(x2)
+                  : "memory", "cc");
+    return x0;
+}
+
+static inline int64_t nx_posix_svc4(uint64_t nr, uint64_t a0,
+                                    uint64_t a1, uint64_t a2, uint64_t a3)
+{
+    register uint64_t x8 asm("x8") = nr;
+    register int64_t  x0 asm("x0") = (int64_t)a0;
+    register uint64_t x1 asm("x1") = a1;
+    register uint64_t x2 asm("x2") = a2;
+    register uint64_t x3 asm("x3") = a3;
+    asm volatile ("svc #0"
+                  : "+r"(x0)
+                  : "r"(x8), "r"(x1), "r"(x2), "r"(x3)
                   : "memory", "cc");
     return x0;
 }
@@ -264,6 +300,25 @@ static inline int nx_posix_kill(nx_posix_pid_t pid, int signo)
     return (int)nx_posix_svc2(NX_POSIX_SYS_SIGNAL,
                               (uint64_t)pid,
                               (uint64_t)(unsigned int)signo);
+}
+
+/* ppoll(fds, nfds, timeout, sigmask) — slice 7.8b.  Returns the
+ * number of fds with non-zero revents (0 on timeout, negative on
+ * error).  `timeout` is a pointer to `struct nx_posix_timespec`
+ * (NULL = block indefinitely; both fields zero = non-blocking).
+ * `sigmask` is accepted but ignored in v1.  No sigsetsize arg —
+ * the kernel treats x4 (sigmask) and x5 (sigsetsize) as
+ * don't-care. */
+static inline int
+nx_posix_ppoll(struct nx_posix_pollfd *fds, uint64_t nfds,
+               const struct nx_posix_timespec *timeout,
+               const void *sigmask)
+{
+    return (int)nx_posix_svc4(NX_POSIX_SYS_PPOLL,
+                              (uint64_t)(uintptr_t)fds,
+                              nfds,
+                              (uint64_t)(uintptr_t)timeout,
+                              (uint64_t)(uintptr_t)sigmask);
 }
 
 /* ---------- Tiny libc (slice 7.6c.0) ---------------------------------- *

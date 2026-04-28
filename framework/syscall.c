@@ -2,6 +2,7 @@
 #include "framework/channel.h"
 #include "framework/console.h"
 #include "framework/handle.h"
+#include "framework/pollset.h"
 #include "framework/process.h"
 #include "framework/registry.h"
 #include "framework/component.h"
@@ -13,6 +14,7 @@
 #include "core/mmu/mmu.h"
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
+#include "core/sched/waitq.h"
 #include "framework/elf.h"
 #include "interfaces/scheduler.h"
 #endif
@@ -2052,6 +2054,231 @@ static nx_status_t sys_mkdirat(uint64_t a0, uint64_t a1, uint64_t a2,
 }
 
 /*
+ * NX_SYS_PPOLL — slice 7.8b.
+ *
+ * Linux ABI:
+ *   ppoll(struct pollfd *fds, nfds_t nfds,
+ *         const struct timespec *timeout,
+ *         const sigset_t *sigmask, size_t sigsetsize)
+ *     → ready-fd-count, 0 on timeout, -errno on error.
+ *
+ * v1 contract:
+ *   - nfds is capped at NX_PPOLL_MAX_FDS (32) — OOR returns -EINVAL.
+ *   - sigmask + sigsetsize are accepted but ignored (no atomic
+ *     signal-mask switching in v1; same posture as our other
+ *     signal-related stubs).
+ *   - NULL `timeout` blocks indefinitely; non-NULL with both fields
+ *     zero is a non-blocking poll; otherwise blocks for up to
+ *     tv_sec*1e9 + tv_nsec ns.
+ *   - Per-fd readiness via the slice-7.8a waitq primitive: CONSOLE
+ *     and CHANNEL register pollset listeners on their respective
+ *     waitq lists; FILE and DIR are always-ready (POLLIN |
+ *     POLLOUT mirrored back from `events`).  POLLNVAL for closed/
+ *     invalid handles.  POLLHUP set whenever a CHANNEL peer is
+ *     closed (POSIX semantics — independent of `events`).
+ *   - Single shared kstack-resident pollset waitq; producers
+ *     (nx_channel_send / _close, console RX ISR + test-inject)
+ *     wake every registered listener's parent waitq.  Listeners
+ *     are registered BEFORE the initial readiness check so a wake
+ *     during the gap is at worst a spurious sleep that the
+ *     post-sleep recheck catches.
+ */
+#define NX_PPOLL_LINUX_TIMESPEC_BYTES 16
+
+struct ppoll_state {
+    enum {
+        PPOLL_KIND_NONE     = 0,
+        PPOLL_KIND_CONSOLE,
+        PPOLL_KIND_CHANNEL,
+        PPOLL_KIND_FILE,
+        PPOLL_KIND_DIR,
+        PPOLL_KIND_INVALID,
+    } kind;
+    void *obj;   /* channel endpoint pointer for KIND_CHANNEL */
+};
+
+static short ppoll_compute_readiness(const struct ppoll_state *st, short want)
+{
+    switch (st->kind) {
+    case PPOLL_KIND_CONSOLE:
+        return nx_console_readiness(want);
+    case PPOLL_KIND_CHANNEL:
+        return nx_channel_endpoint_readiness(
+            (const struct nx_channel_endpoint *)st->obj, want);
+    case PPOLL_KIND_FILE:
+    case PPOLL_KIND_DIR:
+        return (short)(want & (NX_POLLIN | NX_POLLOUT));
+    case PPOLL_KIND_INVALID:
+        return NX_POLLNVAL;
+    default:
+        return 0;
+    }
+}
+
+static nx_status_t sys_ppoll(uint64_t a0, uint64_t a1, uint64_t a2,
+                             uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;   /* sigmask + sigsetsize ignored */
+
+    struct nx_pollfd      *user_fds = (struct nx_pollfd *)(uintptr_t)a0;
+    uint64_t               nfds     = a1;
+    const void            *user_ts  = (const void *)(uintptr_t)a2;
+
+    if (nfds > NX_PPOLL_MAX_FDS) return NX_LINUX_EINVAL;
+
+    /* Decode timeout. */
+    uint64_t budget_ns   = 0;
+    int      has_timeout = 0;
+    if (user_ts) {
+        struct { int64_t tv_sec; int64_t tv_nsec; } kts;
+        if (copy_from_user(&kts, user_ts, NX_PPOLL_LINUX_TIMESPEC_BYTES) != NX_OK)
+            return NX_LINUX_EINVAL;
+        if (kts.tv_sec < 0 || kts.tv_nsec < 0 || kts.tv_nsec >= 1000000000LL)
+            return NX_LINUX_EINVAL;
+        budget_ns   = (uint64_t)kts.tv_sec * 1000000000ULL +
+                      (uint64_t)kts.tv_nsec;
+        has_timeout = 1;
+    }
+
+    struct nx_pollfd kfds[NX_PPOLL_MAX_FDS];
+    if (nfds > 0) {
+        if (copy_from_user(kfds, user_fds,
+                           nfds * sizeof(struct nx_pollfd)) != NX_OK)
+            return NX_LINUX_EINVAL;
+    }
+
+    /* Resolve current process's handle table.  Use nx_process_current
+     * rather than nx_task_current — task.h is kernel-only-included in
+     * this file, but process.h is always included so the host build
+     * (which exercises sys_ppoll's dispatch path on a fake process)
+     * picks up the same struct without pulling in the kernel-only
+     * inline asm in task.h. */
+    struct nx_process *proc = nx_process_current();
+    struct nx_handle_table *t = proc ? &proc->handles : NULL;
+
+    /* Set up the kstack pollset waitq + per-entry listeners + per-
+     * entry kind/obj record. */
+    struct nx_waitq            pollset_wq;
+    nx_waitq_init(&pollset_wq);
+    struct nx_pollset_listener listeners[NX_PPOLL_MAX_FDS];
+    struct ppoll_state         states[NX_PPOLL_MAX_FDS];
+
+    for (uint64_t i = 0; i < nfds; i++) {
+        nx_pollset_listener_init(&listeners[i], &pollset_wq);
+        states[i].kind = PPOLL_KIND_NONE;
+        states[i].obj  = NULL;
+        kfds[i].revents = 0;
+
+        if (kfds[i].fd < 0) continue;   /* POSIX: ignore negative fds */
+
+        nx_handle_t          h    = (nx_handle_t)kfds[i].fd;
+        enum nx_handle_type  type = NX_HANDLE_INVALID;
+        void                *obj  = NULL;
+
+        if (h == 0) {
+            /* STDIN_FILENO special case — slot 2.  See sys_read. */
+            if (t && t->entries[2].type != NX_HANDLE_INVALID) {
+                type = t->entries[2].type;
+                obj  = t->entries[2].object;
+            } else {
+                states[i].kind  = PPOLL_KIND_INVALID;
+                continue;
+            }
+        } else {
+            if (nx_handle_lookup(t, h, &type, NULL, &obj) != NX_OK) {
+                states[i].kind  = PPOLL_KIND_INVALID;
+                continue;
+            }
+        }
+
+        switch (type) {
+        case NX_HANDLE_CONSOLE:
+            states[i].kind = PPOLL_KIND_CONSOLE;
+            states[i].obj  = obj;
+            nx_console_register_pollset(&listeners[i]);
+            break;
+        case NX_HANDLE_CHANNEL:
+            states[i].kind = PPOLL_KIND_CHANNEL;
+            states[i].obj  = obj;
+            nx_channel_endpoint_register_pollset(obj, &listeners[i]);
+            break;
+        case NX_HANDLE_FILE:
+            states[i].kind = PPOLL_KIND_FILE;
+            states[i].obj  = obj;
+            break;
+        case NX_HANDLE_DIR:
+            states[i].kind = PPOLL_KIND_DIR;
+            states[i].obj  = obj;
+            break;
+        default:
+            states[i].kind = PPOLL_KIND_INVALID;
+            break;
+        }
+    }
+
+    /* Initial readiness — listeners registered, so a wake during
+     * the gap reaches the empty pollset waitq (no-op) AND the
+     * underlying state has changed, so this loop catches it. */
+    int ready = 0;
+    for (uint64_t i = 0; i < nfds; i++) {
+        kfds[i].revents = ppoll_compute_readiness(&states[i],
+                                                  kfds[i].events);
+        if (kfds[i].revents) ready++;
+    }
+
+    /* Decide whether to block. */
+    int do_sleep = (ready == 0) &&
+                   !(has_timeout && budget_ns == 0);   /* 0 == non-blocking */
+
+#if !__STDC_HOSTED__
+    if (do_sleep) {
+        (void)nx_waitq_wait_with_deadline(&pollset_wq,
+                                          has_timeout ? budget_ns : 0);
+        /* Re-evaluate: NX_OK = woken; NX_EDEADLINE = timeout —
+         * both routes drop into the same recheck. */
+        ready = 0;
+        for (uint64_t i = 0; i < nfds; i++) {
+            kfds[i].revents = ppoll_compute_readiness(&states[i],
+                                                      kfds[i].events);
+            if (kfds[i].revents) ready++;
+        }
+    }
+#else
+    /* Host build: no scheduler.  Skip the sleep — the test harness
+     * primes readiness before calling sys_ppoll, and the pollset
+     * wake hooks (channel_send / console_inject) are still
+     * callable so the listener wiring itself is testable.  do_sleep
+     * is unused on host. */
+    (void)do_sleep;
+#endif
+
+    /* Unregister every listener.  nx_list_remove on a self-pointing
+     * node is safe, so unregistered (KIND_NONE / KIND_INVALID /
+     * KIND_FILE / KIND_DIR) entries that were never added are fine. */
+    for (uint64_t i = 0; i < nfds; i++) {
+        switch (states[i].kind) {
+        case PPOLL_KIND_CONSOLE:
+            nx_console_unregister_pollset(&listeners[i]);
+            break;
+        case PPOLL_KIND_CHANNEL:
+            nx_channel_endpoint_unregister_pollset(&listeners[i]);
+            break;
+        default:
+            break;
+        }
+    }
+
+    /* Copy revents back. */
+    if (nfds > 0) {
+        if (copy_to_user(user_fds, kfds,
+                         nfds * sizeof(struct nx_pollfd)) != NX_OK)
+            return NX_LINUX_EINVAL;
+    }
+
+    return (nx_status_t)ready;
+}
+
+/*
  * NX_SYS_DUP3 — (int oldfd, int newfd, int flags) → newfd | -errno.
  *
  * Slice 7.6d.N.6 minimum.  ash uses dup3 to redirect stdin/stdout to
@@ -2569,6 +2796,7 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_SET_TID_ADDRESS] = sys_set_tid_address,
     [NX_SYS_IOCTL]          = sys_ioctl,
     [NX_SYS_MKDIRAT]        = sys_mkdirat,
+    [NX_SYS_PPOLL]          = sys_ppoll,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

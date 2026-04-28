@@ -13,6 +13,9 @@
 #include "core/lib/lib.h"    /* memcpy, memset */
 #endif
 
+#include "framework/pollset.h"
+#include "framework/syscall.h"   /* NX_POLLIN / NX_POLLOUT / NX_POLLHUP */
+
 /*
  * Channel implementation — slice 5.6.
  *
@@ -50,6 +53,11 @@ struct nx_channel_endpoint {
     unsigned           head;          /* index of next message to recv */
     unsigned           tail;          /* index of next free slot for send */
     struct channel_msg ring[NX_CHANNEL_RING_LEN];
+    /* Slice 7.8b: read-readiness watchers.  Listeners are owned by
+     * sys_ppoll's pollset on its kstack.  Producers (peer-side
+     * nx_channel_send + either-side close) walk this list and wake
+     * each listener's parent waitq. */
+    struct nx_list_head pollset_listeners;
 };
 
 struct nx_channel {
@@ -87,6 +95,9 @@ int nx_channel_create(struct nx_channel_endpoint **e0,
      * discipline. */
     atomic_init(&c->e[0].handle_refs, 1);
     atomic_init(&c->e[1].handle_refs, 1);
+    /* Slice 7.8b: empty pollset listener list per endpoint. */
+    nx_list_init(&c->e[0].pollset_listeners);
+    nx_list_init(&c->e[1].pollset_listeners);
 
     *e0 = &c->e[0];
     *e1 = &c->e[1];
@@ -110,6 +121,10 @@ int nx_channel_send(struct nx_channel_endpoint *e,
     memcpy(p->ring[tail].data, data, len);
     p->ring[tail].len = (uint16_t)len;
     p->tail = next;
+    /* Slice 7.8b: peer's read-readiness rose from "would NX_EAGAIN"
+     * (or "would EOF") to "has data".  Wake every pollset waiting on
+     * the peer endpoint. */
+    nx_pollset_wake_all(&p->pollset_listeners);
     return (int)len;
 }
 
@@ -159,6 +174,13 @@ void nx_channel_endpoint_close(struct nx_channel_endpoint *e)
                                          memory_order_acq_rel);
     if (prev != 1) return;   /* still other handle refs to this endpoint */
     e->closed = true;
+    /* Slice 7.8b: peer's recv now sees EOF (POLLHUP) and a writer
+     * blocked on space-in-our-ring would unblock with the channel
+     * gone.  Wake watchers on both endpoints — peer's listeners want
+     * the EOF transition; this side's listeners (if any survived a
+     * race) want POLLHUP-on-self. */
+    nx_pollset_wake_all(&peer_of(e)->pollset_listeners);
+    nx_pollset_wake_all(&e->pollset_listeners);
 
     /* Last-handle-on-this-endpoint owner.  If the peer endpoint is
      * also already closed (zero handle_refs), nobody else holds the
@@ -191,4 +213,56 @@ bool nx_channel_endpoint_peer_closed(const struct nx_channel_endpoint *e)
 {
     if (!e) return true;
     return peer_of_const(e)->closed;
+}
+
+/* ---------- Slice 7.8b: pollset integration --------------------------- */
+
+void nx_channel_endpoint_register_pollset(struct nx_channel_endpoint *e,
+                                          struct nx_pollset_listener *l)
+{
+    if (!e || !l) return;
+    /* The caller has already initialised `l->waitq`.  Append to the
+     * tail so wake order reflects ppoll registration order — not
+     * load-bearing for correctness but matches the FIFO discipline
+     * the slice 7.8a waitq primitive uses. */
+    nx_list_add_tail(&e->pollset_listeners, &l->node);
+}
+
+void nx_channel_endpoint_unregister_pollset(struct nx_pollset_listener *l)
+{
+    if (!l) return;
+    /* Idempotent: nx_list_remove on a self-pointing node is a no-op
+     * (but leaves the node still self-pointing).  Caller must not
+     * call us after the listener's storage has been freed. */
+    nx_list_remove(&l->node);
+}
+
+short nx_channel_endpoint_readiness(const struct nx_channel_endpoint *e,
+                                    short want)
+{
+    if (!e) return NX_POLLNVAL;
+
+    short revents = 0;
+    /* POLLIN: matches `nx_channel_recv`'s "would not return EAGAIN"
+     * predicate.  Either the ring is non-empty OR the peer is closed
+     * (peer-closed is reported as readable so the caller's recv loop
+     * sees the EOF return value, matching POSIX pipe semantics). */
+    if (want & NX_POLLIN) {
+        if (e->head != e->tail || peer_of_const(e)->closed)
+            revents |= NX_POLLIN;
+    }
+    /* POLLOUT: matches `nx_channel_send`'s "would not return EBUSY"
+     * predicate, except on the closed-peer side where the producer
+     * is going to fail anyway — report POLLOUT clear. */
+    if (want & NX_POLLOUT) {
+        const struct nx_channel_endpoint *p = peer_of_const(e);
+        if (!e->closed && !p->closed) {
+            unsigned next = (p->tail + 1u) % NX_CHANNEL_RING_LEN;
+            if (next != p->head) revents |= NX_POLLOUT;
+        }
+    }
+    /* POLLHUP: peer-closed is always reported regardless of `want`
+     * mask — POSIX poll semantics. */
+    if (peer_of_const(e)->closed) revents |= NX_POLLHUP;
+    return revents;
 }

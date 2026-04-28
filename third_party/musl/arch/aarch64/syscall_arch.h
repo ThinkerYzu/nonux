@@ -82,6 +82,7 @@ static inline long __nx_translate(long n)
 	case 64:  return 8;   /* __NR_write       -> NX_SYS_WRITE */
 	case 65:  return 25;  /* __NR_readv       -> NX_SYS_READV */
 	case 66:  return 18;  /* __NR_writev      -> NX_SYS_WRITEV */
+	case 73:  return 41;  /* __NR_ppoll       -> NX_SYS_PPOLL  [slice 7.8b] */
 	case 93:  return 11;  /* __NR_exit        -> NX_SYS_EXIT */
 	case 94:  return 11;  /* __NR_exit_group  -> NX_SYS_EXIT */
 	case 129: return 16;  /* __NR_kill        -> NX_SYS_SIGNAL */

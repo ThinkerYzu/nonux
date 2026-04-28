@@ -122,4 +122,35 @@ size_t nx_channel_endpoint_depth(const struct nx_channel_endpoint *e);
 bool   nx_channel_endpoint_is_closed(const struct nx_channel_endpoint *e);
 bool   nx_channel_endpoint_peer_closed(const struct nx_channel_endpoint *e);
 
+/*
+ * Slice 7.8b — pollset integration.
+ *
+ *   `nx_channel_endpoint_register_pollset(e, listener)` adds a borrowed
+ *   listener to the endpoint's read-readiness watcher list.  Listener
+ *   storage is the caller's (typically a kstack-resident
+ *   `struct nx_pollset_listener`).  After registration the endpoint's
+ *   producers (peer-side `nx_channel_send` and either-side
+ *   `nx_channel_endpoint_close`) wake the listener's parent waitq when
+ *   the endpoint becomes more readable (new bytes arrived) or
+ *   read-EOF (peer closed).
+ *
+ *   `nx_channel_endpoint_unregister_pollset(listener)` unlinks the
+ *   listener.  Idempotent against an already-unregistered listener.
+ *
+ *   `nx_channel_endpoint_readiness(e, want)` computes the bitwise OR
+ *   of currently-ready POLL* events for `e`, restricted to the bits
+ *   the caller asked about in `want`.  POLLIN if recv would not
+ *   return NX_EAGAIN (ring non-empty or peer closed); POLLHUP if
+ *   the peer is closed (always set when peer-closed regardless of
+ *   `want` — POSIX poll semantics); POLLOUT if a send would not
+ *   return NX_EBUSY (peer not closed and peer's ring not full).
+ */
+struct nx_pollset_listener;
+
+void  nx_channel_endpoint_register_pollset(struct nx_channel_endpoint *e,
+                                           struct nx_pollset_listener *l);
+void  nx_channel_endpoint_unregister_pollset(struct nx_pollset_listener *l);
+short nx_channel_endpoint_readiness(const struct nx_channel_endpoint *e,
+                                    short want);
+
 #endif /* NX_FRAMEWORK_CHANNEL_H */
