@@ -1,0 +1,2 @@
+echo HELLO_FROM_ECHO_CAT | cat
+exit
