@@ -46,14 +46,17 @@ struct nx_process g_kernel_process = {
  * across tests; bumped again 32 → 64 in slice 7.6d.N.2 after the
  * cumulative test sweep (now exec'ing busybox three times for
  * `--help` / `sh -c "exit 42"` / `sh -c "echo hello"`) crossed
- * the 32 threshold.  Note the harness's `sched_rr_purge_user_tasks`
- * only unlinks tasks from the scheduler runqueue — it doesn't call
- * `nx_process_destroy`, so the process + its handle table + MMU
- * address space + 8 MiB user backing all stay allocated.  Real
- * reap on `wait()` (call `nx_process_destroy(child)` when
- * `sys_wait` collects status) would let us drop this back;
- * tracked under slice 7.7 follow-ups. */
-#define NX_PROCESS_TABLE_CAPACITY 64
+ * the 32 threshold; bumped 64 → 128 in slice 7.6d.N.15 after the
+ * tolerable-syscall + 3-stage-pipe + FILE-fd-through-fork tests
+ * pushed the per-test count higher (each busybox sh -c forks +
+ * execs ash, then ash forks each pipeline stage).  Note the
+ * harness's `sched_rr_purge_user_tasks` only unlinks tasks from
+ * the scheduler runqueue — it doesn't call `nx_process_destroy`,
+ * so the process + its handle table + MMU address space + 8 MiB
+ * user backing all stay allocated.  Real reap on `wait()` (call
+ * `nx_process_destroy(child)` when `sys_wait` collects status)
+ * would let us drop this back; tracked under slice 7.7 follow-ups. */
+#define NX_PROCESS_TABLE_CAPACITY 128
 
 static struct nx_process *g_process_table[NX_PROCESS_TABLE_CAPACITY];
 static uint32_t            g_pid_next = 1;    /* pid 0 reserved for kernel */

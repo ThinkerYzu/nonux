@@ -794,37 +794,90 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
     if (!child) return NX_ENOMEM;
 
     /*
-     * Slice 7.6 prereq: duplicate the parent's CHANNEL handles into
-     * the child's handle table.  Each duplicate bumps the matching
-     * endpoint's handle_refs so a single endpoint can survive close
-     * calls from both processes — the close-on-fork pipe pattern.
+     * Duplicate the parent's CHANNEL + FILE handles into the child's
+     * handle table at the SAME slot positions, preserving the
+     * encoded-handle values across the fork.  Each duplicate bumps
+     * the underlying object's reference count (CHANNEL endpoint
+     * handle_refs, vfs per-open refs) so the object can survive
+     * close calls from both processes.
      *
-     * HANDLE_FILE is intentionally NOT duplicated (per-cursor state).
+     * Slot-position-preserving inheritance (slice 7.6d.N.14): the
+     * earlier slice 7.6a inheritance used `nx_handle_alloc` which
+     * picks the first INVALID slot.  That worked for 2-stage pipes
+     * (parent's CHANNELs sit in dense low slots; child re-densifies
+     * starting at slot 3, hitting the same indices).  But ash closes
+     * its own pipe ends right after each fork in a multi-stage
+     * pipeline, leaving gaps in the parent's table.  The dense
+     * re-allocation in the child then assigned CHANNELs to
+     * *different* child slot indices than the parent's pre-fork
+     * values — and the child's user code, holding the parent's
+     * encoded handles verbatim from before fork, dup3'd the wrong
+     * slot.  Writing handles back at the parent's exact slot index
+     * keeps the encoded handle stable.
+     *
+     * FILE inheritance (slice 7.6d.N.15): `exec 3< /banner; head <&3`
+     * opens fd 3 in ash itself (no fork) then forks `head`; head
+     * needs fd 3 to survive the fork.  The vfs `retain` op (added in
+     * slice 7.6d.N.8 for dup3) bumps the per-open's refs; both
+     * parent and child point at the same `struct ramfs_open` (same
+     * cursor + flags), matching POSIX's "fork shares the open file
+     * description" semantic.
+     *
      * HANDLE_CONSOLE doesn't need duplication — `nx_process_create`
      * pre-installs CONSOLE at child slots 0/1/2 with the same shape
-     * as the parent's, so the child's stdin/stdout/stderr already
-     * mirror the parent's at fork time.  (Edge case: parent dup3'd
-     * a CHANNEL onto slot 0/1/2 before fork → child still gets the
-     * pre-installed CONSOLE there, NOT the parent's redirected
-     * CHANNEL.  Workloads in 7.6d.N.6b dup3 AFTER fork in each
-     * child, so this isn't currently exercised.  Slot-position-
-     * preserving inheritance is a follow-up.)
+     * as the parent's.  (Edge case: parent dup3'd a CHANNEL or FILE
+     * onto slot 0/1/2 before fork — handled here by overwriting the
+     * child's pre-installed CONSOLE since the loop iterates every
+     * slot, including 0/1/2, and the parent's non-CONSOLE entry at
+     * that slot wins.  Otherwise the child's CONSOLE stays put.)
      */
     struct nx_handle_table *parent_tbl = &caller->process->handles;
     struct nx_handle_table *child_tbl  = &child->handles;
+
+    /* Resolve the vfs slot once for FILE handle inheritance.  Lookup
+     * may fail if there's no vfs configured (kernel-process bootstrap
+     * before slot bind) — we treat that as "no FILE handles to
+     * inherit" and skip the FILE branch.  CHANNEL inheritance never
+     * needs the vfs. */
+    const struct nx_vfs_ops *vops = NULL;
+    void                    *vself = NULL;
+    (void)resolve_vfs(&vops, &vself);
+
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         const struct nx_handle_entry *src = &parent_tbl->entries[i];
-        if (src->type != NX_HANDLE_CHANNEL) continue;
         if (!src->object) continue;
-        nx_channel_endpoint_retain(src->object);
-        nx_handle_t dup_h = NX_HANDLE_INVALID;
-        int rc = nx_handle_alloc(child_tbl, src->type,
-                                 src->rights, src->object, &dup_h);
-        if (rc != NX_OK) {
-            nx_channel_endpoint_close(src->object);
-            nx_process_destroy(child);
-            return NX_ENOMEM;
+        bool retain_ok = false;
+        if (src->type == NX_HANDLE_CHANNEL) {
+            nx_channel_endpoint_retain(src->object);
+            retain_ok = true;
+        } else if (src->type == NX_HANDLE_FILE) {
+            /* Slice 7.6d.N.15: FILE handles inherit through fork
+             * with the same per-open retain mechanism slice 7.6d.N.8
+             * added for `dup3` / `fcntl(F_DUPFD)`.  POSIX semantic:
+             * parent and child share the underlying open file
+             * description (cursor + flags).  If a vfs without a
+             * `retain` op is bound, FILE handles can't safely be
+             * shared — skip this entry; the child gets no fd 3+
+             * inherited from FILE handles, matching the v1 pre-N.15
+             * behaviour. */
+            if (vops && vops->retain) {
+                vops->retain(vself, src->object);
+                retain_ok = true;
+            }
         }
+        if (!retain_ok) continue;
+        struct nx_handle_entry *dst = &child_tbl->entries[i];
+        if (dst->type == NX_HANDLE_INVALID) {
+            child_tbl->count++;
+        }
+        /* No type-aware close on overwrite: the only pre-installed
+         * type at any slot in a freshly-created process is
+         * NX_HANDLE_CONSOLE, which is a global singleton with no
+         * destructor (the slot just stops naming it). */
+        dst->type       = src->type;
+        dst->rights     = src->rights;
+        dst->object     = src->object;
+        dst->generation = src->generation;
     }
 
     struct nx_task *child_task =
@@ -2180,6 +2233,159 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
     return NX_LINUX_EMFILE;
 }
 
+/*
+ * NX_SYS_RT_SIGACTION — (int signo, const struct sigaction *act,
+ *                       struct sigaction *oldact, size_t setsz) → 0.
+ *
+ * Slice 7.6d.N.12 stub.  ash unconditionally walks its trap table
+ * during startup (see busybox shell/ash.c `setsignal`) and would
+ * fail with ENOSYS without this entry.  v1 ignores `act` and does
+ * not populate `oldact` — POSIX permits an undefined oldact when
+ * the previous disposition was SIG_DFL, which is true for every
+ * signal in v1.  Real per-process action storage + the kernel-→
+ * user-handler trampoline land with slice 7.6d.N.final, when
+ * interactive `sh` first needs Ctrl-C → SIGINT delivery to ash's
+ * handler.
+ *
+ * The raw sigaction-syscall ABI (setsz != sizeof(sigset_t)) is the
+ * Linux quirk that musl works around — we don't validate it because
+ * we discard the struct anyway.
+ */
+static nx_status_t sys_rt_sigaction(uint64_t a0, uint64_t a1, uint64_t a2,
+                                    uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return NX_OK;
+}
+
+/*
+ * NX_SYS_RT_SIGPROCMASK — (int how, const sigset_t *set, sigset_t *oldset,
+ *                         size_t setsz) → 0.
+ *
+ * Slice 7.6d.N.12 stub.  ash startup runs
+ * `sigprocmask_allsigs(SIG_UNBLOCK)` to clear its inherited mask
+ * (see busybox libbb/u_signal_names.c) and would fail with ENOSYS
+ * otherwise.  v1 has no per-process blocked-signal mask — every
+ * signal is always deliverable through `sched_check_resched`'s
+ * polled dispatcher.  Real mask-respecting delivery lands with
+ * slice 7.6d.N.final's signal-handler trampoline.
+ */
+static nx_status_t sys_rt_sigprocmask(uint64_t a0, uint64_t a1, uint64_t a2,
+                                      uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return NX_OK;
+}
+
+/*
+ * Slice 7.6d.N.13 — tolerable-syscall stubs.  Every body is a one-liner;
+ * grouped together so the dispatch-table block stays compact.  None of
+ * these touch a kernel composition gap (no users/groups/tids in v1);
+ * they exist purely to keep ash + `id` + `uname -a` from bailing on
+ * ENOSYS during their startup paths.
+ */
+static nx_status_t sys_getuid(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return 0;  /* root */
+}
+
+static nx_status_t sys_geteuid(uint64_t a0, uint64_t a1, uint64_t a2,
+                               uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return 0;
+}
+
+static nx_status_t sys_getgid(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return 0;
+}
+
+static nx_status_t sys_getegid(uint64_t a0, uint64_t a1, uint64_t a2,
+                               uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return 0;
+}
+
+static nx_status_t sys_setuid(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return NX_OK;  /* no-op: no uid concept to set */
+}
+
+static nx_status_t sys_setgid(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return NX_OK;
+}
+
+static nx_status_t sys_getpid(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return (nx_status_t)nx_process_current()->pid;
+}
+
+static nx_status_t sys_getppid(uint64_t a0, uint64_t a1, uint64_t a2,
+                               uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return (nx_status_t)nx_process_current()->parent_pid;
+}
+
+/*
+ * Linux struct utsname layout — six 65-byte char arrays (sysname,
+ * nodename, release, version, machine, domainname) totaling 390
+ * bytes.  Hardcoded values: a future slice with a real hostname
+ * would store these in `nx_process` or a kernel global.  v1 just
+ * reports the project name + arch.
+ */
+struct nx_utsname {
+    char sysname[65];
+    char nodename[65];
+    char release[65];
+    char version[65];
+    char machine[65];
+    char domainname[65];
+};
+
+static nx_status_t sys_uname(uint64_t a0, uint64_t a1, uint64_t a2,
+                             uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    void *user_buf = (void *)(uintptr_t)a0;
+    if (!user_buf) return NX_EINVAL;
+
+    struct nx_utsname u = {
+        .sysname    = "nonux",
+        .nodename   = "nonux",
+        .release    = "0.1",
+        .version    = "v1",
+        .machine    = "aarch64",
+        .domainname = "(none)",
+    };
+    return copy_to_user(user_buf, &u, sizeof u);
+}
+
+static nx_status_t sys_set_tid_address(uint64_t a0, uint64_t a1, uint64_t a2,
+                                       uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    /* musl's __init_libc passes &__pthread_self()->tid here.  We
+     * don't track the tidptr — when the process exits there's no
+     * kernel-side waker that would clear it.  Return the process
+     * pid as a stand-in for tid; v1 is single-threaded so the two
+     * are interchangeable from userspace's perspective. */
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    return (nx_status_t)nx_process_current()->pid;
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -2210,6 +2416,18 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_DUP3]           = sys_dup3,
     [NX_SYS_READV]          = sys_readv,
     [NX_SYS_FCNTL]          = sys_fcntl,
+    [NX_SYS_RT_SIGACTION]   = sys_rt_sigaction,
+    [NX_SYS_RT_SIGPROCMASK] = sys_rt_sigprocmask,
+    [NX_SYS_GETUID]         = sys_getuid,
+    [NX_SYS_GETEUID]        = sys_geteuid,
+    [NX_SYS_GETGID]         = sys_getgid,
+    [NX_SYS_GETEGID]        = sys_getegid,
+    [NX_SYS_SETUID]         = sys_setuid,
+    [NX_SYS_SETGID]         = sys_setgid,
+    [NX_SYS_GETPID]         = sys_getpid,
+    [NX_SYS_GETPPID]        = sys_getppid,
+    [NX_SYS_UNAME]          = sys_uname,
+    [NX_SYS_SET_TID_ADDRESS] = sys_set_tid_address,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

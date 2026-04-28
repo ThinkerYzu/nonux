@@ -28,6 +28,18 @@
  *   __NR_exit        (93)  -> NX_SYS_EXIT          (11)
  *   __NR_exit_group  (94)  -> NX_SYS_EXIT          (11)   [v1 alias]
  *   __NR_kill       (129)  -> NX_SYS_SIGNAL        (16)
+ *   __NR_rt_sigaction   (134) -> NX_SYS_RT_SIGACTION   (27) [stub returns 0]
+ *   __NR_rt_sigprocmask (135) -> NX_SYS_RT_SIGPROCMASK (28) [stub returns 0]
+ *   __NR_setgid     (144)  -> NX_SYS_SETGID         (34) [no-op success]
+ *   __NR_setuid     (146)  -> NX_SYS_SETUID         (33) [no-op success]
+ *   __NR_uname      (160)  -> NX_SYS_UNAME          (37) [hardcoded values]
+ *   __NR_getpid     (172)  -> NX_SYS_GETPID         (35) [from current proc]
+ *   __NR_getppid    (173)  -> NX_SYS_GETPPID        (36) [from current proc]
+ *   __NR_getuid     (174)  -> NX_SYS_GETUID         (29) [returns 0]
+ *   __NR_geteuid    (175)  -> NX_SYS_GETEUID        (30) [returns 0]
+ *   __NR_getgid     (176)  -> NX_SYS_GETGID         (31) [returns 0]
+ *   __NR_getegid    (177)  -> NX_SYS_GETEGID        (32) [returns 0]
+ *   __NR_set_tid_address (96) -> NX_SYS_SET_TID_ADDRESS (38) [returns pid]
  *   __NR_brk        (214)  -> NX_SYS_BRK           (17)
  *   __NR_munmap     (215)  -> NX_SYS_MUNMAP        (20)   [v1 no-op success]
  *   __NR_clone      (220)  -> NX_SYS_FORK          (12)   [musl fork() drops flags]
@@ -39,12 +51,15 @@
  * Unmapped syscalls (and everything else) return -ENOSYS (-38) so
  * musl's wrappers translate to errno=ENOSYS at the call site.  Slice
  * 7.6c.3b/c tackled the easier translations; slice 7.6d.N.1 added
- * mmap/munmap because mallocng needs them.  Future targets (when
- * busybox surfaces them): rt_sigaction (needs signal-handler
- * dispatch), getuid/geteuid (trivial stubs), clock_gettime (needs
- * kernel-side timekeeping plumbing), set_tid_address (needs a tid
- * concept).  The translation table is the only thing that changes;
- * all other musl source stays vanilla.
+ * mmap/munmap because mallocng needs them; slice 7.6d.N.12 added the
+ * rt_sigaction/rt_sigprocmask stubs so ash startup doesn't bail when
+ * walking its trap table; slice 7.6d.N.13 added the tolerable-syscall
+ * stubs sweep (set_tid_address, getuid/euid/gid/egid, setuid/setgid,
+ * getpid/getppid, uname) so `id` / `whoami` / `uname -a` work without
+ * surfacing kernel composition gaps.  Future targets: clock_gettime
+ * (needs kernel-side timekeeping plumbing), pselect / poll (need
+ * real I/O readiness).  The translation table is the only thing that
+ * changes; all other musl source stays vanilla.
  */
 
 static inline long __nx_translate(long n)
@@ -65,6 +80,18 @@ static inline long __nx_translate(long n)
 	case 93:  return 11;  /* __NR_exit        -> NX_SYS_EXIT */
 	case 94:  return 11;  /* __NR_exit_group  -> NX_SYS_EXIT */
 	case 129: return 16;  /* __NR_kill        -> NX_SYS_SIGNAL */
+	case 134: return 27;  /* __NR_rt_sigaction   -> NX_SYS_RT_SIGACTION   [stub] */
+	case 135: return 28;  /* __NR_rt_sigprocmask -> NX_SYS_RT_SIGPROCMASK [stub] */
+	case 96:  return 38;  /* __NR_set_tid_address -> NX_SYS_SET_TID_ADDRESS [stub] */
+	case 144: return 34;  /* __NR_setgid     -> NX_SYS_SETGID  [no-op] */
+	case 146: return 33;  /* __NR_setuid     -> NX_SYS_SETUID  [no-op] */
+	case 160: return 37;  /* __NR_uname      -> NX_SYS_UNAME   [hardcoded] */
+	case 172: return 35;  /* __NR_getpid     -> NX_SYS_GETPID */
+	case 173: return 36;  /* __NR_getppid    -> NX_SYS_GETPPID */
+	case 174: return 29;  /* __NR_getuid     -> NX_SYS_GETUID  [returns 0] */
+	case 175: return 30;  /* __NR_geteuid    -> NX_SYS_GETEUID [returns 0] */
+	case 176: return 31;  /* __NR_getgid     -> NX_SYS_GETGID  [returns 0] */
+	case 177: return 32;  /* __NR_getegid    -> NX_SYS_GETEGID [returns 0] */
 	case 214: return 17;  /* __NR_brk         -> NX_SYS_BRK */
 	case 215: return 20;  /* __NR_munmap      -> NX_SYS_MUNMAP */
 	case 220: return 12;  /* __NR_clone       -> NX_SYS_FORK   [flags ignored] */

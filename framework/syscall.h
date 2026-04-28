@@ -297,6 +297,90 @@ enum nx_syscall_number {
                                   *   Other cmds return -ENOSYS so
                                   *   programs that need real fcntl
                                   *   surface the gap explicitly. */
+    NX_SYS_RT_SIGACTION   = 27,  /* (int signo, const struct sigaction *act,
+                                  *    struct sigaction *oldact, size_t setsz)
+                                  *    → 0 / -errno.
+                                  *
+                                  *  Slice 7.6d.N.12 stub.  Returns 0
+                                  *  unconditionally; does not record the
+                                  *  handler.  ash walks its trap table
+                                  *  during startup and would bail with
+                                  *  ENOSYS otherwise.  Real kernel-side
+                                  *  handler dispatch (the sigreturn
+                                  *  trampoline + per-process action
+                                  *  table) lands with slice 7.6d.N.final
+                                  *  when interactive `sh` first needs
+                                  *  Ctrl-C → SIGINT delivery to ash's
+                                  *  installed handler.
+                                  *
+                                  *  v1 ignores `act` entirely (we don't
+                                  *  copy_from_user the struct).  If a
+                                  *  caller passes a non-NULL `oldact`
+                                  *  they observe whatever was in their
+                                  *  buffer — POSIX says the contents are
+                                  *  undefined for "previously SIG_DFL",
+                                  *  which in v1 is every signal. */
+    NX_SYS_RT_SIGPROCMASK = 28,  /* (int how, const sigset_t *set,
+                                  *    sigset_t *oldset, size_t setsz)
+                                  *    → 0 / -errno.
+                                  *
+                                  *  Slice 7.6d.N.12 stub.  Returns 0
+                                  *  unconditionally; does not record the
+                                  *  mask.  ash unblocks its inherited
+                                  *  signal mask on startup via
+                                  *  `sigprocmask_allsigs(SIG_UNBLOCK)`
+                                  *  and bails with ENOSYS otherwise.
+                                  *  v1's signal model has no per-process
+                                  *  blocked mask — the sched_check_resched
+                                  *  poll always delivers pending signals.
+                                  *  Real masking lands with slice
+                                  *  7.6d.N.final's catchable SIGINT
+                                  *  handler. */
+
+    /*
+     * Slice 7.6d.N.13 — tolerable-syscall stubs sweep.  busybox's id /
+     * uname / env-substitution paths touch ten Linux syscalls that
+     * have no kernel composition gap to fill (no real users / groups,
+     * no per-thread tid concept, hostname is a baked-in constant in
+     * v1).  Each one stubs to a plausible value rather than ENOSYS so
+     * `id`, `whoami`, `uname -a`, and any builtin that touches $UID /
+     * $$ / $PPID return sensible output.  They land as a batch slice
+     * because none of them surface a kernel composition gap on its
+     * own — the grouping is purely a "now ash can finish a bunch of
+     * its startup paths" milestone.
+     */
+    NX_SYS_GETUID         = 29,  /* () → 0.  Single-user v1; root. */
+    NX_SYS_GETEUID        = 30,  /* () → 0. */
+    NX_SYS_GETGID         = 31,  /* () → 0. */
+    NX_SYS_GETEGID        = 32,  /* () → 0. */
+    NX_SYS_SETUID         = 33,  /* (uid_t uid) → 0.  No-op success;
+                                  *  v1 has no uid concept to set. */
+    NX_SYS_SETGID         = 34,  /* (gid_t gid) → 0.  Same. */
+    NX_SYS_GETPID         = 35,  /* () → current process pid.  Real
+                                  *  value out of nx_process_current()
+                                  *  so $$ / $PPID / fork-child-checks
+                                  *  return something sensible. */
+    NX_SYS_GETPPID        = 36,  /* () → parent_pid (0 for processes
+                                  *  not spawned via fork). */
+    NX_SYS_UNAME          = 37,  /* (struct utsname *buf) → 0 / -errno.
+                                  *  copy_to_user a 6×65-byte struct
+                                  *  with sysname="nonux", nodename=
+                                  *  "nonux", release="0.1", version=
+                                  *  "v1", machine="aarch64",
+                                  *  domainname="(none)".  Strict
+                                  *  Linux ABI shape so musl's
+                                  *  `uname()` works without patches. */
+    NX_SYS_SET_TID_ADDRESS = 38, /* (int *tidptr) → tid.  musl's
+                                  *  __init_libc calls this in its very
+                                  *  first user-code (before main)
+                                  *  to register the location of the
+                                  *  per-thread `tid` field.  We have
+                                  *  no per-thread tid concept; return
+                                  *  the process pid (Linux returns the
+                                  *  thread's tid, which equals the pid
+                                  *  for a single-threaded process —
+                                  *  every process is single-threaded
+                                  *  in v1).  Ignores tidptr. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

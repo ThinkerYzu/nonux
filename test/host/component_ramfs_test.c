@@ -145,10 +145,10 @@ TEST(ramfs_file_table_exhaustion_returns_enomem)
     void *self = ramfs_fixture_create();
     ASSERT_NOT_NULL(self);
 
-    /* RAMFS_MAX_FILES is 16 per the component (slice 7.6d.N.4 bump);
-     * use 24 so we clearly see the cutoff without depending on the
+    /* RAMFS_MAX_FILES is 24 per the component (slice 7.6d.N.13 bump);
+     * use 32 so we clearly see the cutoff without depending on the
      * exact number. */
-    enum { ATTEMPTS = 24 };
+    enum { ATTEMPTS = 32 };
     unsigned created = 0;
     for (int i = 0; i < ATTEMPTS; i++) {
         char path[8];
@@ -192,8 +192,8 @@ TEST(ramfs_open_slot_exhaustion_returns_enomem)
                 NX_OK);
     ramfs_fs_ops.close(self, seed);  /* releases open slot but not file */
 
-    enum { ATTEMPTS = 96 };  /* > RAMFS_MAX_OPEN (64 = 4*16 per the
-                              * slice 7.6d.N.4 bump) */
+    enum { ATTEMPTS = 128 }; /* > RAMFS_MAX_OPEN (96 = 4*24 per the
+                              * slice 7.6d.N.13 bump) */
     void *opens[ATTEMPTS];
     unsigned n = 0;
     for (int i = 0; i < ATTEMPTS; i++) {

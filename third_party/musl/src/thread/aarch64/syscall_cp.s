@@ -53,6 +53,18 @@ __cp_begin:
 	cmp x1, #93;   b.eq .Lnx_exit
 	cmp x1, #94;   b.eq .Lnx_exit
 	cmp x1, #129;  b.eq .Lnx_kill
+	cmp x1, #134;  b.eq .Lnx_rt_sigaction
+	cmp x1, #135;  b.eq .Lnx_rt_sigprocmask
+	cmp x1, #96;   b.eq .Lnx_set_tid_address
+	cmp x1, #144;  b.eq .Lnx_setgid
+	cmp x1, #146;  b.eq .Lnx_setuid
+	cmp x1, #160;  b.eq .Lnx_uname
+	cmp x1, #172;  b.eq .Lnx_getpid
+	cmp x1, #173;  b.eq .Lnx_getppid
+	cmp x1, #174;  b.eq .Lnx_getuid
+	cmp x1, #175;  b.eq .Lnx_geteuid
+	cmp x1, #176;  b.eq .Lnx_getgid
+	cmp x1, #177;  b.eq .Lnx_getegid
 	cmp x1, #214;  b.eq .Lnx_brk
 	cmp x1, #215;  b.eq .Lnx_munmap
 	cmp x1, #220;  b.eq .Lnx_fork
@@ -76,6 +88,18 @@ __cp_begin:
 .Lnx_writev:   mov x8, #18; b .Lnx_run    // NX_SYS_WRITEV
 .Lnx_exit:     mov x8, #11; b .Lnx_run    // NX_SYS_EXIT
 .Lnx_kill:     mov x8, #16; b .Lnx_run    // NX_SYS_SIGNAL
+.Lnx_rt_sigaction:   mov x8, #27; b .Lnx_run  // NX_SYS_RT_SIGACTION   [stub]
+.Lnx_rt_sigprocmask: mov x8, #28; b .Lnx_run  // NX_SYS_RT_SIGPROCMASK [stub]
+.Lnx_set_tid_address: mov x8, #38; b .Lnx_run // NX_SYS_SET_TID_ADDRESS [stub]
+.Lnx_setgid:   mov x8, #34; b .Lnx_run   // NX_SYS_SETGID  [no-op]
+.Lnx_setuid:   mov x8, #33; b .Lnx_run   // NX_SYS_SETUID  [no-op]
+.Lnx_uname:    mov x8, #37; b .Lnx_run   // NX_SYS_UNAME
+.Lnx_getpid:   mov x8, #35; b .Lnx_run   // NX_SYS_GETPID
+.Lnx_getppid:  mov x8, #36; b .Lnx_run   // NX_SYS_GETPPID
+.Lnx_getuid:   mov x8, #29; b .Lnx_run   // NX_SYS_GETUID
+.Lnx_geteuid:  mov x8, #30; b .Lnx_run   // NX_SYS_GETEUID
+.Lnx_getgid:   mov x8, #31; b .Lnx_run   // NX_SYS_GETGID
+.Lnx_getegid:  mov x8, #32; b .Lnx_run   // NX_SYS_GETEGID
 .Lnx_brk:      mov x8, #17; b .Lnx_run    // NX_SYS_BRK
 .Lnx_munmap:   mov x8, #20; b .Lnx_run    // NX_SYS_MUNMAP
 .Lnx_fork:     mov x8, #12; b .Lnx_run    // NX_SYS_FORK   [flags ignored]

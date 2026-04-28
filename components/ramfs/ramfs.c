@@ -41,16 +41,27 @@
 #include "core/lib/lib.h"
 #endif
 
-#define RAMFS_MAX_FILES  16u
+#define RAMFS_MAX_FILES  24u
                                 /* Bumped 8 → 16 in slice 7.6d.N.4 to
                                  * fit the duplicate `/bin/ls`-as-busybox
                                  * cpio entry alongside the existing
                                  * 5 initramfs entries + the 3 entries
                                  * created by tests (/hello, /rd,
-                                 * /ktest_hello).  Cost: 32 → 64 MiB
-                                 * static .bss.  Same v1-hack pattern
-                                 * as the prior cap bumps (real fix is
-                                 * dynamic per-file storage). */
+                                 * /ktest_hello).  Bumped 16 → 24 in
+                                 * slice 7.6d.N.13 to fit /bin/id +
+                                 * /bin/uname + /bin/tr + /bin/wc +
+                                 * /bin/head (each a separate cpio
+                                 * entry — pack-initramfs.py doesn't
+                                 * dedupe by content) alongside the
+                                 * existing 8 initramfs entries +
+                                 * the test-created /hello, /rd,
+                                 * /ktest_hello, /tmp/foo, /tmp/copy,
+                                 * /tmp/ap.  Cost: 64 → 96 MiB static
+                                 * .bss.  Same v1-hack pattern as the
+                                 * prior cap bumps (real fix is dynamic
+                                 * per-file storage; an entry-level
+                                 * dedup in pack-initramfs.py would
+                                 * also help). */
 #define RAMFS_NAME_MAX   32u
 #define RAMFS_FILE_CAP  (4u * 1024u * 1024u)
                                 /* Bumped 8192 → 4 MiB in slice 7.6d.2c

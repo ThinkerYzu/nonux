@@ -201,7 +201,11 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_copy.c \
                  test/kernel/ktest_posix_busybox_sh_stdin.c \
                  test/kernel/ktest_posix_busybox_sh_cmdsub.c \
-                 test/kernel/ktest_posix_busybox_sh_append.c
+                 test/kernel/ktest_posix_busybox_sh_append.c \
+                 test/kernel/ktest_posix_busybox_sh_trap.c \
+                 test/kernel/ktest_posix_busybox_sh_id_uname.c \
+                 test/kernel/ktest_posix_busybox_sh_pipe3.c \
+                 test/kernel/ktest_posix_busybox_sh_xfile.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -239,7 +243,11 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_busybox_sh_copy_prog_blob.S \
                  test/kernel/posix_busybox_sh_stdin_prog_blob.S \
                  test/kernel/posix_busybox_sh_cmdsub_prog_blob.S \
-                 test/kernel/posix_busybox_sh_append_prog_blob.S
+                 test/kernel/posix_busybox_sh_append_prog_blob.S \
+                 test/kernel/posix_busybox_sh_trap_prog_blob.S \
+                 test/kernel/posix_busybox_sh_id_uname_prog_blob.S \
+                 test/kernel/posix_busybox_sh_pipe3_prog_blob.S \
+                 test/kernel/posix_busybox_sh_xfile_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -341,7 +349,12 @@ test/kernel/initramfs.cpio: tools/pack-initramfs.py \
 	    $(BUSYBOX_BIN):/bin/busybox \
 	    $(BUSYBOX_BIN):/bin/ls \
 	    $(BUSYBOX_BIN):/bin/cat \
-	    $(BUSYBOX_BIN):/bin/echo
+	    $(BUSYBOX_BIN):/bin/echo \
+	    $(BUSYBOX_BIN):/bin/id \
+	    $(BUSYBOX_BIN):/bin/uname \
+	    $(BUSYBOX_BIN):/bin/tr \
+	    $(BUSYBOX_BIN):/bin/wc \
+	    $(BUSYBOX_BIN):/bin/head
 
 test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
                               test/kernel/initramfs.cpio
@@ -690,6 +703,82 @@ test/kernel/posix_busybox_sh_append_prog.elf: test/kernel/posix_busybox_sh_appen
 test/kernel/posix_busybox_sh_append_prog_blob.o: test/kernel/posix_busybox_sh_append_prog_blob.S \
                                                  test/kernel/posix_busybox_sh_append_prog.elf
 
+# Slice 7.6d.N.12 — busybox `sh -c "trap 'echo bye' EXIT; echo body"`.
+# First workload exercising rt_sigaction / rt_sigprocmask stubs.  ash
+# walks its trap table on startup and would bail with ENOSYS on the
+# rt_sigprocmask call without the new NX_SYS_RT_SIG{ACTION,PROCMASK}
+# entries.  EXIT pseudo-signal trap fires inside ash — no kernel
+# handler dispatch yet (that's slice 7.6d.N.final's territory).
+test/kernel/posix_busybox_sh_trap_prog.o: test/kernel/posix_busybox_sh_trap_prog.c \
+                                          components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_trap_prog.elf: test/kernel/posix_busybox_sh_trap_prog.o \
+                                            components/posix_shim/libnxlibc.a \
+                                            test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_trap_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_trap_prog_blob.o: test/kernel/posix_busybox_sh_trap_prog_blob.S \
+                                               test/kernel/posix_busybox_sh_trap_prog.elf
+
+# Slice 7.6d.N.13 — busybox `sh -c "id; uname -a"`.  First workload
+# exercising the tolerable-syscall stubs sweep (set_tid_address,
+# getuid/euid/gid/egid, setuid/setgid, getpid/getppid, uname).  No
+# kernel composition gap closed; just stub additions to keep ash +
+# its applets from bailing on ENOSYS.
+test/kernel/posix_busybox_sh_id_uname_prog.o: test/kernel/posix_busybox_sh_id_uname_prog.c \
+                                              components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_id_uname_prog.elf: test/kernel/posix_busybox_sh_id_uname_prog.o \
+                                                components/posix_shim/libnxlibc.a \
+                                                test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_id_uname_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_id_uname_prog_blob.o: test/kernel/posix_busybox_sh_id_uname_prog_blob.S \
+                                                   test/kernel/posix_busybox_sh_id_uname_prog.elf
+
+# Slice 7.6d.N.14 — busybox `sh -c "echo hello | tr a-z A-Z | wc -c"`.
+# First 3-stage pipe.  Quality-of-coverage: no production-code change;
+# verifies that the slice 7.6d.N.6b 2-stage CHANNEL plumbing scales
+# to N stages.  /bin/{tr,wc} initramfs entries added in slice N.13.
+test/kernel/posix_busybox_sh_pipe3_prog.o: test/kernel/posix_busybox_sh_pipe3_prog.c \
+                                           components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_pipe3_prog.elf: test/kernel/posix_busybox_sh_pipe3_prog.o \
+                                             components/posix_shim/libnxlibc.a \
+                                             test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_pipe3_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_pipe3_prog_blob.o: test/kernel/posix_busybox_sh_pipe3_prog_blob.S \
+                                                test/kernel/posix_busybox_sh_pipe3_prog.elf
+
+# Slice 7.6d.N.15 — busybox `sh -c "exec 3< /banner; head <&3"`.
+# First workload exercising FILE-fd inheritance through fork.
+# Production: sys_fork's inheritance loop now handles HANDLE_FILE
+# alongside HANDLE_CHANNEL, using the slice 7.6d.N.8 vfs `retain`
+# op.  /bin/head initramfs entry added in slice N.13.
+test/kernel/posix_busybox_sh_xfile_prog.o: test/kernel/posix_busybox_sh_xfile_prog.c \
+                                           components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_xfile_prog.elf: test/kernel/posix_busybox_sh_xfile_prog.o \
+                                             components/posix_shim/libnxlibc.a \
+                                             test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_xfile_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_xfile_prog_blob.o: test/kernel/posix_busybox_sh_xfile_prog_blob.S \
+                                                test/kernel/posix_busybox_sh_xfile_prog.elf
+
 # Slice 7.6d.3a — EL0-fault demos.  Each is a libnxlibc-linked C
 # program: parent forks; child trips a fault (NULL write for the
 # segfault demo, `udf #0` for the undef demo); parent waits and
@@ -925,6 +1014,10 @@ clean:
 	       test/kernel/posix_busybox_sh_stdin_prog.elf \
 	       test/kernel/posix_busybox_sh_cmdsub_prog.elf \
 	       test/kernel/posix_busybox_sh_append_prog.elf \
+	       test/kernel/posix_busybox_sh_trap_prog.elf \
+	       test/kernel/posix_busybox_sh_id_uname_prog.elf \
+	       test/kernel/posix_busybox_sh_pipe3_prog.elf \
+	       test/kernel/posix_busybox_sh_xfile_prog.elf \
 	       test/kernel/posix_segfault_prog.elf \
 	       test/kernel/posix_undef_prog.elf \
 	       components/posix_shim/libnxlibc.a \

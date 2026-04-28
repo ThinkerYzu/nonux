@@ -274,13 +274,16 @@ int mmu_is_enabled(void)
  * after the cumulative test sweep (now exec'ing busybox three times
  * for `--help` / `sh -c "exit 42"` / `sh -c "echo hello"`) crossed
  * the 32 threshold and `sys_exec` started returning NX_ENOMEM from
- * `mmu_create_address_space`.  The leak is total: the test harness's
- * `sched_rr_purge_user_tasks` only `nx_list_remove`s tasks from the
- * runqueue — task struct + kstack + owning `nx_process` + this MMU
- * address space's L1/L2 pages + 8 MiB user backing all stay
- * allocated.  Real fix is reap-on-wait (deferred since slice 7.4);
- * the cap bump is the v1 hack we keep using. */
-#define MMU_MAX_ADDRESS_SPACES  64u
+ * `mmu_create_address_space`; bumped 64 → 128 in slice 7.6d.N.15
+ * alongside the matching NX_PROCESS_TABLE_CAPACITY bump after the
+ * tolerable-syscall + 3-stage-pipe + FILE-fd-through-fork tests
+ * pushed the per-test process count higher.  The leak is total: the
+ * test harness's `sched_rr_purge_user_tasks` only `nx_list_remove`s
+ * tasks from the runqueue — task struct + kstack + owning
+ * `nx_process` + this MMU address space's L1/L2 pages + 8 MiB user
+ * backing all stay allocated.  Real fix is reap-on-wait (deferred
+ * since slice 7.4); the cap bump is the v1 hack we keep using. */
+#define MMU_MAX_ADDRESS_SPACES  128u
 
 struct mmu_address_space {
     uint64_t  l1_root_pa;     /* == (uintptr_t)l1_page */
