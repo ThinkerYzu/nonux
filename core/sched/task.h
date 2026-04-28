@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/cpu/monotonic.h"
 #include "core/lib/list.h"
 
 /*
@@ -70,6 +71,7 @@ enum nx_task_state {
  * during bootstrap).  Slice 7.1 added this field.
  */
 struct nx_process;
+struct nx_waitq;
 
 /*
  * `cpu_ctx` is first so `cpu_switch_to(struct task *)` can treat the task
@@ -98,6 +100,23 @@ struct nx_task {
      * pointer for the rest of the task's life.
      */
     uint64_t            tpidr_el0;
+    /*
+     * Slice 7.8a — wait-queue state.  `wait_q` points at the waitq
+     * the task is currently blocked on (NULL when not waiting).
+     * `sched_node` is reused for the waitq linkage once the task is
+     * dequeued from the runqueue and added to `wait_q->waiters`.
+     * `deadline_node` links into a global g_deadline_list when the
+     * caller asked for a finite timeout; `wait_has_deadline` tells
+     * the wake/expire path whether to unlink it.  `wait_woken` is
+     * set by wake_one/wake_all and stays 0 if the deadline expires
+     * first — the wait function uses it to distinguish NX_OK from
+     * NX_ETIMEDOUT.
+     */
+    struct nx_waitq    *wait_q;
+    struct nx_deadline  wait_deadline;
+    int                 wait_has_deadline;
+    int                 wait_woken;
+    struct nx_list_node deadline_node;
 };
 
 _Static_assert(offsetof(struct nx_task, cpu_ctx) == 0,

@@ -15,6 +15,7 @@
 
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
+#include "core/sched/waitq.h"
 #include "framework/hook.h"
 #include "framework/process.h"
 #include "framework/syscall.h"          /* NX_SIGKILL / NX_SIGTERM */
@@ -93,6 +94,11 @@ static void idle_task_init(void)
     g_idle_task.kstack_size    = 0;
     g_idle_task.sched_node.next = &g_idle_task.sched_node;
     g_idle_task.sched_node.prev = &g_idle_task.sched_node;
+    g_idle_task.wait_q              = NULL;
+    g_idle_task.wait_has_deadline   = 0;
+    g_idle_task.wait_woken          = 0;
+    g_idle_task.deadline_node.next  = &g_idle_task.deadline_node;
+    g_idle_task.deadline_node.prev  = &g_idle_task.deadline_node;
     /* Slice 7.1: idle belongs to the kernel process (pid 0).  Any
      * kthread spawned before someone explicitly reassigns its
      * `process` pointer inherits this default (see nx_task_create). */
@@ -127,6 +133,9 @@ void sched_tick(void)
 {
     if (!g_sched_ops) return;
     g_sched_ops->tick(g_sched_self);
+    /* Slice 7.8a: expire any waitq waiters whose deadline elapsed
+     * during this tick.  Cheap when the deadline list is empty. */
+    nx_waitq_tick_deadlines();
 }
 
 void sched_check_resched(void)

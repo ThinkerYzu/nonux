@@ -31,7 +31,8 @@ CORE_C   := core/boot/boot.c \
             core/irq/gic.c \
             core/timer/timer.c \
             core/sched/task.c \
-            core/sched/sched.c
+            core/sched/sched.c \
+            core/sched/waitq.c
 
 # Framework sources — compiled into every kernel build since slice 3.9a.
 # Host tests compile these via test/host/Makefile with system cc instead.
@@ -208,7 +209,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_xfile.c \
                  test/kernel/ktest_posix_busybox_sh_mkdir.c \
                  test/kernel/ktest_console_rx.c \
-                 test/kernel/ktest_procfs.c
+                 test/kernel/ktest_procfs.c \
+                 test/kernel/ktest_waitq.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before

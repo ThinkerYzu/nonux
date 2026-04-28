@@ -79,8 +79,24 @@ static int on_queue(const struct sched_rr_state *s, const struct nx_task *t)
 static struct nx_task *sched_rr_pick_next(void *self)
 {
     struct sched_rr_state *s = self;
-    if (nx_list_empty(&s->runqueue)) return NULL;
-    return nx_list_entry(s->runqueue.n.next, struct nx_task, sched_node);
+    /*
+     * Slice 7.8a: skip BLOCKED tasks defensively.  The wait-queue
+     * primitive (`nx_waitq_wait_with_deadline`) dequeues a blocking
+     * task from the runqueue before flipping its state, and wake/
+     * deadline-expire re-enqueues it as READY — so a BLOCKED task on
+     * the runqueue should not happen during normal flow.  But if a
+     * future caller forgets the dequeue (or some path adds a
+     * BLOCKED task back via enqueue), we'd otherwise return it and
+     * the rotated runqueue would never wake.  Skipping here keeps
+     * `pick_next` honest: idle is always READY, so we always have a
+     * fallback at the tail of the runqueue.
+     */
+    struct nx_list_node *n;
+    nx_list_for_each(n, &s->runqueue) {
+        struct nx_task *t = nx_list_entry(n, struct nx_task, sched_node);
+        if (t->state != NX_TASK_BLOCKED) return t;
+    }
+    return NULL;
 }
 
 static int sched_rr_enqueue(void *self, struct nx_task *task)

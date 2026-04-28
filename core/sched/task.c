@@ -145,6 +145,11 @@ struct nx_task *nx_task_create(const char *name,
     t->kstack_size   = (kstack_pages ? kstack_pages : 1) * 4096U;
     t->sched_node.next = &t->sched_node;
     t->sched_node.prev = &t->sched_node;
+    t->wait_q          = NULL;
+    t->wait_has_deadline = 0;
+    t->wait_woken      = 0;
+    t->deadline_node.next = &t->deadline_node;
+    t->deadline_node.prev = &t->deadline_node;
 
     /* SP starts at the top of the kstack, 16-byte aligned.  ARM64 AAPCS
      * requires 16-byte alignment at any public interface boundary, which
@@ -236,6 +241,11 @@ struct nx_task *nx_task_create_forked(const char *name,
     t->kstack_size   = 4096u;
     t->sched_node.next = &t->sched_node;
     t->sched_node.prev = &t->sched_node;
+    t->wait_q          = NULL;
+    t->wait_has_deadline = 0;
+    t->wait_woken      = 0;
+    t->deadline_node.next = &t->deadline_node;
+    t->deadline_node.prev = &t->deadline_node;
 
     /* Top of kstack, 16-byte aligned. */
     uintptr_t sp_top = (uintptr_t)stack + t->kstack_size;

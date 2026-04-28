@@ -57,7 +57,8 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/process.c \
         ../../framework/elf.c \
         ../../core/sched/task.c \
-        ../../core/sched/sched.c
+        ../../core/sched/sched.c \
+        ../../core/sched/waitq.c
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
