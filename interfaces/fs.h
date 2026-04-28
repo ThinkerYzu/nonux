@@ -53,10 +53,17 @@
  * an existing file WITH `CREATE` is permitted (not an error); truncate
  * semantics are driver-defined in v1 (a future slice adds an explicit
  * TRUNCATE bit when a consumer needs it).
+ *
+ * APPEND (slice 7.6d.N.11): every `write` advances the cursor to
+ * end-of-file *before* writing.  Maps to POSIX `O_APPEND`; ash uses it
+ * for `>>`-style stdout redirection.  Independent of WRITE in the bit
+ * mask, but a driver MAY return NX_EPERM if a write happens on an
+ * APPEND-only open without WRITE set.
  */
 #define NX_FS_OPEN_READ     (1U << 0)
 #define NX_FS_OPEN_WRITE    (1U << 1)
 #define NX_FS_OPEN_CREATE   (1U << 2)
+#define NX_FS_OPEN_APPEND   (1U << 3)
 
 /* ---------- Seek whence (slice 6.4) ------------------------------------ */
 #define NX_FS_SEEK_SET      0    /* absolute offset */

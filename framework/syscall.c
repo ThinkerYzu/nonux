@@ -1903,9 +1903,9 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
  *   - mode  at a3 (ignored — no perms in v1)
  *
  * Linux O_* (octal):  O_RDONLY=0, O_WRONLY=1, O_RDWR=2,
- *                     O_CREAT=0o100, O_DIRECTORY=0o200000.
+ *                     O_CREAT=0o100, O_APPEND=0o2000, O_DIRECTORY=0o200000.
  *
- * Our NX_VFS_OPEN_*:  READ=1, WRITE=2, CREATE=4.
+ * Our NX_VFS_OPEN_*:  READ=1, WRITE=2, CREATE=4, APPEND=8.
  *
  * Conversion table is small enough to inline here.
  */
@@ -1913,6 +1913,7 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
 #define NX_LINUX_O_WRONLY     1u
 #define NX_LINUX_O_RDWR       2u
 #define NX_LINUX_O_CREAT   0100u
+#define NX_LINUX_O_APPEND  02000u
 #define NX_LINUX_O_DIRECTORY 0200000u
 
 static nx_status_t sys_openat(uint64_t a0, uint64_t a1, uint64_t a2,
@@ -1933,7 +1934,8 @@ static nx_status_t sys_openat(uint64_t a0, uint64_t a1, uint64_t a2,
         nx_flags |= NX_VFS_OPEN_WRITE;
     else if (lin_acc == NX_LINUX_O_RDWR)
         nx_flags |= NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE;
-    if (lin_flags & NX_LINUX_O_CREAT) nx_flags |= NX_VFS_OPEN_CREATE;
+    if (lin_flags & NX_LINUX_O_CREAT)  nx_flags |= NX_VFS_OPEN_CREATE;
+    if (lin_flags & NX_LINUX_O_APPEND) nx_flags |= NX_VFS_OPEN_APPEND;
     /* O_DIRECTORY is informational — sys_open's "/" branch
      * already returns HANDLE_DIR.  Other O_* bits (O_CLOEXEC,
      * O_NONBLOCK, O_TRUNC, ...) are quietly dropped. */
@@ -2134,9 +2136,22 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
     if (rc != NX_OK) return NX_LINUX_EBADF;
 
     /* `arg` is the minimum POSIX fd.  Convert to a min table index:
-     * encoded fd N at generation 0 = idx (N - 1), so idx ≥ arg - 1. */
+     * encoded fd N at generation 0 = idx (N - 1), so idx ≥ arg - 1.
+     *
+     * Slice 7.6d.N.11 — when `arg` exceeds the table capacity we fall
+     * back to "find any free slot" instead of returning EINVAL.  Our
+     * encoded handles include a 24-bit generation in the high bits,
+     * so a slot reused after close encodes as `(gen << 8) | (idx+1)`
+     * — easily over 64 even though the slot count is 64.  ash's
+     * `xdup_CLOEXEC_above(fd, avoid_fd)` passes `avoid_fd + 1` as
+     * `arg` to dodge a freshly-opened fd; with avoid_fd=260 we'd
+     * otherwise hard-fail.  Strictly POSIX would return EINVAL here;
+     * the relaxation is safe because the caller's intent ("don't
+     * collide with avoid_fd") is preserved by skipping non-INVALID
+     * slots in the loop below — avoid_fd's slot stays occupied by
+     * the open that produced it. */
     size_t min_idx = (arg <= 0) ? 0 : (size_t)(arg - 1);
-    if (min_idx >= NX_HANDLE_TABLE_CAPACITY) return NX_LINUX_EINVAL;
+    if (min_idx >= NX_HANDLE_TABLE_CAPACITY) min_idx = 0;
 
     /* Find the first free slot at or above min_idx.  Skip slot 2 if
      * arg ≤ 0 — encoded fd 0 collides with NX_HANDLE_INVALID. */

@@ -147,7 +147,7 @@ static int ramfs_op_open(void *self, const char *path, uint32_t flags,
                          void **out_file)
 {
     const uint32_t known = NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
-                           NX_FS_OPEN_CREATE;
+                           NX_FS_OPEN_CREATE | NX_FS_OPEN_APPEND;
     if (!self || !path || !out_file) return NX_EINVAL;
     if (path[0] == '\0') return NX_EINVAL;
     if (flags & ~known) return NX_EINVAL;
@@ -220,6 +220,17 @@ static int64_t ramfs_op_write(void *self, void *file, const void *buf,
 
     struct ramfs_open *op = file;
     if (!(op->flags & NX_FS_OPEN_WRITE)) return NX_EPERM;
+
+    /* Slice 7.6d.N.11: O_APPEND semantic — every write seeks to
+     * end-of-file first.  POSIX-mandated atomicity (seek+write as
+     * one) is moot in v1 (single-CPU, no concurrent writers across
+     * processes that share an open), but the seek-before-write is
+     * still load-bearing because dup3 + the slice 7.6d.N.8 retain
+     * machinery let two handle slots reference the same per-open
+     * struct: a non-APPEND write between two APPEND writes would
+     * otherwise stomp the appended data when the cursor was left
+     * mid-file. */
+    if (op->flags & NX_FS_OPEN_APPEND) op->cursor = op->file->size;
 
     size_t room = (op->cursor < RAMFS_FILE_CAP)
                   ? RAMFS_FILE_CAP - op->cursor : 0;

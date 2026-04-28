@@ -35,6 +35,7 @@
 #define NX_VFS_OPEN_READ     (1U << 0)
 #define NX_VFS_OPEN_WRITE    (1U << 1)
 #define NX_VFS_OPEN_CREATE   (1U << 2)
+#define NX_VFS_OPEN_APPEND   (1U << 3)
 
 /* Seek whence (slice 6.4) — same values as `NX_FS_SEEK_*`. */
 #define NX_VFS_SEEK_SET      0
