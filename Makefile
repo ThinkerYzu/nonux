@@ -207,7 +207,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_pipe3.c \
                  test/kernel/ktest_posix_busybox_sh_xfile.c \
                  test/kernel/ktest_posix_busybox_sh_mkdir.c \
-                 test/kernel/ktest_console_rx.c
+                 test/kernel/ktest_console_rx.c \
+                 test/kernel/ktest_procfs.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -357,7 +358,8 @@ INITRAMFS_ENTRIES = \
     $(BUSYBOX_BIN):/bin/tr \
     $(BUSYBOX_BIN):/bin/wc \
     $(BUSYBOX_BIN):/bin/head \
-    $(BUSYBOX_BIN):/bin/mkdir
+    $(BUSYBOX_BIN):/bin/mkdir \
+    $(BUSYBOX_BIN):/bin/ps
 
 test/kernel/initramfs.cpio: tools/pack-initramfs.py \
                             test/kernel/init_prog.elf \

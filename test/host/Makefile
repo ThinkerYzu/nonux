@@ -39,7 +39,8 @@ SRCS := main.c \
         ../../components/sched_rr/sched_rr.c \
         ../../components/mm_buddy/mm_buddy.c \
         ../../components/ramfs/ramfs.c \
-        ../../components/vfs_simple/vfs_simple.c
+        ../../components/vfs_simple/vfs_simple.c \
+        ../../components/procfs/procfs.c
 
 # Code-under-test pulled from the kernel tree:
 SRCS += ../../core/pmm/pmm.c \
@@ -60,7 +61,7 @@ SRCS += ../../core/pmm/pmm.c \
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
-vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/mm_buddy ../../components/ramfs ../../components/vfs_simple
+vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/mm_buddy ../../components/ramfs ../../components/vfs_simple ../../components/procfs
 
 OBJS := $(notdir $(SRCS:.c=.o))
 

@@ -315,6 +315,19 @@ struct nx_process *nx_process_find_exited_child(
     return NULL;
 }
 
+int nx_process_for_each(int (*cb)(struct nx_process *, void *), void *ctx)
+{
+    if (!cb) return NX_EINVAL;
+    int rc = cb(&g_kernel_process, ctx);
+    if (rc != 0) return rc;
+    for (int i = 0; i < NX_PROCESS_TABLE_CAPACITY; i++) {
+        if (!g_process_table[i]) continue;
+        rc = cb(g_process_table[i], ctx);
+        if (rc != 0) return rc;
+    }
+    return 0;
+}
+
 struct nx_process *nx_process_fork(struct nx_process *parent)
 {
     if (!parent) return NULL;

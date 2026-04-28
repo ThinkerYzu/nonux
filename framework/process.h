@@ -280,4 +280,20 @@ struct nx_process *nx_process_find_exited_child(
     const struct nx_process *parent,
     struct nx_process **any_active_child);
 
+/*
+ * Slice 7.7b.2 — public iteration over every live process (including
+ * `g_kernel_process` at pid 0).  Calls `cb(p, ctx)` for each process;
+ * iteration stops as soon as `cb` returns non-zero, and that value is
+ * returned to the caller.  When iteration runs to completion the
+ * return value is 0.
+ *
+ * Used by procfs to materialise `/proc` directory entries and synthesise
+ * `/proc/<pid>/stat` content from the process table.  Iteration order
+ * is implementation-defined (currently kernel process first, then the
+ * table in slot order); callers must not rely on it.
+ *
+ * Returns NX_EINVAL if `cb` is NULL.
+ */
+int nx_process_for_each(int (*cb)(struct nx_process *, void *), void *ctx);
+
 #endif /* NX_FRAMEWORK_PROCESS_H */

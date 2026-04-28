@@ -20,6 +20,10 @@
       "impl": "ramfs",
       "config": {}
     },
+    "filesystem.proc": {
+      "impl": "procfs",
+      "config": {}
+    },
     "vfs": {
       "impl": "vfs_simple",
       "config": {}
