@@ -198,7 +198,9 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_pipe.c \
                  test/kernel/ktest_posix_busybox_sh_cat.c \
                  test/kernel/ktest_posix_busybox_sh_redir.c \
-                 test/kernel/ktest_posix_busybox_sh_copy.c
+                 test/kernel/ktest_posix_busybox_sh_copy.c \
+                 test/kernel/ktest_posix_busybox_sh_stdin.c \
+                 test/kernel/ktest_posix_busybox_sh_cmdsub.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -233,7 +235,9 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_busybox_sh_pipe_prog_blob.S \
                  test/kernel/posix_busybox_sh_cat_prog_blob.S \
                  test/kernel/posix_busybox_sh_redir_prog_blob.S \
-                 test/kernel/posix_busybox_sh_copy_prog_blob.S
+                 test/kernel/posix_busybox_sh_copy_prog_blob.S \
+                 test/kernel/posix_busybox_sh_stdin_prog_blob.S \
+                 test/kernel/posix_busybox_sh_cmdsub_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -629,6 +633,43 @@ test/kernel/posix_busybox_sh_copy_prog.elf: test/kernel/posix_busybox_sh_copy_pr
 test/kernel/posix_busybox_sh_copy_prog_blob.o: test/kernel/posix_busybox_sh_copy_prog_blob.S \
                                                test/kernel/posix_busybox_sh_copy_prog.elf
 
+# Slice 7.6d.N.10a — busybox `sh -c "cat < /banner"`.  First STDIN-
+# redirection-from-file escalation; ash dup3s an O_RDONLY FILE handle
+# onto fd 0 (slot 2 per slice 7.6d.N.6b's POSIX-STDIN-FILENO routing)
+# before exec'ing /bin/cat with no path arg.  Same recipe as the other
+# busybox-sh variants; only the embedded -c string differs.
+test/kernel/posix_busybox_sh_stdin_prog.o: test/kernel/posix_busybox_sh_stdin_prog.c \
+                                           components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_stdin_prog.elf: test/kernel/posix_busybox_sh_stdin_prog.o \
+                                             components/posix_shim/libnxlibc.a \
+                                             test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_stdin_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_stdin_prog_blob.o: test/kernel/posix_busybox_sh_stdin_prog_blob.S \
+                                                test/kernel/posix_busybox_sh_stdin_prog.elf
+
+# Slice 7.6d.N.10b — busybox `sh -c "echo $$(cat /banner)"`.  Command-
+# substitution escalation; the parent shell (non-exec'd) is the pipe
+# consumer, inverse of slice 7.6d.N.6b where the consumer was an
+# exec'd cat.  Same recipe as the other busybox-sh variants.
+test/kernel/posix_busybox_sh_cmdsub_prog.o: test/kernel/posix_busybox_sh_cmdsub_prog.c \
+                                            components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_cmdsub_prog.elf: test/kernel/posix_busybox_sh_cmdsub_prog.o \
+                                              components/posix_shim/libnxlibc.a \
+                                              test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_cmdsub_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_cmdsub_prog_blob.o: test/kernel/posix_busybox_sh_cmdsub_prog_blob.S \
+                                                 test/kernel/posix_busybox_sh_cmdsub_prog.elf
+
 # Slice 7.6d.3a — EL0-fault demos.  Each is a libnxlibc-linked C
 # program: parent forks; child trips a fault (NULL write for the
 # segfault demo, `udf #0` for the undef demo); parent waits and
@@ -861,6 +902,8 @@ clean:
 	       test/kernel/posix_busybox_sh_cat_prog.elf \
 	       test/kernel/posix_busybox_sh_redir_prog.elf \
 	       test/kernel/posix_busybox_sh_copy_prog.elf \
+	       test/kernel/posix_busybox_sh_stdin_prog.elf \
+	       test/kernel/posix_busybox_sh_cmdsub_prog.elf \
 	       test/kernel/posix_segfault_prog.elf \
 	       test/kernel/posix_undef_prog.elf \
 	       components/posix_shim/libnxlibc.a \
