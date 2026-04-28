@@ -40,6 +40,7 @@ __cp_begin:
 	// Linux syscall nr in x1 -> NX_SYS_* in x8.  Unmapped -> -ENOSYS.
 	cmp x1, #24;   b.eq .Lnx_dup3
 	cmp x1, #25;   b.eq .Lnx_fcntl
+	cmp x1, #29;   b.eq .Lnx_ioctl
 	cmp x1, #56;   b.eq .Lnx_openat
 	cmp x1, #57;   b.eq .Lnx_close
 	cmp x1, #59;   b.eq .Lnx_pipe
@@ -76,6 +77,7 @@ __cp_begin:
 
 .Lnx_dup3:     mov x8, #24; b .Lnx_run    // NX_SYS_DUP3   [flags ignored]
 .Lnx_fcntl:    mov x8, #26; b .Lnx_run    // NX_SYS_FCNTL  [F_DUPFD + stubs]
+.Lnx_ioctl:    mov x8, #39; b .Lnx_run    // NX_SYS_IOCTL  [TCGETS/TCSETS/TIOCGWINSZ]
 .Lnx_openat:   mov x8, #23; b .Lnx_run    // NX_SYS_OPENAT
 .Lnx_close:    mov x8, #2;  b .Lnx_run    // NX_SYS_HANDLE_CLOSE
 .Lnx_pipe:     mov x8, #15; b .Lnx_run    // NX_SYS_PIPE  [flags ignored]

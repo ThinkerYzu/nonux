@@ -16,6 +16,7 @@
  * syscalls today:
  *   __NR_dup3        (24)  -> NX_SYS_DUP3          (24)   [flags ignored]
  *   __NR_fcntl       (25)  -> NX_SYS_FCNTL         (26)
+ *   __NR_ioctl       (29)  -> NX_SYS_IOCTL         (39)   [TCGETS/TCSETS/TIOCGWINSZ]
  *   __NR_openat      (56)  -> NX_SYS_OPENAT        (23)
  *   __NR_close       (57)  -> NX_SYS_HANDLE_CLOSE  (2)
  *   __NR_pipe2       (59)  -> NX_SYS_PIPE          (15)   [drops flags]
@@ -56,7 +57,9 @@
  * walking its trap table; slice 7.6d.N.13 added the tolerable-syscall
  * stubs sweep (set_tid_address, getuid/euid/gid/egid, setuid/setgid,
  * getpid/getppid, uname) so `id` / `whoami` / `uname -a` work without
- * surfacing kernel composition gaps.  Future targets: clock_gettime
+ * surfacing kernel composition gaps; slice 7.6d.N.final.a added the
+ * ioctl stub for TCGETS/TCSETS/TIOCGWINSZ so `isatty(0)` reports 1
+ * for an interactive busybox sh.  Future targets: clock_gettime
  * (needs kernel-side timekeeping plumbing), pselect / poll (need
  * real I/O readiness).  The translation table is the only thing that
  * changes; all other musl source stays vanilla.
@@ -67,6 +70,7 @@ static inline long __nx_translate(long n)
 	switch (n) {
 	case 24:  return 24;  /* __NR_dup3        -> NX_SYS_DUP3   [flags ignored] */
 	case 25:  return 26;  /* __NR_fcntl       -> NX_SYS_FCNTL  [F_DUPFD + stubs] */
+	case 29:  return 39;  /* __NR_ioctl       -> NX_SYS_IOCTL  [TCGETS/TCSETS/TIOCGWINSZ] */
 	case 56:  return 23;  /* __NR_openat      -> NX_SYS_OPENAT */
 	case 57:  return 2;   /* __NR_close       -> NX_SYS_HANDLE_CLOSE */
 	case 59:  return 15;  /* __NR_pipe2       -> NX_SYS_PIPE   [flags ignored] */

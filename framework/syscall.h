@@ -381,6 +381,17 @@ enum nx_syscall_number {
                                   *  for a single-threaded process —
                                   *  every process is single-threaded
                                   *  in v1).  Ignores tidptr. */
+    NX_SYS_IOCTL          = 39,  /* (int fd, unsigned long cmd, void *arg)
+                                  *  → 0 / -ENOTTY.  Slice 7.6d.N.final.a:
+                                  *  recognises only the cmds busybox /
+                                  *  musl issue against a CONSOLE fd
+                                  *  (TCGETS/TCSETS/TCSETSW/TCSETSF/
+                                  *  TIOCGWINSZ).  All recognised cmds
+                                  *  return success with a zeroed-but-
+                                  *  valid struct so `isatty(0)`
+                                  *  (implemented in musl as a TCGETS
+                                  *  probe) reports 1.  Anything else
+                                  *  returns -ENOTTY = -25. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };

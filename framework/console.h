@@ -36,12 +36,21 @@
  * underlying device (the PL011 UART) so we don't need per-handle
  * state; the handle's type tag is enough to dispatch.
  *
- * UART RX is not wired in v1 — `nx_console_read` returns 0 = EOF
- * unconditionally.  Interactive shells (slice 7.6d.N.final) need a
- * real RX path: a UART RX IRQ + a per-process line buffer.  For now
- * any read on the STDIN console produces EOF, which is what musl's
- * `__stdio_read` interprets as "input closed" — fine for the
- * non-interactive `sh -c "..."` workloads we drive in 7.6d.N.*.
+ * UART RX wiring landed in slice 7.6d.N.final.a:
+ *   - `nx_console_init` registers the PL011 RX IRQ handler (QEMU virt
+ *     SPI 1 = IRQ 33) and enables the UART's RX FIFO + RX-IRQ.
+ *   - The RX ISR (`nx_console_rx_isr`) drains the UART FIFO into a
+ *     fixed-size single-producer/single-consumer byte ring.
+ *   - `nx_console_read` polls the ring, yielding the CPU until at
+ *     least one byte is available, then drains up to `cap` bytes.
+ *
+ * No line discipline in v1 — bytes are delivered raw.  busybox's ash
+ * runs cmdedit in raw mode (after `tcsetattr` succeeds via the
+ * sys_ioctl stub), so it does its own line editing.
+ *
+ * Host build keeps the v1 EOF behaviour (no UART, no IRQs); host
+ * tests can use `nx_console_test_inject_bytes` to push bytes into
+ * the ring directly, bypassing the IRQ.
  */
 
 /* Sentinel object — every CONSOLE handle's `object` field points here.
@@ -60,12 +69,47 @@ extern int g_nx_console;
 int nx_console_write(const void *buf, size_t len);
 
 /*
- * Read up to `cap` bytes into `buf` from the console.  v1 returns 0 =
- * EOF unconditionally (UART RX not wired).  When RX lands in slice
- * 7.6d.N.final this grows a wait-for-line / non-blocking-poll mode;
- * for now the contract is "always EOF, never blocks".
+ * Read up to `cap` bytes into `buf` from the console.  Blocks (via
+ * `nx_task_yield`) until at least one byte is available in the RX
+ * ring, then drains up to `cap` bytes and returns the count.  Never
+ * returns 0 from a non-zero `cap` request after RX is wired —
+ * "no input yet" is a yield, not an EOF.
+ *
+ * Host build keeps the v1 EOF behaviour (returns 0) unless a host
+ * test has primed the ring via `nx_console_test_inject_bytes`.
  */
 int nx_console_read(void *buf, size_t cap);
+
+/*
+ * One-time init — called from `boot_main` after `gic_init` and before
+ * `irq_enable_local`.  Registers the PL011 RX IRQ handler with the
+ * core IRQ table, enables IRQ 33 at the GIC, and toggles the UART's
+ * RXIM mask + RX FIFO threshold so the device interrupts on each
+ * incoming byte.  Host build is a no-op.
+ */
+void nx_console_init(void);
+
+/*
+ * Test-only: push bytes directly into the RX ring, bypassing the
+ * IRQ.  Used by ktests that want to drive the read path without
+ * needing real UART input.  Drops bytes silently if the ring is full
+ * (matches the IRQ behaviour).  Returns the number of bytes pushed.
+ *
+ * Pushes raw bytes — does NOT apply the live RX ISR's control-byte
+ * interpretation (Ctrl-C / Ctrl-D become flags, not ring bytes).
+ * Tests that want to drive the control-byte paths use
+ * `nx_console_test_inject_intr` / `_eof` directly.
+ */
+size_t nx_console_test_inject_bytes(const char *buf, size_t len);
+
+/*
+ * Test-only: arm the Ctrl-C / Ctrl-D control-byte side channels.
+ * Kept separate from `_inject_bytes` so the byte-range tests can
+ * keep injecting the full 0x00..0x7F space without accidentally
+ * tripping a control event.
+ */
+void nx_console_test_inject_intr(void);
+void nx_console_test_inject_eof(void);
 
 /*
  * Test-only: how many times nx_console_write has been successfully
@@ -78,5 +122,14 @@ int nx_console_read(void *buf, size_t cap);
  */
 uint64_t nx_console_write_calls(void);
 void     nx_console_reset_for_test(void);
+
+/*
+ * Slice 7.6d.N.final.c — drain a pending Ctrl-C, posting SIGTERM to
+ * every ACTIVE non-kernel process.  Returns 1 if an interrupt was
+ * consumed, 0 otherwise.  Called from `sys_read` so that read entry
+ * is the ack point for input-side control bytes.  MUST NOT be called
+ * from an ISR (walks the process table).
+ */
+int nx_console_drain_intr(void);
 
 #endif /* NX_FRAMEWORK_CONSOLE_H */

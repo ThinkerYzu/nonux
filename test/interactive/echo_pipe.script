@@ -1,0 +1,2 @@
+echo PIPE_INPUT | tr a-z A-Z
+exit

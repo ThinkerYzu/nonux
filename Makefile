@@ -205,7 +205,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_trap.c \
                  test/kernel/ktest_posix_busybox_sh_id_uname.c \
                  test/kernel/ktest_posix_busybox_sh_pipe3.c \
-                 test/kernel/ktest_posix_busybox_sh_xfile.c
+                 test/kernel/ktest_posix_busybox_sh_xfile.c \
+                 test/kernel/ktest_console_rx.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -335,29 +336,54 @@ test/kernel/posix_pipe_xproc_prog_blob.o: test/kernel/posix_pipe_xproc_prog_blob
 test/kernel/banner.txt:
 	@printf 'hello from initramfs\n' > $@
 
+# Initramfs entry list — shared between the test and busybox-init
+# variants.  The slice-7.6d.N.final.b `--busybox-init` flag (handled in
+# pack-initramfs.py) rewrites the on-disk path of the entry whose
+# archive-name is `/init`, leaving the rest of the layout identical.
+# Lazy `=` because $(BUSYBOX_BIN) is defined further down the Makefile.
+INITRAMFS_ENTRIES = \
+    test/kernel/init_prog.elf:/init \
+    test/kernel/banner.txt:/banner \
+    test/kernel/argv_child_prog.elf:/argv_child \
+    test/kernel/posix_musl_prog.elf:/musl_prog \
+    $(BUSYBOX_BIN):/bin/busybox \
+    $(BUSYBOX_BIN):/bin/ls \
+    $(BUSYBOX_BIN):/bin/cat \
+    $(BUSYBOX_BIN):/bin/echo \
+    $(BUSYBOX_BIN):/bin/id \
+    $(BUSYBOX_BIN):/bin/uname \
+    $(BUSYBOX_BIN):/bin/tr \
+    $(BUSYBOX_BIN):/bin/wc \
+    $(BUSYBOX_BIN):/bin/head
+
 test/kernel/initramfs.cpio: tools/pack-initramfs.py \
                             test/kernel/init_prog.elf \
                             test/kernel/banner.txt \
                             test/kernel/argv_child_prog.elf \
                             test/kernel/posix_musl_prog.elf \
                             $(BUSYBOX_BIN)
-	$(PYTHON) tools/pack-initramfs.py $@ \
-	    test/kernel/init_prog.elf:/init \
-	    test/kernel/banner.txt:/banner \
-	    test/kernel/argv_child_prog.elf:/argv_child \
-	    test/kernel/posix_musl_prog.elf:/musl_prog \
-	    $(BUSYBOX_BIN):/bin/busybox \
-	    $(BUSYBOX_BIN):/bin/ls \
-	    $(BUSYBOX_BIN):/bin/cat \
-	    $(BUSYBOX_BIN):/bin/echo \
-	    $(BUSYBOX_BIN):/bin/id \
-	    $(BUSYBOX_BIN):/bin/uname \
-	    $(BUSYBOX_BIN):/bin/tr \
-	    $(BUSYBOX_BIN):/bin/wc \
-	    $(BUSYBOX_BIN):/bin/head
+	$(PYTHON) tools/pack-initramfs.py $@ $(INITRAMFS_ENTRIES)
+
+# Slice 7.6d.N.final.b — busybox-as-/init initramfs.  Same entry set as
+# the test build except `--busybox-init=$(BUSYBOX_BIN)` rewrites the
+# `/init` entry's source to be the busybox binary.  The init runner in
+# boot.c (compiled with -DNX_INIT_BUSYBOX) execve's `/init` with
+# argv = {"sh", NULL}; busybox's basename(argv[0]) dispatch picks up
+# the ash applet.
+test/kernel/initramfs-busybox.cpio: tools/pack-initramfs.py \
+                                    test/kernel/init_prog.elf \
+                                    test/kernel/banner.txt \
+                                    test/kernel/argv_child_prog.elf \
+                                    test/kernel/posix_musl_prog.elf \
+                                    $(BUSYBOX_BIN)
+	$(PYTHON) tools/pack-initramfs.py --busybox-init=$(BUSYBOX_BIN) \
+	    $@ $(INITRAMFS_ENTRIES)
 
 test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
                               test/kernel/initramfs.cpio
+
+test/kernel/initramfs_busybox_blob.o: test/kernel/initramfs_busybox_blob.S \
+                                      test/kernel/initramfs-busybox.cpio
 
 # Slice 7.6c.0 — EL0 C-runtime bootstrap.  posix_shim's crt0.S owns
 # the ELF entry symbol `_start` and provides the standard POSIX
@@ -851,6 +877,46 @@ kernel-test.elf: $(TEST_OBJS) core/boot/linker.ld
 
 kernel-test.bin: kernel-test.elf
 	$(OBJCOPY) -O binary $< $@
+
+# Slice 7.6d.N.final.b — kernel-busybox.bin: same kernel build as
+# kernel-test.bin minus all the ktest scaffolding, plus the init
+# runner (boot.c with -DNX_INIT_BUSYBOX) and the busybox-init initramfs
+# variant.  `make run-busybox` runs this in QEMU with -serial stdio so
+# the user can type into the shell.
+core/boot/boot-busybox.o: core/boot/boot.c
+	$(CC) $(CFLAGS) -DNX_INIT_BUSYBOX -c $< -o $@
+
+test/kernel/init_busybox_prog.o: test/kernel/init_busybox_prog.S
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+BUSYBOX_INIT_OBJS := $(filter-out core/boot/boot.o,$(OBJS)) \
+                     core/boot/boot-busybox.o \
+                     test/kernel/init_busybox_prog.o \
+                     test/kernel/initramfs_busybox_blob.o
+
+kernel-busybox.elf: $(BUSYBOX_INIT_OBJS) core/boot/linker.ld
+	$(LD) -T core/boot/linker.ld -o $@ $(BUSYBOX_INIT_OBJS)
+
+kernel-busybox.bin: kernel-busybox.elf
+	$(OBJCOPY) -O binary $< $@
+
+# `make run-busybox` — interactive busybox shell over QEMU UART.  Uses
+# `-serial stdio` so typing in the host terminal lands in the kernel's
+# RX ring (slice 7.6d.N.final.a).  Exit with `exit` from the shell or
+# Ctrl-A x in the QEMU monitor.
+run-busybox: kernel-busybox.bin
+	$(QEMU) -M virt,gic-version=2 -cpu cortex-a53 -nographic \
+	    -kernel kernel-busybox.bin -m $(QEMU_MEM)
+.PHONY: run-busybox
+
+# `make test-interactive` — slice 7.6d.N.final.d.  Drive each canned
+# script in test/interactive/*.script through QEMU stdio, then verify
+# the captured output contains every line of the matching .expected
+# file.  Substring match (not strict diff) because the kernel's boot
+# log + ash's prompts share the UART stream.
+test-interactive: kernel-busybox.bin
+	@./test/interactive/run.sh
+.PHONY: test-interactive
 
 # Slice 7.6c.3a/b — vendored musl libc.a + crt objects.  Source tree
 # lives at third_party/musl/ (musl 1.2.5 snapshot, MIT-clean upstream

@@ -416,6 +416,79 @@ TEST(sys_write_to_console_handle_routes_through_nx_console_write)
     fixture_teardown(&fx);
 }
 
+/*
+ * Slice 7.6d.N.final.a — sys_ioctl on a CONSOLE handle accepts the
+ * five cmds busybox / musl issue against stdin/stdout and returns
+ * 0-success for each.  Any unrecognised cmd returns ENOTTY = -25
+ * (Linux value); musl maps that to errno = ENOTTY at the call site.
+ */
+TEST(sys_ioctl_console_termios_stubs_succeed)
+{
+    extern int g_nx_console;
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* Pre-install a CONSOLE handle at slot 0 / encoded fd 1 (stdout
+     * shape).  Production sets up slots 0/1/2 in nx_process_create. */
+    struct nx_handle_table *t = nx_syscall_current_table();
+    memset(t, 0, sizeof *t);
+    nx_handle_t h0;
+    ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_CONSOLE, NX_RIGHT_WRITE,
+                                &g_nx_console, &h0), NX_OK);
+    ASSERT_EQ_U(h0, 1);
+
+    uint8_t termios_buf[64] = {0};
+    /* TCGETS = 0x5401 — fills 36 zero bytes, returns 0. */
+    int64_t rc = dispatch(&tf, NX_SYS_IOCTL, h0, 0x5401UL,
+                          (uint64_t)(uintptr_t)termios_buf);
+    ASSERT_EQ_U((uint64_t)rc, 0);
+
+    /* TCSETS = 0x5402 — ignore + return 0. */
+    rc = dispatch(&tf, NX_SYS_IOCTL, h0, 0x5402UL,
+                  (uint64_t)(uintptr_t)termios_buf);
+    ASSERT_EQ_U((uint64_t)rc, 0);
+
+    /* TIOCGWINSZ = 0x5413 — fill {row=24, col=80}. */
+    uint16_t ws[4] = {0};
+    rc = dispatch(&tf, NX_SYS_IOCTL, h0, 0x5413UL,
+                  (uint64_t)(uintptr_t)ws);
+    ASSERT_EQ_U((uint64_t)rc, 0);
+    ASSERT_EQ_U((uint64_t)ws[0], 24);
+    ASSERT_EQ_U((uint64_t)ws[1], 80);
+
+    /* Unknown cmd → -ENOTTY = -25. */
+    rc = dispatch(&tf, NX_SYS_IOCTL, h0, 0x12345UL,
+                  (uint64_t)(uintptr_t)termios_buf);
+    ASSERT_EQ_U((uint64_t)rc, (uint64_t)(int64_t)-25);
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_ioctl_on_non_console_handle_returns_enotty)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* Open a regular FILE handle and check ioctl rejects with
+     * ENOTTY rather than NX_EINVAL — busybox + musl rely on
+     * getting ENOTTY on non-tty fds (e.g. tcgetattr on a regular
+     * file is supposed to fail with ENOTTY, not EINVAL). */
+    int64_t fd = dispatch(&tf, NX_SYS_OPEN,
+                          (uint64_t)(uintptr_t)"/foo",
+                          NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE
+                              | NX_VFS_OPEN_CREATE, 0);
+    ASSERT_EQ_U((uint64_t)fd > 0, 1);
+
+    uint8_t buf[64] = {0};
+    int64_t rc = dispatch(&tf, NX_SYS_IOCTL, (uint64_t)fd, 0x5401UL,
+                          (uint64_t)(uintptr_t)buf);
+    ASSERT_EQ_U((uint64_t)rc, (uint64_t)(int64_t)-25);
+
+    fixture_teardown(&fx);
+}
+
 TEST(sys_open_with_no_vfs_slot_returns_enoent)
 {
     nx_graph_reset();

@@ -6,6 +6,8 @@
 #include "core/timer/timer.h"
 #include "core/sched/sched.h"
 #include "framework/bootstrap.h"
+#include "framework/console.h"
+#include "framework/process.h"
 #include "framework/registry.h"
 
 /*
@@ -33,6 +35,67 @@ extern char __free_mem_start[];
 extern char vectors[];
 
 #define RAM_END 0x80000000UL
+
+#ifdef NX_INIT_BUSYBOX
+/*
+ * Slice 7.6d.N.final.b — busybox-as-/init init runner.
+ *
+ * Production build path that turns kernel-busybox.bin into an
+ * interactive shell.  The flow mirrors ktest_exec.c (slice 7.4c) but
+ * has no test parent, no marker counter, and no dequeue cleanup —
+ * the init kthread drops to EL0, the EL0 stub `execve`s /init
+ * (= busybox via --busybox-init), and busybox `sh` runs forever.
+ *
+ * Bytes typed at the QEMU UART end up in the CONSOLE RX ring (slice
+ * 7.6d.N.final.a) and bubble up through `read(0, ...)` from EL0; ash
+ * drives its line editor against that.
+ */
+extern char __init_busybox_prog_start[];
+extern char __init_busybox_prog_end[];
+
+static struct nx_process *g_init_proc;
+
+static void nx_init_busybox_kthread(void *arg)
+{
+    (void)arg;
+    /* Copy the EL0 init stub into the new process's user-window
+     * backing.  Same pattern as ktest_exec's exec_el0_kthread:
+     * memcpy → cache maintenance → drop_to_el0 (one-way).  The stub
+     * SVCs into NX_SYS_EXEC against /init with argv = {"sh", NULL}. */
+    void *backing = mmu_address_space_user_backing(g_init_proc->ttbr0_root);
+    size_t len = (size_t)(__init_busybox_prog_end - __init_busybox_prog_start);
+    const char *src = __init_busybox_prog_start;
+    char       *dp  = backing;
+    for (size_t i = 0; i < len; i++) dp[i] = src[i];
+    asm volatile ("dsb ish"  ::: "memory");
+    asm volatile ("ic iallu" ::: "memory");
+    asm volatile ("dsb ish"  ::: "memory");
+    asm volatile ("isb");
+
+    uint64_t base   = mmu_user_window_base();
+    uint64_t size   = mmu_user_window_size();
+    uint64_t sp_el0 = (base + size - 16u) & ~((uint64_t)0xfu);
+    kprintf("[init] entering busybox sh at EL0\n");
+    drop_to_el0(base, sp_el0);
+}
+
+static void nx_init_busybox_main(void)
+{
+    g_init_proc = nx_process_create("init");
+    if (!g_init_proc) {
+        kprintf("[init] nx_process_create failed — halting\n");
+        for (;;) asm volatile ("wfi");
+    }
+    if (sched_spawn_kthread("init", nx_init_busybox_kthread, 0,
+                            g_init_proc) == 0) {
+        kprintf("[init] sched_spawn_kthread failed — halting\n");
+        for (;;) asm volatile ("wfi");
+    }
+    /* Idle here forever; the scheduler will rotate through the init
+     * process's task (and any of its descendants) preemptively. */
+    for (;;) asm volatile ("wfi");
+}
+#endif /* NX_INIT_BUSYBOX */
 
 void boot_main(void)
 {
@@ -88,6 +151,13 @@ void boot_main(void)
 
     timer_init(10);
 
+    /* Slice 7.6d.N.final.a: register the PL011 RX ISR + enable
+     * IRQ 33 at the GIC.  Has to land after gic_init (so the GIC's
+     * distributor + CPU interface are up) and before
+     * irq_enable_local (so the first key press doesn't fire into a
+     * masked vector). */
+    nx_console_init();
+
     /* Phase 3 bring-up — walk nx_components, register every slot +
      * descriptor, run init / enable in topo order.  Any non-OK return
      * leaves the composition partially up; for now we just log and
@@ -128,6 +198,11 @@ void boot_main(void)
      * yield back cooperatively.  ktest_main exits via semihosting. */
     extern void ktest_main(void) __attribute__((noreturn));
     ktest_main();
+#elif defined(NX_INIT_BUSYBOX)
+    /* Slice 7.6d.N.final.b — interactive busybox-as-/init runner.
+     * Same `idle-task` context as the ktest path; the init kthread
+     * inherits scheduling cycles via timer preemption. */
+    nx_init_busybox_main();
 #else
     kprintf("[boot] idle: waiting for work.\n\n");
 

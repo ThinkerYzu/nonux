@@ -532,6 +532,13 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     size_t       cap = (size_t)a2;
     if (cap == 0) return 0;  /* no-op read is explicitly OK */
 
+    /* Slice 7.6d.N.final.c: drain any pending Ctrl-C before reading.
+     * Posts SIGTERM to all ACTIVE non-kernel processes; the polled
+     * delivery in `sched_check_resched` picks them up next tick.
+     * Any read syscall is a fine ack point — we'd otherwise yield in
+     * the CONSOLE arm below, never noticing the pending interrupt. */
+    nx_console_drain_intr();
+
     struct nx_handle_table *t = nx_syscall_current_table();
     enum nx_handle_type type;
     uint32_t rights;
@@ -561,10 +568,21 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
 
     if (type == NX_HANDLE_CONSOLE) {
-        /* v1: UART RX not wired — nx_console_read returns 0 = EOF.
-         * Skip the user-buffer copy on the EOF case to avoid faulting
-         * on a NULL `buf` when cap > 0. */
-        int got = nx_console_read(0, cap);
+        /* Slice 7.6d.N.final.a — UART RX wired.  nx_console_read
+         * blocks (yield-loop) until at least one byte is available,
+         * then drains up to `cap` bytes.  Copy through a kernel
+         * staging buffer because nx_console_read may sleep on yield
+         * and we don't want to hold a user pointer across context
+         * switches (TTBR0 stays this process's, but the user buffer
+         * could be in a page that becomes invalid via a parallel
+         * brk/mmap rearrangement in a future SMP build).  Bounded by
+         * NX_FILE_IO_MAX = 256 — same as the FILE arm. */
+        if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
+        uint8_t staging[NX_FILE_IO_MAX];
+        int got = nx_console_read(staging, cap);
+        if (got <= 0) return (nx_status_t)got;
+        rc = copy_to_user(buf, staging, (size_t)got);
+        if (rc != NX_OK) return rc;
         return (nx_status_t)got;
     }
 
@@ -2386,6 +2404,89 @@ static nx_status_t sys_set_tid_address(uint64_t a0, uint64_t a1, uint64_t a2,
     return (nx_status_t)nx_process_current()->pid;
 }
 
+/*
+ * sys_ioctl — slice 7.6d.N.final.a.
+ *
+ * Linux ioctl cmds we recognise on a CONSOLE fd:
+ *   TCGETS     0x5401  — fill struct termios with zeros, return 0.
+ *                        musl's `isatty` calls tcgetattr (= TCGETS);
+ *                        success makes isatty return 1.
+ *   TCSETS     0x5402  — ignore + return 0.
+ *   TCSETSW    0x5403  — ignore + return 0.
+ *   TCSETSF    0x5404  — ignore + return 0.
+ *   TIOCGWINSZ 0x5413  — fill struct winsize {row=24,col=80,pix=0,0}.
+ *
+ * Anything else returns -ENOTTY (Linux value -25, our NX errno table
+ * has no slot for ENOTTY but musl maps `-25` to `errno = ENOTTY`
+ * directly through musl's __syscall_ret because the value matches
+ * the Linux ABI).  Non-CONSOLE fds also return -ENOTTY.
+ */
+#define LINUX_TCGETS      0x5401UL
+#define LINUX_TCSETS      0x5402UL
+#define LINUX_TCSETSW     0x5403UL
+#define LINUX_TCSETSF     0x5404UL
+#define LINUX_TIOCGWINSZ  0x5413UL
+#define LINUX_ENOTTY      (-25)
+
+/* musl's `struct termios` is 36 bytes (4 c_*flag + c_line + 19 c_cc +
+ * 2 alignment + 2 c_*speed).  Zeroing all 36 bytes is fine: c_iflag=0,
+ * c_oflag=0, c_cflag=0, c_lflag=0 — none of musl's tcgetattr-driven
+ * decisions depend on the values, only on the syscall succeeding. */
+#define LINUX_TERMIOS_SIZE 36
+
+struct linux_winsize {
+    uint16_t ws_row;
+    uint16_t ws_col;
+    uint16_t ws_xpixel;
+    uint16_t ws_ypixel;
+};
+
+static nx_status_t sys_ioctl(uint64_t a0, uint64_t a1, uint64_t a2,
+                             uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+    nx_handle_t   h   = (nx_handle_t)a0;
+    unsigned long cmd = (unsigned long)a1;
+    void         *arg = (void *)(uintptr_t)a2;
+
+    /* Resolve the handle.  Same h==0 → slot-2 routing as sys_read. */
+    struct nx_handle_table *t = nx_syscall_current_table();
+    enum nx_handle_type type;
+    uint32_t rights; (void)rights;
+    void *obj;       (void)obj;
+    int rc;
+    if (h == 0) {
+        if (!t || t->entries[2].type == NX_HANDLE_INVALID) return NX_ENOENT;
+        type   = t->entries[2].type;
+    } else {
+        rc = nx_handle_lookup(t, h, &type, &rights, &obj);
+        if (rc != NX_OK) return rc;
+    }
+    if (type != NX_HANDLE_CONSOLE) return LINUX_ENOTTY;
+
+    switch (cmd) {
+    case LINUX_TCGETS: {
+        if (!arg) return NX_EINVAL;
+        uint8_t zero[LINUX_TERMIOS_SIZE] = {0};
+        return copy_to_user(arg, zero, sizeof zero);
+    }
+    case LINUX_TCSETS:
+    case LINUX_TCSETSW:
+    case LINUX_TCSETSF:
+        /* Ignore the requested mode.  ash sets raw mode for cmdedit;
+         * the kernel always delivers raw bytes anyway. */
+        return 0;
+    case LINUX_TIOCGWINSZ: {
+        if (!arg) return NX_EINVAL;
+        struct linux_winsize ws = { .ws_row = 24, .ws_col = 80,
+                                    .ws_xpixel = 0, .ws_ypixel = 0 };
+        return copy_to_user(arg, &ws, sizeof ws);
+    }
+    default:
+        return LINUX_ENOTTY;
+    }
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -2428,6 +2529,7 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_GETPPID]        = sys_getppid,
     [NX_SYS_UNAME]          = sys_uname,
     [NX_SYS_SET_TID_ADDRESS] = sys_set_tid_address,
+    [NX_SYS_IOCTL]          = sys_ioctl,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

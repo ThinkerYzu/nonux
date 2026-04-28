@@ -24,13 +24,21 @@ Each entry layout:
 Trailer entry: name `TRAILER!!!`, file_size 0, c_nlink 1.
 
 Usage:
-    pack-initramfs.py OUT_BIN ENTRY ...
+    pack-initramfs.py [--busybox-init=PATH] OUT_BIN ENTRY ...
 
 Each ENTRY is `path-on-disk:archive-name` (e.g.
 `test/kernel/init_prog.elf:/init`).  The archive name must start with `/`
 (matches our ramfs's absolute-path-only world); leading `/`s are stripped
 when packing because cpio-newc convention is unrooted names, but the
 parser side prepends `/` back so paths look POSIX-ish in the live FS.
+
+`--busybox-init=PATH` (slice 7.6d.N.final.b): rewrite any entry whose
+archive-name is `/init` so its on-disk-path is PATH instead of whatever
+the caller passed.  The intended PATH is the busybox binary; the kernel-
+side init stub then `execve`s /init with `argv = {"sh", NULL}`, busybox
+sees `basename(argv[0]) == "sh"` and dispatches to the ash applet.  Lets
+the regular `make test` keep its `/init = init_prog.elf` mapping while
+`make run-busybox` swaps in the shell without touching the entry list.
 """
 
 import os
@@ -83,12 +91,21 @@ def append_entry(buf: bytearray, name: str, data: bytes,
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 3:
+    busybox_init = None
+    args = list(argv[1:])
+    remaining: list[str] = []
+    for a in args:
+        if a.startswith("--busybox-init="):
+            busybox_init = a[len("--busybox-init="):]
+        else:
+            remaining.append(a)
+
+    if len(remaining) < 2:
         print(__doc__.strip(), file=sys.stderr)
         return 2
 
-    out_path = argv[1]
-    entries  = argv[2:]
+    out_path = remaining[0]
+    entries  = remaining[1:]
 
     blob = bytearray()
     ino  = 1
@@ -102,6 +119,9 @@ def main(argv: list[str]) -> int:
             print(f"pack-initramfs.py: archive name '{name}' must start "
                   f"with '/'", file=sys.stderr)
             return 1
+
+        if busybox_init is not None and name == "/init":
+            path = busybox_init
 
         with open(path, "rb") as f:
             data = f.read()
