@@ -2,9 +2,7 @@
 
 A composable, Lego-like microkernel for ARM64. Swap components, benchmark designs, let AI build your kernel.
 
-> **Documentation:** [github.com/ThinkerYzu/nonux-meta](https://github.com/ThinkerYzu/nonux-meta) — companion repo with spec, design, implementation guide, handoff package, and per-session work logs.
-
-**Status (2026-04-28):** Phases 1–6 complete; Phase 7 in progress — `make run-busybox` boots an interactive busybox shell over the QEMU UART with a visible prompt, line editing, pipes, and file redirects. `make test` runs 432 tests (51 python + 277 host + 104 kernel) green; `make test-interactive` runs 3/3 canned shell scripts. The current composition wires five slots: `char_device.serial ← uart_pl011`, `scheduler ← sched_rr`, `memory.page_alloc ← mm_buddy`, `vfs ← vfs_simple`, `filesystem.root ← ramfs`. Framework API reference lives under [`docs/`](docs/); git history (`git log`) is the per-slice narrative, with each commit covering one slice end-to-end.
+> **Documentation:** [github.com/ThinkerYzu/nonux-meta](https://github.com/ThinkerYzu/nonux-meta) — companion repo with spec, design, implementation guide, handoff package, and per-session work logs.  Current status, phase progress, and test counts live in [HANDOFF.md](https://github.com/ThinkerYzu/nonux-meta/blob/master/HANDOFF.md).
 
 ## Quick Start
 
