@@ -79,8 +79,22 @@
                                  * (~4.5 KB). */
 #define RAMFS_MAX_OPEN  (4u * RAMFS_MAX_FILES)  /* generous: no dynamic allocator */
 
+/* Slice 7.7b.1: every entry has a kind so the syscall layer can
+ * distinguish HANDLE_FILE from HANDLE_DIR allocations without opening
+ * the entry first.  The cpio loader still skips dir entries from the
+ * archive (initramfs builder doesn't emit them and ramfs synthesises
+ * intermediate dirs at stat time), so DIR entries today come exclusively
+ * from explicit `ramfs_op_mkdir` calls.  `data` and `size` are unused
+ * for DIR entries — the static `data[RAMFS_FILE_CAP]` budget is paid
+ * regardless, which is fine for v1; a follow-up rework will move
+ * file storage out-of-line and DIR entries will collapse to just
+ * the name. */
+#define RAMFS_KIND_FILE  1u
+#define RAMFS_KIND_DIR   2u
+
 struct ramfs_file {
     int      in_use;
+    uint32_t kind;
     char     name[RAMFS_NAME_MAX];
     uint8_t  data[RAMFS_FILE_CAP];
     size_t   size;
@@ -122,8 +136,9 @@ static struct ramfs_file *ramfs_find(struct ramfs_state *s, const char *path)
     return NULL;
 }
 
-static struct ramfs_file *ramfs_create_file(struct ramfs_state *s,
-                                            const char *path)
+static struct ramfs_file *ramfs_create_entry(struct ramfs_state *s,
+                                              const char *path,
+                                              uint32_t kind)
 {
     size_t plen = 0;
     while (path[plen] != '\0') plen++;
@@ -133,12 +148,19 @@ static struct ramfs_file *ramfs_create_file(struct ramfs_state *s,
         if (!s->files[i].in_use) {
             struct ramfs_file *f = &s->files[i];
             f->in_use = 1;
+            f->kind   = kind;
             memcpy(f->name, path, plen + 1);  /* include NUL */
             f->size = 0;
             return f;
         }
     }
     return NULL;
+}
+
+static struct ramfs_file *ramfs_create_file(struct ramfs_state *s,
+                                            const char *path)
+{
+    return ramfs_create_entry(s, path, RAMFS_KIND_FILE);
 }
 
 static struct ramfs_open *ramfs_alloc_open(struct ramfs_state *s)
@@ -150,6 +172,36 @@ static struct ramfs_open *ramfs_alloc_open(struct ramfs_state *s)
         }
     }
     return NULL;
+}
+
+/*
+ * Slice 7.7b.1: classify a path as file / directory / missing.  A path
+ * is a directory if (a) the root, or (b) some entry stores it verbatim
+ * with kind=DIR, or (c) some entry has it as a parent prefix (`path/...`)
+ * — synthesised dirs let `/bin/sh` exist without an explicit `/bin`
+ * entry.  Returns NX_FS_KIND_FILE / NX_FS_KIND_DIR / 0 (missing).
+ */
+static uint32_t ramfs_classify(struct ramfs_state *s, const char *path)
+{
+    if (path[0] == '/' && path[1] == '\0') return NX_FS_KIND_DIR;
+
+    size_t plen = 0;
+    while (path[plen] != '\0') plen++;
+
+    /* Explicit match first — file or dir. */
+    int has_child = 0;
+    for (unsigned i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (!s->files[i].in_use) continue;
+        const char *name = s->files[i].name;
+        if (strncmp(name, path, plen) != 0) continue;
+        if (name[plen] == '\0') {
+            return s->files[i].kind == RAMFS_KIND_DIR
+                   ? NX_FS_KIND_DIR : NX_FS_KIND_FILE;
+        }
+        if (name[plen] == '/') has_child = 1;
+    }
+    if (has_child) return NX_FS_KIND_DIR;
+    return 0;
 }
 
 /* ---------- nx_fs_ops implementations -------------------------------- */
@@ -166,6 +218,14 @@ static int ramfs_op_open(void *self, const char *path, uint32_t flags,
     struct ramfs_state *s = self;
 
     struct ramfs_file *file = ramfs_find(s, path);
+    if (file && file->kind == RAMFS_KIND_DIR) {
+        /* Slice 7.7b.1: refuse file-style open on a directory.  The
+         * syscall layer's sys_open consults `stat` and routes DIR
+         * paths through the HANDLE_DIR allocation path — this guard
+         * stops a buggy caller from getting a HANDLE_FILE pointing
+         * at a directory entry. */
+        return NX_EPERM;
+    }
     if (!file) {
         if (!(flags & NX_FS_OPEN_CREATE)) return NX_ENOENT;
         file = ramfs_create_file(s, path);
@@ -273,27 +333,141 @@ static int64_t ramfs_op_seek(void *self, void *file,
     return new_pos;
 }
 
-static int ramfs_op_readdir(void *self, uint32_t *cookie,
-                            struct nx_fs_dirent *out)
+/*
+ * Slice 7.7b.1: hierarchical readdir.
+ *
+ * `dir_path` is the absolute path of the directory whose immediate
+ * children should be enumerated.  For each entry whose stored name has
+ * `dir_path` (+ '/') as a prefix, project to the segment between that
+ * prefix and the next '/' (or end-of-string).  Deduplicate against
+ * earlier file-table entries so each child is yielded exactly once
+ * even when several stored paths project to the same first segment
+ * (e.g. `/bin/sh` and `/bin/cat` both project to `bin` when iterating
+ * `/`).  O(cookie²) per call — acceptable for v1's RAMFS_MAX_FILES = 24.
+ */
+static int ramfs_match_child(const char *name, const char *dir_path,
+                             int dir_is_root, size_t dir_len,
+                             const char **out_seg, size_t *out_seg_len)
 {
-    if (!self || !cookie || !out) return NX_EINVAL;
+    const char *suffix;
+    if (dir_is_root) {
+        if (name[0] != '/' || name[1] == '\0') return 0;
+        suffix = name + 1;
+    } else {
+        if (strncmp(name, dir_path, dir_len) != 0) return 0;
+        if (name[dir_len] != '/') return 0;
+        suffix = name + dir_len + 1;
+    }
+    size_t seg_len = 0;
+    while (suffix[seg_len] && suffix[seg_len] != '/') seg_len++;
+    if (seg_len == 0) return 0;
+    *out_seg     = suffix;
+    *out_seg_len = seg_len;
+    return 1;
+}
+
+static int ramfs_op_readdir(void *self, const char *dir_path,
+                            uint32_t *cookie, struct nx_fs_dirent *out)
+{
+    if (!self || !dir_path || !cookie || !out) return NX_EINVAL;
+    if (dir_path[0] != '/') return NX_EINVAL;
     struct ramfs_state *s = self;
 
-    /* Advance past empty slots from the cookie forward.  Cookie is the
-     * zero-based file-table index; past RAMFS_MAX_FILES means done. */
+    size_t dir_len = 0;
+    while (dir_path[dir_len] != '\0') dir_len++;
+    int dir_is_root = (dir_len == 1);
+
     for (uint32_t i = *cookie; i < RAMFS_MAX_FILES; i++) {
         if (!s->files[i].in_use) continue;
 
-        size_t nlen = 0;
-        while (s->files[i].name[nlen] != '\0' &&
-               nlen < NX_FS_DIRENT_NAME_MAX - 1) nlen++;
-        out->name_len = (uint32_t)nlen;
-        memcpy(out->name, s->files[i].name, nlen);
-        out->name[nlen] = '\0';
+        const char *seg;
+        size_t seg_len;
+        if (!ramfs_match_child(s->files[i].name, dir_path,
+                               dir_is_root, dir_len, &seg, &seg_len))
+            continue;
+
+        /* Dedup: skip if an earlier in-use entry projects to the
+         * same first segment (already yielded). */
+        int seen = 0;
+        for (uint32_t j = 0; j < i; j++) {
+            if (!s->files[j].in_use) continue;
+            const char *jseg; size_t jlen;
+            if (!ramfs_match_child(s->files[j].name, dir_path,
+                                   dir_is_root, dir_len, &jseg, &jlen))
+                continue;
+            if (jlen == seg_len && strncmp(jseg, seg, seg_len) == 0) {
+                seen = 1;
+                break;
+            }
+        }
+        if (seen) continue;
+
+        if (seg_len >= NX_FS_DIRENT_NAME_MAX) seg_len = NX_FS_DIRENT_NAME_MAX - 1;
+        out->name_len = (uint32_t)seg_len;
+        memcpy(out->name, seg, seg_len);
+        out->name[seg_len] = '\0';
         *cookie = i + 1;
         return NX_OK;
     }
     *cookie = RAMFS_MAX_FILES;
+    return NX_ENOENT;
+}
+
+static int ramfs_op_mkdir(void *self, const char *path)
+{
+    if (!self || !path) return NX_EINVAL;
+    if (path[0] != '/' || path[1] == '\0') return NX_EINVAL;
+    struct ramfs_state *s = self;
+
+    /* EEXIST against an already-stored entry of any kind — match the
+     * POSIX `mkdir(2)` shape so ash's `mkdir /tmp` followed by
+     * `mkdir /tmp` reports the right errno. */
+    if (ramfs_find(s, path)) return NX_EEXIST;
+    /* A synthesised dir (one with children but no explicit entry) is
+     * also EEXIST — creating the explicit entry would be redundant,
+     * and POSIX says you can't `mkdir /bin` when `/bin/sh` already
+     * exists. */
+    if (ramfs_classify(s, path) == NX_FS_KIND_DIR) return NX_EEXIST;
+
+    if (!ramfs_create_entry(s, path, RAMFS_KIND_DIR)) return NX_ENOMEM;
+    return NX_OK;
+}
+
+static int ramfs_op_stat(void *self, const char *path,
+                         struct nx_fs_stat *out)
+{
+    if (!self || !path || !out) return NX_EINVAL;
+    if (path[0] != '/') return NX_EINVAL;
+    struct ramfs_state *s = self;
+
+    if (path[1] == '\0') {
+        out->kind = NX_FS_KIND_DIR;
+        out->size = 0;
+        return NX_OK;
+    }
+
+    struct ramfs_file *f = ramfs_find(s, path);
+    if (f) {
+        out->kind = (f->kind == RAMFS_KIND_DIR)
+                    ? NX_FS_KIND_DIR : NX_FS_KIND_FILE;
+        out->size = (out->kind == NX_FS_KIND_DIR) ? 0 : (int64_t)f->size;
+        return NX_OK;
+    }
+
+    /* Synthesise: any entry with `path/` as a parent prefix means
+     * `path` exists as an implicit directory (e.g. `/bin/busybox`
+     * implies `/bin` is a directory). */
+    size_t plen = 0;
+    while (path[plen] != '\0') plen++;
+    for (unsigned i = 0; i < RAMFS_MAX_FILES; i++) {
+        if (!s->files[i].in_use) continue;
+        const char *name = s->files[i].name;
+        if (strncmp(name, path, plen) == 0 && name[plen] == '/') {
+            out->kind = NX_FS_KIND_DIR;
+            out->size = 0;
+            return NX_OK;
+        }
+    }
     return NX_ENOENT;
 }
 
@@ -305,6 +479,8 @@ const struct nx_fs_ops ramfs_fs_ops = {
     .write   = ramfs_op_write,
     .seek    = ramfs_op_seek,
     .readdir = ramfs_op_readdir,
+    .mkdir   = ramfs_op_mkdir,
+    .stat    = ramfs_op_stat,
 };
 
 /* ---------- Component lifecycle -------------------------------------- */
@@ -403,10 +579,13 @@ static unsigned ramfs_slurp_initramfs(struct ramfs_state *s,
          * dirs / symlinks / special files. */
         if ((mode & 0xF000u) == 0x8000u && filesize <= RAMFS_FILE_CAP) {
             /* `name` may include path separators (e.g. "bin/sh");
-             * v1 ramfs is flat-namespace, so we just store the name
-             * verbatim — vfs_simple's caller addresses files via
-             * the same string.  When we add hierarchical paths we'll
-             * tweak the parser side rather than the storage side. */
+             * we store the full path verbatim and rely on slice-7.7b.1
+             * `ramfs_op_stat` to synthesise intermediate directories
+             * (any entry with `/bin/X` implies `/bin` is a dir) and
+             * `ramfs_op_readdir` to project hierarchical children.
+             * Cpio dir entries are still skipped — the initramfs
+             * builder doesn't emit them, and the synthesise path
+             * makes them unnecessary for read-side ops. */
             char path[RAMFS_NAME_MAX + 1];
             path[0] = '/';
             size_t copy = namesize ? namesize - 1 : 0;

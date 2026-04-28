@@ -420,15 +420,17 @@ static nx_status_t sys_channel_recv(uint64_t a0, uint64_t a1, uint64_t a2,
  */
 
 /*
- * Slice 7.6d.N.5 — directory cursor.  Bare-bones state struct
- * holding just the readdir cookie; allocated when sys_open is
- * called with path == "/" and freed by sys_handle_close on the
- * HANDLE_DIR.  The flat-namespace ramfs has only one possible
- * directory ("/"), so there's no path field — every cursor
- * iterates the global file table.
+ * Slice 7.6d.N.5 / 7.7b.1 — directory cursor.  Carries the readdir
+ * cookie plus the directory's absolute path so sys_getdents64 can
+ * pass `path` to the hierarchical `vops->readdir` op.  Allocated by
+ * sys_open whenever `vops->stat` reports the requested path is a
+ * directory; freed by sys_handle_close on the HANDLE_DIR.  Path is
+ * NX_PATH_MAX-1 + NUL — the same limit copy_path_from_user enforces
+ * on the user-supplied string.
  */
 struct nx_dir_cursor {
     uint32_t cookie;
+    char     path[NX_PATH_MAX];
 };
 
 static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
@@ -442,19 +444,29 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return rc;
 
+    const struct nx_vfs_ops *vops; void *vself;
+    rc = resolve_vfs(&vops, &vself);
+    if (rc != NX_OK) return rc;
+
 #if !__STDC_HOSTED__
-    /* Slice 7.6d.N.5: directory open.  Path "/" gets a HANDLE_DIR
-     * with a fresh cursor; ls / busybox's opendir → getdents64
-     * loop reads through it.  vfs_simple has no directory inode
-     * for "/" so we'd otherwise NX_ENOENT, blocking the entire
-     * directory-listing flow.  Host build has no kheap so this
-     * path falls through to vfs_simple's normal path resolution
-     * (which returns NX_ENOENT for "/" on host fixtures too —
-     * matching the pre-slice-7.6d.N.5 behaviour). */
-    if (kpath[0] == '/' && kpath[1] == '\0') {
+    /* Slice 7.7b.1: any directory path — not just "/" — gets a
+     * HANDLE_DIR with a fresh cursor when the caller didn't request
+     * O_CREATE for a missing path.  vops->stat tells us up-front
+     * whether `kpath` is a directory; if so, allocate the cursor
+     * and skip the file-style open.  Host build has no kheap so
+     * this branch is gated under !__STDC_HOSTED__; the host fake_fs
+     * paths return NX_ENOENT from stat, which falls through. */
+    struct nx_fs_stat st;
+    int srcc = vops->stat ? vops->stat(vself, kpath, &st) : NX_ENOENT;
+    if (srcc == NX_OK && st.kind == NX_FS_KIND_DIR) {
         struct nx_dir_cursor *cur = malloc(sizeof *cur);
         if (!cur) return NX_ENOMEM;
         cur->cookie = 0;
+        size_t plen = 0;
+        while (plen + 1 < sizeof cur->path && kpath[plen]) {
+            cur->path[plen] = kpath[plen]; plen++;
+        }
+        cur->path[plen] = '\0';
 
         struct nx_handle_table *t = nx_syscall_current_table();
         nx_handle_t h = NX_HANDLE_INVALID;
@@ -463,10 +475,6 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
         return (nx_status_t)h;
     }
 #endif
-
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
 
     void *file = 0;
     rc = vops->open(vself, kpath, flags, &file);
@@ -711,11 +719,11 @@ static nx_status_t sys_seek(uint64_t a0, uint64_t a1, uint64_t a2,
 /*
  * NX_SYS_READDIR — (uint32_t *user_cookie, struct nx_fs_dirent *user_out).
  *
- * Filesystem-level enumeration in v1 (no dir handles — see
- * interfaces/fs.h readdir docs).  Caller owns the cookie: copy it
- * into a kernel-side local through `copy_from_user`, pass to the
- * driver, copy the updated cookie + populated dirent back via
- * `copy_to_user`.
+ * Pre-slice-7.7b legacy syscall — iterates the root directory only.
+ * Real consumers (busybox `ls`) go through `sys_getdents64` /
+ * HANDLE_DIR for arbitrary directories; this syscall stays for
+ * the slice-6.4-vintage ktest_vfs / file_syscall_test paths that
+ * predate openat.
  *
  * Returns NX_OK on success (out populated, cookie advanced),
  * NX_ENOENT when iteration is complete, NX_EINVAL on NULL args or
@@ -738,7 +746,7 @@ static nx_status_t sys_readdir(uint64_t a0, uint64_t a1, uint64_t a2,
     if (rc != NX_OK) return rc;
 
     struct nx_fs_dirent kent;
-    rc = vops->readdir(vself, &kcookie, &kent);
+    rc = vops->readdir(vself, "/", &kcookie, &kent);
     if (rc != NX_OK) return rc;
 
     rc = copy_to_user(user_out, &kent, sizeof kent);
@@ -1799,29 +1807,24 @@ static nx_status_t sys_fstatat(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return NX_LINUX_EINVAL;
 
-    /* Slice 7.6d.N.5: special-case "/" as the root directory.
-     * vfs_simple has no directory inode for "/" (flat namespace,
-     * files at top level), so going through vops->open would
-     * NX_ENOENT and ash/ls would conclude "/" doesn't exist. */
-    int is_root_dir = (kpath[0] == '/' && kpath[1] == '\0');
+    /* Slice 7.7b.1: ask the vfs layer for kind+size in one call.
+     * Replaces the old "/"-only directory shortcut + open-and-seek
+     * dance for files; both shapes now flow through the single
+     * stat op.  `vops->stat` returns NX_OK with kind = FILE/DIR,
+     * NX_ENOENT for missing paths, NX_EINVAL for bad input. */
+    const struct nx_vfs_ops *vops; void *vself;
+    rc = resolve_vfs(&vops, &vself);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
 
-    int64_t size = 0;
-    uint32_t mode = NX_LINUX_FILE_MODE;
-    if (is_root_dir) {
-        mode = NX_LINUX_DIR_MODE;
-    } else {
-        const struct nx_vfs_ops *vops; void *vself;
-        rc = resolve_vfs(&vops, &vself);
-        if (rc != NX_OK) return NX_LINUX_EINVAL;
+    struct nx_fs_stat st;
+    if (!vops->stat) return NX_LINUX_EINVAL;
+    rc = vops->stat(vself, kpath, &st);
+    if (rc == NX_ENOENT) return NX_LINUX_ENOENT;
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
 
-        void *file = 0;
-        rc = vops->open(vself, kpath, NX_VFS_OPEN_READ, &file);
-        if (rc != NX_OK) return NX_LINUX_ENOENT;
-
-        size = vops->seek(vself, file, 0, NX_VFS_SEEK_END);
-        vops->close(vself, file);
-        if (size < 0) size = 0;
-    }
+    int64_t size = (st.size > 0) ? st.size : 0;
+    uint32_t mode = (st.kind == NX_FS_KIND_DIR)
+                    ? NX_LINUX_DIR_MODE : NX_LINUX_FILE_MODE;
 
     struct nx_user_stat_aarch64 kbuf;
     memset(&kbuf, 0, sizeof kbuf);
@@ -1907,7 +1910,7 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
 
     for (;;) {
         struct nx_fs_dirent kent;
-        rc = vops->readdir(vself, &cur->cookie, &kent);
+        rc = vops->readdir(vself, cur->path, &cur->cookie, &kent);
         if (rc == NX_ENOENT) break;          /* end of dir */
         if (rc != NX_OK) return NX_LINUX_EINVAL;
 
@@ -1917,13 +1920,11 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
             name_len++;
         if (name_len == 0) continue;          /* skip empty slot */
 
-        /* Strip leading '/' from ramfs entries — getdents64
-         * returns basenames, not absolute paths.  Our ramfs
-         * stores names without the '/' but `ramfs_create_file`
-         * (and the cpio loader) keeps the leading '/' for some
-         * entries.  Be defensive. */
+        /* Slice 7.7b.1: readdir now yields basenames directly (the
+         * leading-`/` strip hack from slice 7.6d.N.5 went away with
+         * hierarchical paths in ramfs).  Use the dirent name
+         * verbatim. */
         const char *src = kent.name;
-        if (src[0] == '/') { src++; name_len--; }
 
         /* d_reclen rounded up to 8-byte alignment.  Header is
          * 19 bytes (8+8+2+1) + name + '\0' + alignment pad. */
@@ -1992,10 +1993,10 @@ static nx_status_t sys_openat(uint64_t a0, uint64_t a1, uint64_t a2,
 {
     (void)a0; (void)a3; (void)a4; (void)a5;
     /* Forward to sys_open with the Linux flags converted to
-     * our NX_VFS_OPEN_* shape.  sys_open already special-cases
-     * "/" → HANDLE_DIR (slice 7.6d.N.5 above), so opendir's
-     * `openat(AT_FDCWD, "/", O_RDONLY|O_DIRECTORY)` lands on
-     * the directory-cursor path automatically. */
+     * our NX_VFS_OPEN_* shape.  sys_open's slice-7.7b.1 stat
+     * probe routes any directory path (not just `/`) through the
+     * HANDLE_DIR allocation, so opendir's `openat(AT_FDCWD, p,
+     * O_RDONLY|O_DIRECTORY)` works regardless of `p`. */
     uint32_t lin_flags = (uint32_t)a2;
     uint32_t nx_flags  = 0;
     uint32_t lin_acc   = lin_flags & 3u;
@@ -2007,10 +2008,47 @@ static nx_status_t sys_openat(uint64_t a0, uint64_t a1, uint64_t a2,
         nx_flags |= NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE;
     if (lin_flags & NX_LINUX_O_CREAT)  nx_flags |= NX_VFS_OPEN_CREATE;
     if (lin_flags & NX_LINUX_O_APPEND) nx_flags |= NX_VFS_OPEN_APPEND;
-    /* O_DIRECTORY is informational — sys_open's "/" branch
-     * already returns HANDLE_DIR.  Other O_* bits (O_CLOEXEC,
+    /* O_DIRECTORY is informational — sys_open's stat probe handles
+     * directory paths automatically.  Other O_* bits (O_CLOEXEC,
      * O_NONBLOCK, O_TRUNC, ...) are quietly dropped. */
     return sys_open(a1, (uint64_t)nx_flags, 0, 0, 0, 0);
+}
+
+/*
+ * NX_SYS_MKDIRAT — (int dirfd, const char *path, mode_t mode).
+ *
+ * Slice 7.7b.1.  Linux ABI: dirfd at a0 (ignored — vfs_simple is
+ * absolute-only), path at a1, mode at a2 (ignored — no perms in v1).
+ * Wraps `vops->mkdir`; translates NX_E* to Linux -errno so musl's
+ * `mkdir(2)` reports the right errno (ash + busybox `mkdir` applet
+ * branch on EEXIST vs other errors).
+ */
+#define NX_LINUX_EEXIST  (-17)
+#define NX_LINUX_ENOMEM  (-12)
+
+static nx_status_t sys_mkdirat(uint64_t a0, uint64_t a1, uint64_t a2,
+                               uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a2; (void)a3; (void)a4; (void)a5;
+    const char *user_path = (const char *)(uintptr_t)a1;
+
+    char kpath[NX_PATH_MAX];
+    int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+
+    const struct nx_vfs_ops *vops; void *vself;
+    rc = resolve_vfs(&vops, &vself);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+    if (!vops->mkdir) return NX_LINUX_EINVAL;
+
+    rc = vops->mkdir(vself, kpath);
+    switch (rc) {
+    case NX_OK:      return 0;
+    case NX_EEXIST:  return NX_LINUX_EEXIST;
+    case NX_ENOMEM:  return NX_LINUX_ENOMEM;
+    case NX_ENOENT:  return NX_LINUX_ENOENT;
+    default:         return NX_LINUX_EINVAL;
+    }
 }
 
 /*
@@ -2530,6 +2568,7 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_UNAME]          = sys_uname,
     [NX_SYS_SET_TID_ADDRESS] = sys_set_tid_address,
     [NX_SYS_IOCTL]          = sys_ioctl,
+    [NX_SYS_MKDIRAT]        = sys_mkdirat,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

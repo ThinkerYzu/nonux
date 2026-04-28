@@ -234,7 +234,7 @@ void nx_conformance_fs_readdir_on_empty_fs_returns_enoent(
 
     uint32_t cookie = 0;
     struct nx_fs_dirent ent;
-    int rc = f->ops->readdir(self, &cookie, &ent);
+    int rc = f->ops->readdir(self, "/", &cookie, &ent);
     ASSERT_EQ_U(rc, NX_ENOENT);
 
     f->destroy(self);
@@ -248,7 +248,7 @@ void nx_conformance_fs_readdir_yields_created_files_then_enoent(
     void *self = f->create();
     ASSERT_NOT_NULL(self);
 
-    /* Create three files with distinct names. */
+    /* Create three files with distinct names directly under root. */
     static const char *const paths[] = { "/a", "/b", "/c" };
     for (int i = 0; i < 3; i++) {
         void *h = open_new_rw(f, self, paths[i]);
@@ -256,21 +256,19 @@ void nx_conformance_fs_readdir_yields_created_files_then_enoent(
         f->ops->close(self, h);
     }
 
-    /* Iterate with a fresh cookie.  Collect yielded names into `seen[]`
-     * — order is driver-defined so we don't assert a specific sequence,
-     * only that all three appear and nothing extra does. */
+    /* Iterate with a fresh cookie over root.  Slice 7.7b.1: readdir
+     * yields basenames (no leading `/`), so we expect "a", "b", "c". */
     int seen[3] = { 0, 0, 0 };
     uint32_t cookie = 0;
     for (int iter = 0; iter < 10; iter++) {  /* loose upper bound */
         struct nx_fs_dirent ent;
-        int rc = f->ops->readdir(self, &cookie, &ent);
+        int rc = f->ops->readdir(self, "/", &cookie, &ent);
         if (rc == NX_ENOENT) break;
         ASSERT_EQ_U(rc, NX_OK);
 
         int matched = 0;
         for (int i = 0; i < 3; i++) {
-            if (ent.name_len == 2 && ent.name[0] == '/' &&
-                ent.name[1] == paths[i][1]) {
+            if (ent.name_len == 1 && ent.name[0] == paths[i][1]) {
                 ASSERT(seen[i] == 0);   /* each name once */
                 seen[i] = 1;
                 matched = 1;
@@ -284,7 +282,77 @@ void nx_conformance_fs_readdir_yields_created_files_then_enoent(
     for (int i = 0; i < 3; i++) ASSERT(seen[i]);
 
     struct nx_fs_dirent tail;
-    ASSERT_EQ_U(f->ops->readdir(self, &cookie, &tail), NX_ENOENT);
+    ASSERT_EQ_U(f->ops->readdir(self, "/", &cookie, &tail), NX_ENOENT);
+
+    f->destroy(self);
+}
+
+/* --- case 13 (slice 7.7b.1): mkdir creates dir visible in readdir ---- */
+
+void nx_conformance_fs_mkdir_creates_dir_visible_in_readdir(
+    const struct nx_fs_fixture *f)
+{
+    ASSERT_NOT_NULL(f->ops->mkdir);
+    ASSERT_NOT_NULL(f->ops->readdir);
+
+    void *self = f->create();
+    ASSERT_NOT_NULL(self);
+
+    ASSERT_EQ_U(f->ops->mkdir(self, "/d"), NX_OK);
+
+    /* Re-mkdir same path → EEXIST. */
+    ASSERT_EQ_U(f->ops->mkdir(self, "/d"), NX_EEXIST);
+
+    /* readdir over root yields exactly "d". */
+    int saw = 0;
+    uint32_t cookie = 0;
+    for (int iter = 0; iter < 10; iter++) {
+        struct nx_fs_dirent ent;
+        int rc = f->ops->readdir(self, "/", &cookie, &ent);
+        if (rc == NX_ENOENT) break;
+        ASSERT_EQ_U(rc, NX_OK);
+        if (ent.name_len == 1 && ent.name[0] == 'd') {
+            ASSERT(saw == 0);
+            saw = 1;
+        }
+    }
+    ASSERT(saw == 1);
+
+    f->destroy(self);
+}
+
+/* --- case 14 (slice 7.7b.1): stat reports kind for files and dirs ---- */
+
+void nx_conformance_fs_stat_reports_kind_for_files_and_dirs(
+    const struct nx_fs_fixture *f)
+{
+    ASSERT_NOT_NULL(f->ops->stat);
+    ASSERT_NOT_NULL(f->ops->mkdir);
+
+    void *self = f->create();
+    ASSERT_NOT_NULL(self);
+
+    /* Root is always a directory. */
+    struct nx_fs_stat st;
+    ASSERT_EQ_U(f->ops->stat(self, "/", &st), NX_OK);
+    ASSERT_EQ_U(st.kind, NX_FS_KIND_DIR);
+
+    /* Missing path. */
+    ASSERT_EQ_U(f->ops->stat(self, "/nope", &st), NX_ENOENT);
+
+    /* Created file is FILE. */
+    void *h = open_new_rw(f, self, "/file");
+    ASSERT_NOT_NULL(h);
+    ASSERT_EQ_U((uint64_t)f->ops->write(self, h, "hi", 2), 2);
+    f->ops->close(self, h);
+    ASSERT_EQ_U(f->ops->stat(self, "/file", &st), NX_OK);
+    ASSERT_EQ_U(st.kind, NX_FS_KIND_FILE);
+    ASSERT_EQ_U((uint64_t)st.size, 2);
+
+    /* Created dir is DIR. */
+    ASSERT_EQ_U(f->ops->mkdir(self, "/dir"), NX_OK);
+    ASSERT_EQ_U(f->ops->stat(self, "/dir", &st), NX_OK);
+    ASSERT_EQ_U(st.kind, NX_FS_KIND_DIR);
 
     f->destroy(self);
 }

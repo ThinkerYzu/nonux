@@ -146,15 +146,42 @@ static int64_t vfs_simple_seek(void *self, void *file,
     return ops->seek(fs_self, file, offset, whence);
 }
 
-static int vfs_simple_readdir(void *self, uint32_t *cookie,
-                              struct nx_fs_dirent *out)
+static int vfs_simple_readdir(void *self, const char *dir_path,
+                              uint32_t *cookie, struct nx_fs_dirent *out)
 {
     (void)self;
-    if (!cookie || !out) return NX_EINVAL;
+    if (!dir_path || !cookie || !out) return NX_EINVAL;
+    if (dir_path[0] != '/') return NX_EINVAL;
     const struct nx_fs_ops *ops; void *fs_self;
     int rc = resolve_root_fs(&ops, &fs_self);
     if (rc != NX_OK) return rc;
-    return ops->readdir(fs_self, cookie, out);
+    if (!ops->readdir) return NX_EINVAL;
+    return ops->readdir(fs_self, dir_path, cookie, out);
+}
+
+static int vfs_simple_mkdir(void *self, const char *path)
+{
+    (void)self;
+    if (!path) return NX_EINVAL;
+    if (path[0] != '/') return NX_EINVAL;
+    const struct nx_fs_ops *ops; void *fs_self;
+    int rc = resolve_root_fs(&ops, &fs_self);
+    if (rc != NX_OK) return rc;
+    if (!ops->mkdir) return NX_EINVAL;
+    return ops->mkdir(fs_self, path);
+}
+
+static int vfs_simple_stat(void *self, const char *path,
+                           struct nx_fs_stat *out)
+{
+    (void)self;
+    if (!path || !out) return NX_EINVAL;
+    if (path[0] != '/') return NX_EINVAL;
+    const struct nx_fs_ops *ops; void *fs_self;
+    int rc = resolve_root_fs(&ops, &fs_self);
+    if (rc != NX_OK) return rc;
+    if (!ops->stat) return NX_EINVAL;
+    return ops->stat(fs_self, path, out);
 }
 
 const struct nx_vfs_ops vfs_simple_vfs_ops = {
@@ -165,6 +192,8 @@ const struct nx_vfs_ops vfs_simple_vfs_ops = {
     .write   = vfs_simple_write,
     .seek    = vfs_simple_seek,
     .readdir = vfs_simple_readdir,
+    .mkdir   = vfs_simple_mkdir,
+    .stat    = vfs_simple_stat,
 };
 
 /* ---------- Component lifecycle -------------------------------------- */

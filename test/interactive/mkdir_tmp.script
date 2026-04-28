@@ -1,0 +1,4 @@
+mkdir /tmp
+> /tmp/MKDIR_TMP_MARKER
+ls /tmp
+exit

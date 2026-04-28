@@ -74,4 +74,12 @@ void nx_conformance_fs_seek_end_returns_file_size(
 void nx_conformance_fs_seek_past_size_returns_einval(
     const struct nx_fs_fixture *f);
 
+/* --- slice 7.7b.1: mkdir + stat ----------------------------------- */
+
+void nx_conformance_fs_mkdir_creates_dir_visible_in_readdir(
+    const struct nx_fs_fixture *f);
+
+void nx_conformance_fs_stat_reports_kind_for_files_and_dirs(
+    const struct nx_fs_fixture *f);
+
 #endif /* NONUX_CONFORMANCE_FS_H */

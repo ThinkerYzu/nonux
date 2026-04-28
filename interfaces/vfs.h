@@ -47,6 +47,7 @@
  * multi-mount VFS may wrap it with mount-path prefixing but the
  * caller-facing struct stays the same. */
 struct nx_fs_dirent;
+struct nx_fs_stat;
 
 struct nx_vfs_ops {
     /*
@@ -83,13 +84,24 @@ struct nx_vfs_ops {
     int64_t (*seek)(void *self, void *file, int64_t offset, int whence);
 
     /*
-     * Enumerate the filesystem's flat namespace (slice 6.4).  See
-     * `nx_fs_ops.readdir` for the contract; v1 VFS forwards unchanged.
-     * A future multi-mount VFS will iterate across mount boundaries
-     * here — the caller's cookie will then carry a (mount, fs-cookie)
-     * pair rather than the raw driver cookie.
+     * Enumerate the immediate children of `dir_path` (slice 7.7b.1).
+     * See `nx_fs_ops.readdir` for the contract; v1 VFS forwards
+     * unchanged.  A future multi-mount VFS will iterate across mount
+     * boundaries here — the caller's cookie will then carry a (mount,
+     * fs-cookie) pair rather than the raw driver cookie.
      */
-    int (*readdir)(void *self, uint32_t *cookie, struct nx_fs_dirent *out);
+    int (*readdir)(void *self, const char *dir_path,
+                   uint32_t *cookie, struct nx_fs_dirent *out);
+
+    /*
+     * Create a directory (slice 7.7b.1).  See `nx_fs_ops.mkdir`.
+     */
+    int (*mkdir)(void *self, const char *path);
+
+    /*
+     * Report metadata for `path` (slice 7.7b.1).  See `nx_fs_ops.stat`.
+     */
+    int (*stat)(void *self, const char *path, struct nx_fs_stat *out);
 };
 
 #endif /* NONUX_INTERFACE_VFS_H */

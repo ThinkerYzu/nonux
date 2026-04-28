@@ -206,6 +206,7 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_posix_busybox_sh_id_uname.c \
                  test/kernel/ktest_posix_busybox_sh_pipe3.c \
                  test/kernel/ktest_posix_busybox_sh_xfile.c \
+                 test/kernel/ktest_posix_busybox_sh_mkdir.c \
                  test/kernel/ktest_console_rx.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
@@ -248,7 +249,8 @@ KTEST_S       := test/kernel/user_prog.S \
                  test/kernel/posix_busybox_sh_trap_prog_blob.S \
                  test/kernel/posix_busybox_sh_id_uname_prog_blob.S \
                  test/kernel/posix_busybox_sh_pipe3_prog_blob.S \
-                 test/kernel/posix_busybox_sh_xfile_prog_blob.S
+                 test/kernel/posix_busybox_sh_xfile_prog_blob.S \
+                 test/kernel/posix_busybox_sh_mkdir_prog_blob.S
 
 # Slice 7.3: a tiny standalone EL0 ELF linked at the user-window VA.
 # Built as its own aarch64 executable, then embedded into kernel-test.bin
@@ -354,7 +356,8 @@ INITRAMFS_ENTRIES = \
     $(BUSYBOX_BIN):/bin/uname \
     $(BUSYBOX_BIN):/bin/tr \
     $(BUSYBOX_BIN):/bin/wc \
-    $(BUSYBOX_BIN):/bin/head
+    $(BUSYBOX_BIN):/bin/head \
+    $(BUSYBOX_BIN):/bin/mkdir
 
 test/kernel/initramfs.cpio: tools/pack-initramfs.py \
                             test/kernel/init_prog.elf \
@@ -805,6 +808,24 @@ test/kernel/posix_busybox_sh_xfile_prog.elf: test/kernel/posix_busybox_sh_xfile_
 test/kernel/posix_busybox_sh_xfile_prog_blob.o: test/kernel/posix_busybox_sh_xfile_prog_blob.S \
                                                 test/kernel/posix_busybox_sh_xfile_prog.elf
 
+# Slice 7.7b.1 — busybox `sh -c "mkdir /m && > /m/x && ls /m"`.
+# First workload exercising NX_SYS_MKDIRAT + hierarchical readdir.
+# `/m` (not `/tmp`) avoids EEXIST against the synthesised /tmp dir
+# left over from slices 7.6d.N.8/.9/.11.
+test/kernel/posix_busybox_sh_mkdir_prog.o: test/kernel/posix_busybox_sh_mkdir_prog.c \
+                                           components/posix_shim/nxlibc.h
+	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+test/kernel/posix_busybox_sh_mkdir_prog.elf: test/kernel/posix_busybox_sh_mkdir_prog.o \
+                                             components/posix_shim/libnxlibc.a \
+                                             test/kernel/init_prog.ld
+	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
+	    test/kernel/posix_busybox_sh_mkdir_prog.o \
+	    -Lcomponents/posix_shim -lnxlibc
+
+test/kernel/posix_busybox_sh_mkdir_prog_blob.o: test/kernel/posix_busybox_sh_mkdir_prog_blob.S \
+                                                test/kernel/posix_busybox_sh_mkdir_prog.elf
+
 # Slice 7.6d.3a — EL0-fault demos.  Each is a libnxlibc-linked C
 # program: parent forks; child trips a fault (NULL write for the
 # segfault demo, `udf #0` for the undef demo); parent waits and
@@ -1084,6 +1105,7 @@ clean:
 	       test/kernel/posix_busybox_sh_id_uname_prog.elf \
 	       test/kernel/posix_busybox_sh_pipe3_prog.elf \
 	       test/kernel/posix_busybox_sh_xfile_prog.elf \
+	       test/kernel/posix_busybox_sh_mkdir_prog.elf \
 	       test/kernel/posix_segfault_prog.elf \
 	       test/kernel/posix_undef_prog.elf \
 	       components/posix_shim/libnxlibc.a \

@@ -77,17 +77,34 @@
  * the byte count excluding the trailing NUL.  Name is always NUL-
  * terminated even when `name_len == NX_FS_DIRENT_NAME_MAX - 1`.
  *
- * Readdir is a filesystem-level op in v1 (no dir handles) because
- * ramfs has a flat namespace — one conceptual "directory" per
- * filesystem.  When a tree-FS driver lands, the interface will grow
- * a second readdir flavour that takes a dir handle; this flat-fs
- * form stays for flat drivers.
+ * Slice 7.7b.1: readdir takes a `dir_path` argument and returns
+ * basenames of immediate children of that directory.  Drivers that
+ * stored hierarchical paths verbatim (e.g. ramfs's `/bin/busybox`)
+ * project them to the segment immediately following `dir_path` and
+ * deduplicate within a single iteration so each directory child is
+ * yielded exactly once.
  */
 #define NX_FS_DIRENT_NAME_MAX  64u
 
 struct nx_fs_dirent {
     uint32_t name_len;
     char     name[NX_FS_DIRENT_NAME_MAX];
+};
+
+/* ---------- Stat info (slice 7.7b.1) ----------------------------------- */
+/*
+ * Minimum metadata the syscall layer needs to distinguish a file from
+ * a directory and report a size.  Filesystems may surface richer info
+ * later; for v1 the shape is "kind + size" only — the syscall layer
+ * synthesises owner/perms/timestamps when packing the Linux struct
+ * stat for `sys_fstatat`.
+ */
+#define NX_FS_KIND_FILE   1u
+#define NX_FS_KIND_DIR    2u
+
+struct nx_fs_stat {
+    uint32_t kind;     /* NX_FS_KIND_FILE or NX_FS_KIND_DIR */
+    int64_t  size;     /* bytes; 0 for directories in v1 */
 };
 
 /* ---------- Ops table --------------------------------------------------- */
@@ -179,21 +196,72 @@ struct nx_fs_ops {
     int64_t (*seek)(void *self, void *file, int64_t offset, int whence);
 
     /*
-     * Read the next entry from the filesystem's flat namespace (slice
-     * 6.4).  `cookie` is caller-owned iterator state: initialise to 0,
-     * pass the same pointer on every call; the driver updates it so
-     * the next call returns the next entry.  Cookies are driver-
-     * defined (v1 ramfs uses the slot index directly) but always
-     * monotonically advance — callers may save a cookie and resume
-     * later without losing iteration position, but must not tamper
-     * with values the driver wrote.
+     * Read the next entry under `dir_path` (slice 7.7b.1).
+     *
+     * `dir_path` is an absolute path (starts with `/`) naming a
+     * directory whose immediate children should be enumerated.  For
+     * `dir_path == "/"` the driver yields each top-level child.  For
+     * `dir_path == "/bin"` the driver yields each entry whose stored
+     * name has `/bin/` as a prefix, projected to the segment between
+     * `/bin/` and the next `/` (or end-of-string).
+     *
+     * `cookie` is caller-owned iterator state: initialise to 0, pass
+     * the same pointer on every call; the driver advances it so the
+     * next call returns the next entry.  Cookies are driver-defined
+     * (v1 ramfs uses the slot index directly) but always monotonically
+     * advance — callers may save a cookie and resume later without
+     * losing iteration position, but must not tamper with values the
+     * driver wrote.
+     *
+     * `out->name` carries the basename only (no leading slash, no
+     * embedded `/`).  Drivers must deduplicate within a single
+     * iteration so each immediate child is yielded exactly once even
+     * when several stored paths project to the same first segment
+     * (e.g. `/bin/sh` and `/bin/cat` both project to `bin` when
+     * iterating `/`).
      *
      * Returns:
      *   NX_OK      — `*out` populated; `*cookie` advanced.
-     *   NX_ENOENT  — no more entries (iteration complete).
-     *   NX_EINVAL  — NULL args.
+     *   NX_ENOENT  — no more entries (iteration complete) or `dir_path`
+     *                does not name an existing directory.
+     *   NX_EINVAL  — NULL args / `dir_path` not absolute.
      */
-    int (*readdir)(void *self, uint32_t *cookie, struct nx_fs_dirent *out);
+    int (*readdir)(void *self, const char *dir_path,
+                   uint32_t *cookie, struct nx_fs_dirent *out);
+
+    /*
+     * Create a directory at `path` (slice 7.7b.1).  `path` is absolute.
+     * Parent directory existence is not enforced in v1 — `mkdir
+     * /a/b/c` succeeds even when `/a` and `/a/b` are absent (consistent
+     * with how the cpio loader stores file paths verbatim without
+     * intermediate dir entries).
+     *
+     * Returns:
+     *   NX_OK      — directory created.
+     *   NX_EEXIST  — `path` already names a file or directory.
+     *   NX_ENOMEM  — driver storage exhausted.
+     *   NX_EINVAL  — NULL args / non-absolute / empty path.
+     */
+    int (*mkdir)(void *self, const char *path);
+
+    /*
+     * Report metadata for `path` (slice 7.7b.1).  Used by the syscall
+     * layer to distinguish file from directory before deciding whether
+     * to allocate a HANDLE_FILE or a HANDLE_DIR, and to report sizes
+     * to `fstatat` callers.
+     *
+     * Drivers may synthesise directory results for path prefixes that
+     * match no stored entry but match as a parent of one (e.g.
+     * `stat("/bin")` returns DIR if `/bin/sh` is stored even though
+     * `/bin` itself was never explicitly created).  The root path
+     * `"/"` always reports DIR.
+     *
+     * Returns:
+     *   NX_OK      — `*out` populated.
+     *   NX_ENOENT  — no entry matches `path`.
+     *   NX_EINVAL  — NULL args / non-absolute path.
+     */
+    int (*stat)(void *self, const char *path, struct nx_fs_stat *out);
 };
 
 #endif /* NONUX_INTERFACE_FS_H */

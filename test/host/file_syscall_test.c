@@ -147,18 +147,28 @@ static int64_t fake_seek(void *self, void *file, int64_t offset, int whence)
     return np;
 }
 
-static int fake_readdir(void *self, uint32_t *cookie,
-                        struct nx_fs_dirent *out)
+/* Slice 7.7b.1: hierarchical readdir signature.  Tests in this file
+ * create entries with names like "/alpha", "/beta" (single segment
+ * under root); the projection trims the leading "/" and yields
+ * "alpha", "beta" — sys_readdir test below was updated for this. */
+static int fake_readdir(void *self, const char *dir_path,
+                        uint32_t *cookie, struct nx_fs_dirent *out)
 {
+    if (!dir_path || dir_path[0] != '/') return NX_EINVAL;
+    int dir_is_root = (dir_path[1] == '\0');
+    if (!dir_is_root) return NX_ENOENT;
     struct fake_fs_state *s = self;
     for (uint32_t i = *cookie; i < 4; i++) {
         if (!s->files[i].in_use) continue;
-        size_t nlen = 0;
-        while (s->files[i].name[nlen] && nlen < NX_FS_DIRENT_NAME_MAX - 1)
-            nlen++;
-        out->name_len = (uint32_t)nlen;
-        memcpy(out->name, s->files[i].name, nlen);
-        out->name[nlen] = '\0';
+        const char *name = s->files[i].name;
+        if (name[0] != '/') continue;
+        const char *seg = name + 1;
+        size_t seg_len = 0;
+        while (seg[seg_len] && seg[seg_len] != '/') seg_len++;
+        if (seg_len == 0) continue;
+        out->name_len = (uint32_t)seg_len;
+        memcpy(out->name, seg, seg_len);
+        out->name[seg_len] = '\0';
         *cookie = i + 1;
         return NX_OK;
     }
@@ -166,10 +176,32 @@ static int fake_readdir(void *self, uint32_t *cookie,
     return NX_ENOENT;
 }
 
+/* Slice 7.7b.1: minimal stat — every existing path is a regular file,
+ * "/" is a directory.  The fake fs in this test doesn't model dirs. */
+static int fake_stat(void *self, const char *path, struct nx_fs_stat *out)
+{
+    if (!self || !path || !out) return NX_EINVAL;
+    if (path[0] != '/') return NX_EINVAL;
+    if (path[1] == '\0') {
+        out->kind = NX_FS_KIND_DIR; out->size = 0; return NX_OK;
+    }
+    struct fake_fs_state *s = self;
+    for (int i = 0; i < 4; i++) {
+        if (!s->files[i].in_use) continue;
+        if (strcmp(s->files[i].name, path) == 0) {
+            out->kind = NX_FS_KIND_FILE;
+            out->size = (int64_t)s->files[i].size;
+            return NX_OK;
+        }
+    }
+    return NX_ENOENT;
+}
+
 static const struct nx_fs_ops fake_fs_ops = {
     .open    = fake_open,   .close   = fake_close,
     .read    = fake_read,   .write   = fake_write,
     .seek    = fake_seek,   .readdir = fake_readdir,
+    .stat    = fake_stat,
 };
 
 static const struct nx_component_descriptor fake_fs_descriptor = {
@@ -666,9 +698,10 @@ TEST(sys_readdir_yields_created_files_then_enoent)
                               (uint64_t)(uintptr_t)&ent, 0);
         if (rc == NX_ENOENT) break;
         ASSERT_EQ_U((uint64_t)rc, NX_OK);
-        if (ent.name_len == 6 && memcmp(ent.name, "/alpha", 6) == 0)
+        /* Slice 7.7b.1: readdir yields basenames (no leading `/`). */
+        if (ent.name_len == 5 && memcmp(ent.name, "alpha", 5) == 0)
             saw_alpha++;
-        else if (ent.name_len == 5 && memcmp(ent.name, "/beta", 5) == 0)
+        else if (ent.name_len == 4 && memcmp(ent.name, "beta", 4) == 0)
             saw_beta++;
     }
     ASSERT_EQ_U(saw_alpha, 1);

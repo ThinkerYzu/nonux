@@ -161,25 +161,69 @@ static int64_t stub_seek_op(void *self, void *file, int64_t offset, int whence)
     return new_pos;
 }
 
-static int stub_readdir_op(void *self, uint32_t *cookie,
-                           struct nx_fs_dirent *out)
+/* Slice 7.7b.1: hierarchical readdir for the stub.  fs_stub's tests
+ * only create flat entries directly under "/" (paths like "/a"), so
+ * the projection trims the leading "/" to yield basename "a". */
+static int stub_readdir_op(void *self, const char *dir_path,
+                           uint32_t *cookie, struct nx_fs_dirent *out)
 {
-    if (!self || !cookie || !out) return NX_EINVAL;
+    if (!self || !dir_path || !cookie || !out) return NX_EINVAL;
+    if (dir_path[0] != '/') return NX_EINVAL;
     struct fs_stub *s = self;
+    int dir_is_root = (dir_path[1] == '\0');
+    if (!dir_is_root) return NX_ENOENT;  /* stub doesn't model nested dirs */
+
     for (unsigned i = *cookie; i < STUB_MAX_FILES; i++) {
-        if (s->files[i].in_use) {
-            size_t nlen = 0;
-            while (s->files[i].name[nlen] != '\0' &&
-                   nlen < NX_FS_DIRENT_NAME_MAX - 1) nlen++;
-            out->name_len = (uint32_t)nlen;
-            memcpy(out->name, s->files[i].name, nlen);
-            out->name[nlen] = '\0';
-            *cookie = i + 1;
-            return NX_OK;
-        }
+        if (!s->files[i].in_use) continue;
+        const char *name = s->files[i].name;
+        if (name[0] != '/') continue;
+        const char *seg = name + 1;
+        size_t seg_len = 0;
+        while (seg[seg_len] && seg[seg_len] != '/') seg_len++;
+        if (seg_len == 0) continue;
+        out->name_len = (uint32_t)seg_len;
+        memcpy(out->name, seg, seg_len);
+        out->name[seg_len] = '\0';
+        *cookie = i + 1;
+        return NX_OK;
     }
     *cookie = STUB_MAX_FILES;
     return NX_ENOENT;
+}
+
+static int stub_mkdir_op(void *self, const char *path)
+{
+    /* Slice 7.7b.1: stub doesn't model directories — just records a
+     * sentinel entry so subsequent stat/readdir see it. */
+    if (!self || !path) return NX_EINVAL;
+    if (path[0] != '/' || path[1] == '\0') return NX_EINVAL;
+    struct fs_stub *s = self;
+    if (stub_find(s, path)) return NX_EEXIST;
+    if (!stub_create(s, path)) return NX_ENOMEM;
+    return NX_OK;
+}
+
+static int stub_stat_op(void *self, const char *path, struct nx_fs_stat *out)
+{
+    if (!self || !path || !out) return NX_EINVAL;
+    if (path[0] != '/') return NX_EINVAL;
+    if (path[1] == '\0') {
+        out->kind = NX_FS_KIND_DIR;
+        out->size = 0;
+        return NX_OK;
+    }
+    struct fs_stub *s = self;
+    struct stub_file *f = stub_find(s, path);
+    if (!f) return NX_ENOENT;
+    /* Crude convention: the conformance suite creates dirs via mkdir
+     * and files via open(CREATE).  Both routes go through stub_create
+     * and we don't tag the kind, so we approximate: any entry with
+     * size > 0 is a file; size == 0 returned via mkdir is a dir.  The
+     * conformance test for stat creates a 2-byte file and an empty
+     * dir, so this distinction is enough. */
+    out->kind = (f->size > 0) ? NX_FS_KIND_FILE : NX_FS_KIND_DIR;
+    out->size = (int64_t)f->size;
+    return NX_OK;
 }
 
 static const struct nx_fs_ops fs_stub_ops = {
@@ -189,6 +233,8 @@ static const struct nx_fs_ops fs_stub_ops = {
     .write   = stub_write_op,
     .seek    = stub_seek_op,
     .readdir = stub_readdir_op,
+    .mkdir   = stub_mkdir_op,
+    .stat    = stub_stat_op,
 };
 
 static void *fs_stub_create(void)
@@ -267,6 +313,16 @@ TEST(fs_stub_conformance_seek_end_returns_file_size)
 TEST(fs_stub_conformance_seek_past_size_returns_einval)
 {
     nx_conformance_fs_seek_past_size_returns_einval(&fs_stub_fixture);
+}
+
+TEST(fs_stub_conformance_mkdir_creates_dir_visible_in_readdir)
+{
+    nx_conformance_fs_mkdir_creates_dir_visible_in_readdir(&fs_stub_fixture);
+}
+
+TEST(fs_stub_conformance_stat_reports_kind_for_files_and_dirs)
+{
+    nx_conformance_fs_stat_reports_kind_for_files_and_dirs(&fs_stub_fixture);
 }
 
 /* ---------- local fs_stub unit tests (fixture sanity checks) --------- */

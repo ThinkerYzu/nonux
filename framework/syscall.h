@@ -392,6 +392,16 @@ enum nx_syscall_number {
                                   *  (implemented in musl as a TCGETS
                                   *  probe) reports 1.  Anything else
                                   *  returns -ENOTTY = -25. */
+    NX_SYS_MKDIRAT        = 40,  /* (int dirfd, const char *path, mode_t mode)
+                                  *  → 0 / Linux -errno.  Slice 7.7b.1:
+                                  *  dirfd is ignored (vfs_simple is
+                                  *  absolute-only); mode is ignored
+                                  *  (no perms in v1).  Wraps
+                                  *  vops->mkdir; -EEXIST (-17) and
+                                  *  -ENOMEM (-12) returned in Linux
+                                  *  shape so musl's `mkdir(2)` reports
+                                  *  the right errno.  Mapped from
+                                  *  Linux `__NR_mkdirat = 34`. */
 
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
