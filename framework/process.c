@@ -31,7 +31,14 @@ struct nx_process g_kernel_process = {
     /* .handles is zero-initialised — equivalent to a fresh
      * `nx_handle_table_init` call.  The handle table's invariant is
      * that a zero-initialised table is empty, so we don't need an
-     * explicit init in the BSS-backed definition. */
+     * explicit init in the BSS-backed definition.
+     *
+     * Slice 7.8c: .exit_waitq.waiters needs self-pointing init so
+     * a stray nx_waitq_wake_all(&g_kernel_process.exit_waitq) is
+     * a no-op even before any process_create call.  The kernel
+     * process has no real parent — nothing waits on its exit. */
+    .exit_waitq = { { { &g_kernel_process.exit_waitq.waiters.n,
+                         &g_kernel_process.exit_waitq.waiters.n } } },
 };
 
 /* ---------- Process bookkeeping ------------------------------------- */
@@ -110,6 +117,7 @@ struct nx_process *nx_process_create(const char *name)
     }
 
     nx_handle_table_init(&p->handles);
+    nx_waitq_init(&p->exit_waitq);   /* slice 7.8c — wake parent on exit */
 
     /*
      * Slice 7.6d.N.6b: pre-install three CONSOLE handles at the head of
@@ -271,6 +279,20 @@ void nx_process_exit(int code)
          * fields.  Mirrors sys_handle_close's `nx_handle_close` tail. */
         nx_handle_t h = (e->generation << 8) | (uint32_t)(i + 1);
         nx_handle_close(&p->handles, h);
+    }
+
+    /*
+     * Slice 7.8c: wake any parent blocked in `sys_wait` on this
+     * exit.  Parent is identified by `parent_pid` (set at fork
+     * time).  No parent (parent_pid == 0 for processes spawned
+     * outside fork — init, the test parents) → no wake needed.
+     * The wake retires the parent's `nx_waitq_wait_unless` call,
+     * whose predicate then sees `target->state == EXITED` and
+     * returns to userspace.
+     */
+    if (p->parent_pid != 0) {
+        struct nx_process *parent = nx_process_lookup_by_pid(p->parent_pid);
+        if (parent) nx_waitq_wake_all(&parent->exit_waitq);
     }
 
     /* Park in a tight wfe loop on kernel, an infinite loop on host.

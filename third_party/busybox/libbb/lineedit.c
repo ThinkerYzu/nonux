@@ -503,28 +503,6 @@ static void beep(void)
 static void put_prompt_custom(bool is_full)
 {
 	fputs_stdout((is_full ? cmdedit_prompt : prompt_last_line));
-	/* nonux patch (slice 7.6d.N.final.e): force-flush so the prompt
-	 * appears before read_key() blocks on stdin.  Without this, musl's
-	 * stdout is line-buffered on a tty (.lbf = '\n') and ash's prompt
-	 * has no trailing newline, so the bytes sit in the FILE buffer
-	 * until the next newline-terminated write — i.e. the user types
-	 * blind.  Use fflush(stdout) (not fflush_all() like the
-	 * !FEATURE_EDITING path) because fflush(NULL) also discards any
-	 * read-ahead in stdin's FILE buffer; lineedit reads stdin via the
-	 * read() syscall directly and the discard would race with the
-	 * trickle-fed test harness.
-	 *
-	 * REMOVE THIS PATCH IN SLICE 7.8c once NX_SYS_PPOLL is wired.
-	 * The actual root cause is that busybox's ask_terminal() (line
-	 * 1908-1916) tries to flush via the \e[6n + fflush_all() path,
-	 * but its safe_poll(stdin, 0) == 0 gate fails on nonux because
-	 * __NR_ppoll = 73 is unmapped in our musl translation table —
-	 * the syscall returns -ENOSYS, safe_poll returns -1, the gate
-	 * skips, no flush happens.  With NX_SYS_PPOLL implemented,
-	 * upstream busybox's intended flush path runs again and this
-	 * patch becomes redundant.  See proj_docs/nonux/IMPLEMENTATION-
-	 * GUIDE.md §Slice 7.8c for the cleanup plan. */
-	fflush(stdout);
 	cursor = 0;
 	cmdedit_y = cmdedit_prmt_len / cmdedit_termw; /* new quasireal y */
 	cmdedit_x = cmdedit_prmt_len % cmdedit_termw;

@@ -3,6 +3,7 @@
 
 #include "framework/handle.h"
 #include "framework/registry.h"
+#include "core/sched/waitq.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -109,6 +110,16 @@ struct nx_process {
      * `out of memory` before reaching even its first builtin.
      */
     uint64_t                mmap_bump;
+    /*
+     * Slice 7.8c — wait-for-child wakeup queue.  Any time a process
+     * exits (via `nx_process_exit`), the framework wakes
+     * `parent->exit_waitq` so a parent blocked in `sys_wait` /
+     * `waitpid` returns promptly instead of polling.  Initialised in
+     * `nx_process_create`.  No deadline plumbing — sys_wait blocks
+     * indefinitely; ash + busybox always have at least one
+     * exit-eligible child by the time they call `wait`.
+     */
+    struct nx_waitq         exit_waitq;
 };
 
 /* Layout within the 8 MiB user window (slice 7.6d.2b grew the

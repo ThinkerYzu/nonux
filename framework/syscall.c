@@ -533,6 +533,21 @@ static int lookup_file_object(nx_handle_t h, uint32_t need_rights,
  * means a `posix_read(pipe_fd)` wrapper doesn't need to know which
  * kernel primitive is under the fd.
  */
+/* Slice 7.8c — predicate for the CHANNEL arm's `nx_waitq_wait_unless`.
+ * Returns non-zero when nx_channel_recv would not return NX_EAGAIN
+ * (ring non-empty OR peer closed → readable).  Mirrors
+ * `nx_channel_endpoint_readiness(e, NX_POLLIN)` but doesn't allocate. */
+#if !__STDC_HOSTED__
+static int sys_read_channel_ready_pred(void *ctx)
+{
+    const struct nx_channel_endpoint *e = ctx;
+    if (!e) return 0;
+    if (nx_channel_endpoint_depth(e) > 0) return 1;
+    if (nx_channel_endpoint_peer_closed(e)) return 1;
+    return 0;
+}
+#endif
+
 static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5)
 {
@@ -598,25 +613,35 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
 
     if (type == NX_HANDLE_CHANNEL) {
         /* Pipe read — bounded by the channel's 256-byte message size,
-         * same as sys_channel_recv.  Slice 7.6d.N.6b: convert
-         * NX_EAGAIN (empty + writers still attached) into a blocking
-         * yield-loop so POSIX read semantics hold for shell pipelines.
-         * Empty + writers all closed returns 0 = EOF directly from
-         * nx_channel_recv (channel.c).  Host build doesn't have a
-         * scheduler, so the loop falls through after one attempt —
-         * host pipe tests don't exercise the blocking case. */
+         * same as sys_channel_recv.  Slice 7.8c: replace the v1
+         * yield-loop with a real block on a kstack pollset waitq
+         * registered as a listener on the channel endpoint.  The
+         * predicate re-checks `nx_channel_recv`'s would-not-EAGAIN
+         * condition inside `nx_waitq_wait_unless`'s critical section
+         * so a wake during the gap between the outer EAGAIN check
+         * and the wait isn't lost.  Empty + writers all closed
+         * returns 0 = EOF directly from nx_channel_recv.  Host
+         * build skips the wait — host pipe tests don't exercise
+         * blocking semantics. */
         if (cap > NX_CHANNEL_MSG_MAX) cap = NX_CHANNEL_MSG_MAX;
         uint8_t staging[NX_CHANNEL_MSG_MAX];
         int got;
+#if !__STDC_HOSTED__
+        struct nx_waitq             read_wq;
+        struct nx_pollset_listener  listener;
+        nx_waitq_init(&read_wq);
+        nx_pollset_listener_init(&listener, &read_wq);
+        nx_channel_endpoint_register_pollset(obj, &listener);
         for (;;) {
             got = nx_channel_recv(obj, staging, cap);
-#if !__STDC_HOSTED__
             if (got != NX_EAGAIN) break;
-            nx_task_yield();
-#else
-            break;
-#endif
+            nx_waitq_wait_unless(&read_wq, 0,
+                                 sys_read_channel_ready_pred, obj);
         }
+        nx_channel_endpoint_unregister_pollset(&listener);
+#else
+        got = nx_channel_recv(obj, staging, cap);
+#endif
         if (got < 0) return got;
         rc = copy_to_user(buf, staging, (size_t)got);
         if (rc != NX_OK) return rc;
@@ -954,6 +979,34 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
  * Host: no scheduler + no user pointer semantics — returns
  * NX_EINVAL.
  */
+/* Slice 7.8c — predicates for `nx_waitq_wait_unless` in the two
+ * sys_wait paths.  Return non-zero when the corresponding wait
+ * condition has been satisfied; nx_waitq_wait_unless then skips
+ * the sleep and returns immediately. */
+#if !__STDC_HOSTED__
+static int sys_wait_target_exited_pred(void *ctx)
+{
+    const struct nx_process *target = ctx;
+    return target && target->state == NX_PROCESS_STATE_EXITED;
+}
+
+static int sys_wait_any_child_pred(void *ctx)
+{
+    const struct nx_process *parent = ctx;
+    if (!parent) return 0;
+    /* Reuse the same scan sys_wait's outer loop runs.  Return
+     * non-zero either if a reapable EXITED child exists OR if the
+     * caller has no children at all (so the outer loop's ECHILD
+     * branch fires without sleeping). */
+    struct nx_process *any_active = NULL;
+    struct nx_process *exited = nx_process_find_exited_child(parent,
+                                                             &any_active);
+    if (exited) return 1;
+    if (!any_active) return 1;
+    return 0;
+}
+#endif
+
 static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
                             uint64_t a3, uint64_t a4, uint64_t a5)
 {
@@ -969,12 +1022,13 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_process *target = NULL;
 
     /* Slice 7.6d.N.6b: pid == (uint32_t)-1 (POSIX waitpid for any
-     * child).  ash uses this for shell pipelines.  Scan the live
-     * process table for any process whose `parent_pid` matches the
-     * caller; prefer EXITED children so a ready zombie reaps
-     * immediately, otherwise yield and retry until one becomes
-     * ready.  Returns NX_ENOENT (≈ Linux ECHILD) if the caller has
-     * no children at all. */
+     * child).  ash uses this for shell pipelines.  Slice 7.8c
+     * replaces the original `nx_task_yield()` polling loop with a
+     * real block on the caller's per-process `exit_waitq`, woken
+     * by `nx_process_exit` from any child.  The `unless` variant's
+     * predicate re-checks for an exited child inside the critical
+     * section, so a wake that fires between the outer check and
+     * the wait isn't lost. */
     if (pid == (uint32_t)-1) {
         for (;;) {
             struct nx_process *any_child = NULL;
@@ -989,15 +1043,21 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
                  * "no more children" contract. */
                 return -10;
             }
-            nx_task_yield();
+            nx_waitq_wait_unless(&caller->exit_waitq, 0,
+                                 sys_wait_any_child_pred, caller);
         }
     } else {
         target = nx_process_lookup_by_pid(pid);
         if (!target || target == &g_kernel_process) return NX_ENOENT;
         if (target == caller) return NX_EINVAL;
 
-        while (target->state != NX_PROCESS_STATE_EXITED)
-            nx_task_yield();
+        /* Slice 7.8c: block on caller's exit_waitq instead of
+         * yield-spinning.  The predicate checks the specific target;
+         * we only return when target->state has flipped to EXITED. */
+        while (target->state != NX_PROCESS_STATE_EXITED) {
+            nx_waitq_wait_unless(&caller->exit_waitq, 0,
+                                 sys_wait_target_exited_pred, target);
+        }
     }
 
     /* Deliver exit_code to user if requested.  Bad user pointer is

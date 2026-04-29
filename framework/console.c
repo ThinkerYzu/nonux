@@ -120,6 +120,21 @@ int nx_console_write(const void *buf, size_t len)
     return (int)len;
 }
 
+/* Slice 7.8c — predicate for `nx_waitq_wait_unless` in the kernel
+ * branch of `nx_console_read`.  Returns non-zero when the RX ring
+ * has at least one byte OR a Ctrl-D EOF is queued — i.e., the
+ * outer drain loop would make progress next iteration.  Plugs the
+ * lost-wakeup window inside the wait's critical section. */
+#if !__STDC_HOSTED__
+static int console_read_ready_pred(void *ctx)
+{
+    (void)ctx;
+    if (rx_count() > 0) return 1;
+    if (__atomic_load_n(&g_eof_pending, __ATOMIC_ACQUIRE)) return 1;
+    return 0;
+}
+#endif
+
 int nx_console_read(void *buf, size_t cap)
 {
     if (cap == 0) return 0;
@@ -138,15 +153,30 @@ int nx_console_read(void *buf, size_t cap)
         return 0;
     return (int)got;
 #else
-    /* Yield until at least one byte is available, then drain up to
-     * `cap`.  POSIX read semantics: a successful read may return less
-     * than `cap` — the shell's line editor will loop.
+    /* Block on the singleton console RX waitq via a kstack pollset
+     * listener until at least one byte is available, then drain up
+     * to `cap`.  POSIX read semantics: a successful read may return
+     * less than `cap` — the shell's line editor will loop.
      *
      * Slice 7.6d.N.final.c: a pending Ctrl-D (0x04) consumed by the
-     * RX ISR returns EOF (0) instead of yielding indefinitely.  The
+     * RX ISR returns EOF (0) instead of waiting indefinitely.  The
      * flag is one-shot: subsequent reads block again until either
-     * fresh bytes or another Ctrl-D arrive. */
+     * fresh bytes or another Ctrl-D arrive.
+     *
+     * Slice 7.8c: the v1 `nx_task_yield()` polling loop is replaced
+     * with `nx_waitq_wait_unless` against a stack-resident waitq
+     * registered as a pollset listener on `g_console_pollset_listeners`.
+     * Producer side (nx_console_rx_isr + the test-inject helpers)
+     * already walks that list and wakes every listener's parent
+     * waitq, so there's nothing to add on the wake side.  The
+     * predicate re-checks for ring-non-empty OR EOF inside the
+     * critical section, plugging the lost-wakeup window. */
     size_t got = 0;
+    struct nx_waitq             rx_wq;
+    struct nx_pollset_listener  listener;
+    nx_waitq_init(&rx_wq);
+    nx_pollset_listener_init(&listener, &rx_wq);
+    nx_console_register_pollset(&listener);
     while (got < cap) {
         char c;
         if (rx_pop_one(&c)) {
@@ -154,10 +184,14 @@ int nx_console_read(void *buf, size_t cap)
             continue;
         }
         if (got > 0) break;        /* return what we have */
-        if (__atomic_exchange_n(&g_eof_pending, 0, __ATOMIC_ACQ_REL))
+        if (__atomic_exchange_n(&g_eof_pending, 0, __ATOMIC_ACQ_REL)) {
+            nx_console_unregister_pollset(&listener);
             return 0;              /* Ctrl-D — POSIX read EOF */
-        nx_task_yield();           /* wait for first byte */
+        }
+        nx_waitq_wait_unless(&rx_wq, 0,
+                             console_read_ready_pred, NULL);
     }
+    nx_console_unregister_pollset(&listener);
     return (int)got;
 #endif
 }

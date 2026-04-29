@@ -78,26 +78,20 @@ void nx_waitq_init(struct nx_waitq *wq)
     nx_list_init(&wq->waiters);
 }
 
-int nx_waitq_wait_with_deadline(struct nx_waitq *wq, uint64_t budget_ns)
+/* Internal: shared body of wait_with_deadline + wait_unless.  Caller
+ * has already locked (preempt + IRQ); we register, set BLOCKED,
+ * unlock, and yield.  Returns NX_OK on wake, NX_EDEADLINE on
+ * timeout. */
+static int waitq_register_and_wait_locked(struct nx_waitq *wq,
+                                          struct nx_task *t,
+                                          uint64_t budget_ns,
+                                          uint64_t saved_flags)
 {
-    if (!wq) return NX_EINVAL;
-    struct nx_task *t = nx_task_current();
-    if (!t) return NX_EINVAL;
-
-    uint64_t flags = waitq_irq_save();
-    nx_preempt_disable();
-
-    /* Pull current off the runqueue.  If the policy doesn't have
-     * us linked (e.g. a hand-built test fixture), dequeue is a
-     * no-op (NX_ENOENT) — that's fine. */
     const struct nx_scheduler_ops *ops = waitq_sched_ops();
     void *self = waitq_sched_self();
     if (ops && self) {
         ops->dequeue(self, t);
     }
-
-    /* Link onto the waitq via the same sched_node.  FIFO: append
-     * at tail so wake_one releases oldest waiter first. */
     nx_list_add_tail(&wq->waiters, &t->sched_node);
     t->wait_q     = wq;
     t->wait_woken = 0;
@@ -113,17 +107,47 @@ int nx_waitq_wait_with_deadline(struct nx_waitq *wq, uint64_t budget_ns)
     t->state = NX_TASK_BLOCKED;
 
     nx_preempt_enable();
-    waitq_irq_restore(flags);
+    waitq_irq_restore(saved_flags);
 
-    /*
-     * Voluntarily switch out.  We're not on the runqueue any more,
-     * so sched_check_resched picks somebody else.  Control returns
-     * here once a wake (or deadline expiry) has put us back on the
-     * runqueue and the scheduler picks us up.
-     */
     nx_task_yield();
 
     return t->wait_woken ? NX_OK : NX_EDEADLINE;
+}
+
+int nx_waitq_wait_with_deadline(struct nx_waitq *wq, uint64_t budget_ns)
+{
+    if (!wq) return NX_EINVAL;
+    struct nx_task *t = nx_task_current();
+    if (!t) return NX_EINVAL;
+
+    uint64_t flags = waitq_irq_save();
+    nx_preempt_disable();
+
+    return waitq_register_and_wait_locked(wq, t, budget_ns, flags);
+}
+
+int nx_waitq_wait_unless(struct nx_waitq *wq, uint64_t budget_ns,
+                         int (*pred)(void *), void *ctx)
+{
+    if (!wq) return NX_EINVAL;
+    struct nx_task *t = nx_task_current();
+    if (!t) return NX_EINVAL;
+
+    uint64_t flags = waitq_irq_save();
+    nx_preempt_disable();
+
+    /* Re-check the predicate inside the critical section.  If it
+     * already holds, skip the sleep — return NX_OK as if a wake
+     * had fired.  This catches the lost-wakeup race where a
+     * producer changed state + woke between the caller's outer
+     * `cond` check and our entry here. */
+    if (pred && pred(ctx)) {
+        nx_preempt_enable();
+        waitq_irq_restore(flags);
+        return NX_OK;
+    }
+
+    return waitq_register_and_wait_locked(wq, t, budget_ns, flags);
 }
 
 /* Caller must hold preempt-disabled + IRQ-disabled. */

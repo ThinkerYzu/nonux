@@ -60,6 +60,28 @@ void nx_waitq_init(struct nx_waitq *wq);
 int  nx_waitq_wait_with_deadline(struct nx_waitq *wq, uint64_t budget_ns);
 
 /*
+ * Predicate-checked wait.  Re-evaluates `pred(ctx)` inside the
+ * critical section that registers the caller on `wq` — if it
+ * already returns non-zero, the caller is NOT enqueued and the
+ * function returns NX_OK immediately (treating the predicate as
+ * an already-fired wake).
+ *
+ * This is the lost-wakeup-safe wait pattern: callers do
+ *
+ *     while (!cond) {
+ *         nx_waitq_wait_unless(&wq, budget, cond_pred, ctx);
+ *     }
+ *
+ * and a wake that fires after the caller's outer `cond` check but
+ * before the inner predicate check is caught by the predicate.
+ *
+ * Same return contract as `wait_with_deadline`.  `pred` may be NULL
+ * (degrades to plain `wait_with_deadline` semantics).
+ */
+int  nx_waitq_wait_unless(struct nx_waitq *wq, uint64_t budget_ns,
+                          int (*pred)(void *), void *ctx);
+
+/*
  * Release one / all waiter(s) of `wq`.  No-op if the queue is
  * empty.  ISR-safe.
  */
