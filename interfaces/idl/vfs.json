@@ -1,0 +1,111 @@
+{
+  "interface": "vfs",
+  "version": 1,
+  "iface_id": 4097,
+  "doc": "Virtual filesystem interface — slice 6.2.\n\n`nx_vfs_ops` is the upper-layer API that the syscall entry point\n(slice 6.3's `NX_SYS_OPEN / _READ / _WRITE`) calls into.  Bound\nagainst the `vfs` slot; the live implementation is `vfs_simple`,\nwhich delegates to whatever filesystem driver is active at the\nmount point (currently always `/`, served by whatever implements\nthe `filesystem.root` slot).\n\nShape parity with `interfaces/fs.h` is deliberate for v1.  The VFS\nlayer's job in slice 6.2 is a thin pass-through: path stripping +\ndriver dispatch with no semantic additions.  Slice 6.4 grows this\ninterface with `readdir` and `stat` — ops that the lower fs-driver\nAPI also gets but with subtly different contracts (e.g. readdir at\nthe VFS layer iterates across mount boundaries; at the driver\nlayer it stops at the current filesystem's boundary).  Keeping the\ntwo headers separate now means that divergence doesn't require a\nheader split later.\n\nOwnership / concurrency / error conventions match `interfaces/fs.h`\n— see that header's contract.  The VFS layer forwards `nx_fs_ops`'s\nNX_E* return codes unchanged.",
+  "forward_decls_doc": "Forward-declare — full definition in interfaces/fs.h.  Readdir at\nthe VFS layer uses the same entry shape as the fs driver; a future\nmulti-mount VFS may wrap it with mount-path prefixing but the\ncaller-facing struct stays the same.",
+  "constants": [
+    { "name": "NX_VFS_OPEN_READ",   "value": "(1U << 0)",
+      "doc": "Open flags — same bit meanings as `NX_FS_OPEN_*` from fs.h.  Defined\nhere so consumers don't have to include fs.h just to call into the\nVFS.  The VFS layer forwards them to the mounted driver unchanged." },
+    { "name": "NX_VFS_OPEN_WRITE",  "value": "(1U << 1)" },
+    { "name": "NX_VFS_OPEN_CREATE", "value": "(1U << 2)" },
+    { "name": "NX_VFS_OPEN_APPEND", "value": "(1U << 3)" },
+    { "name": "NX_VFS_SEEK_SET",    "value": 0,
+      "doc": "Seek whence (slice 6.4) — same values as `NX_FS_SEEK_*`." },
+    { "name": "NX_VFS_SEEK_CUR",    "value": 1 },
+    { "name": "NX_VFS_SEEK_END",    "value": 2 }
+  ],
+  "ops": [
+    {
+      "name": "open",
+      "op_id": 1,
+      "doc": "Open `path` (absolute, rooted at `/`).  Resolves the mount and\ndispatches to the driver's `nx_fs_ops.open` with the path\nstripped of its mount prefix.  In v1 only `/` is mounted, so the\npath passes through unchanged.\n\nReturns / errors: see `nx_fs_ops.open` — the VFS layer forwards\nthe driver's status unchanged (NX_OK, NX_ENOENT, NX_EPERM,\nNX_ENOMEM, NX_EINVAL).  Additional VFS-specific status:\n  NX_ENOENT  — no filesystem mounted at the resolved mount point.",
+      "params": [
+        { "name": "path", "type": "string_in" },
+        { "name": "flags", "type": "u32" },
+        { "name": "out_file", "type": "opaque_self_handle", "direction": "out" }
+      ],
+      "returns": { "type": "int_status", "out_param": "out_file" }
+    },
+    {
+      "name": "close",
+      "op_id": 2,
+      "doc": "Release per-open state.  See `nx_fs_ops.close`.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" }
+      ],
+      "returns": { "type": "void" }
+    },
+    {
+      "name": "retain",
+      "op_id": 3,
+      "doc": "Retain (bump refcount on) per-open state — slice 7.6d.N.8.\nSee `nx_fs_ops.retain`.  Forwards to the active mount's\ndriver.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" }
+      ],
+      "returns": { "type": "void" }
+    },
+    {
+      "name": "read",
+      "op_id": 4,
+      "doc": "Read / write delegate to the driver's ops.  See `nx_fs_ops.read\n/ .write` for the byte-count return convention.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "buf", "type": "bytes_out", "cap": "cap", "direction": "out" },
+        { "name": "cap", "type": "usize" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "write",
+      "op_id": 5,
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "buf", "type": "bytes_in", "len": "len" },
+        { "name": "len", "type": "usize" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "seek",
+      "op_id": 6,
+      "doc": "Reposition a per-open cursor (slice 6.4).  See `nx_fs_ops.seek`\nfor the contract; v1 VFS forwards unchanged.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "offset", "type": "i64" },
+        { "name": "whence", "type": "i32" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "readdir",
+      "op_id": 7,
+      "doc": "Enumerate the immediate children of `dir_path` (slice 7.7b.1).\nSee `nx_fs_ops.readdir` for the contract; v1 VFS forwards\nunchanged.  A future multi-mount VFS will iterate across mount\nboundaries here — the caller's cookie will then carry a (mount,\nfs-cookie) pair rather than the raw driver cookie.",
+      "params": [
+        { "name": "dir_path", "type": "string_in" },
+        { "name": "cookie", "type": "struct_inout", "ctype": "uint32_t", "direction": "inout" },
+        { "name": "out", "type": "struct_out", "ctype": "struct nx_fs_dirent", "direction": "out" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "mkdir",
+      "op_id": 8,
+      "doc": "Create a directory (slice 7.7b.1).  See `nx_fs_ops.mkdir`.",
+      "params": [
+        { "name": "path", "type": "string_in" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "stat",
+      "op_id": 9,
+      "doc": "Report metadata for `path` (slice 7.7b.1).  See `nx_fs_ops.stat`.",
+      "params": [
+        { "name": "path", "type": "string_in" },
+        { "name": "out", "type": "struct_out", "ctype": "struct nx_fs_stat", "direction": "out" }
+      ],
+      "returns": { "type": "int_status" }
+    }
+  ]
+}

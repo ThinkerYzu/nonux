@@ -62,7 +62,7 @@ OBJS_C   := $(ALL_C:.c=.o)
 OBJS     := $(OBJS_S) $(OBJS_C)
 
 # Default target
-all: verify-registry kernel.bin
+all: verify-registry verify-iface-fresh kernel.bin
 
 # Compile assembly
 %.o: %.S
@@ -140,6 +140,23 @@ deps-dot: kernel.json $(VENV_STAMP)
 verify-registry:
 	$(PYTHON) $(VERIFY) components/
 .PHONY: verify-registry
+
+# IDL → C generator (slice 8.0pre.1).  Reads interfaces/idl/*.json,
+# emits per-interface typedef header + msg structs + sender wrappers
+# + receiver dispatch template.  See proj_docs/nonux/IDL-SCHEMA.md.
+GEN_IFACE := tools/gen-iface.py
+
+gen-iface: $(GEN_IFACE) $(VENV_STAMP)
+	$(PYTHON) $(GEN_IFACE) all interfaces/idl/ interfaces/ framework/
+.PHONY: gen-iface
+
+# Verify the in-tree generated files are byte-identical to a fresh
+# regeneration.  Fails the build if any IDL has been edited without
+# regenerating, or if any generated artefact has been hand-edited.
+# Per DESIGN.md R7, the IDL is the source of truth.
+verify-iface-fresh: $(GEN_IFACE) $(VENV_STAMP)
+	$(PYTHON) $(GEN_IFACE) verify interfaces/idl/ interfaces/ framework/
+.PHONY: verify-iface-fresh
 
 # One-shot venv setup: creates .venv/ and installs tools/requirements.txt.
 # The stamp file $(VENV_STAMP) is our "tools are installed" sentinel —
@@ -1053,7 +1070,7 @@ test/kernel/posix_musl_prog_blob.o: test/kernel/posix_musl_prog_blob.S \
                                     test/kernel/posix_musl_prog.elf
 
 # Tests
-test: verify-registry test-tools test-host test-kernel musl-libc
+test: verify-registry verify-iface-fresh test-tools test-host test-kernel musl-libc
 
 test-host:
 	$(MAKE) -C test/host
@@ -1127,4 +1144,4 @@ clean:
 	       components/posix_shim/libnxlibc.a \
 	       test/kernel/initramfs.cpio test/kernel/banner.txt
 
-.PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean
+.PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean gen-iface verify-iface-fresh

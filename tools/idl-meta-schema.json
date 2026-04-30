@@ -1,0 +1,218 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nonux Component Interface Definition Language (IDL)",
+  "description": "Per-interface IDL file at interfaces/idl/<iface>.json. Consumed by tools/gen-iface.py to emit message structs, ops typedef, sender wrappers, and receiver dispatch templates. Schema spec lives at proj_docs/nonux/IDL-SCHEMA.md (locked Session 80; landing in slice 8.0pre.1).",
+  "type": "object",
+  "required": ["interface", "version", "iface_id", "ops"],
+  "additionalProperties": false,
+  "properties": {
+    "interface": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Interface identifier; must match the JSON filename stem."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bumped on breaking changes (op signature change, removed op, type change)."
+    },
+    "iface_id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "16-bit stable id; unique across interfaces."
+    },
+    "doc": {
+      "type": "string",
+      "description": "Optional; copied verbatim into the generated header banner comment."
+    },
+    "forward_decls_doc": {
+      "type": "string",
+      "description": "Optional block-comment text emitted above the auto-detected forward declarations. The set of forward declarations (struct/union/enum types referenced by op params via 'ctype' but not defined inline) is derived automatically by the generator; this field provides only the leading prose."
+    },
+    "includes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/include_spec" },
+      "description": "Additional headers to #include in the generated typedef header (above and beyond <stddef.h>/<stdint.h> which are always included). Forward extension to the spec; supports interfaces whose ops reference external types (e.g. vfs uses struct nx_fs_dirent from interfaces/fs.h)."
+    },
+    "constants": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/constant_spec" },
+      "description": "Public #define constants emitted at the top of the typedef header. Forward extension to the spec; preserves API surface (e.g. NX_VFS_OPEN_READ) when the hand-written header is replaced by the generator output."
+    },
+    "ops": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/op_spec" },
+      "description": "Ordered op records. op_id values are stable across versions; removed ops leave a gravestone."
+    }
+  },
+  "$defs": {
+    "include_spec": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Header path; quoted with '<...>' if system is true, else '\"...\"'."
+        },
+        "system": {
+          "type": "boolean",
+          "description": "True for <system> includes, false for \"local\" includes. Default: false."
+        },
+        "doc": {
+          "type": "string",
+          "description": "Optional; copied as a trailing comment on the include line."
+        }
+      }
+    },
+    "constant_spec": {
+      "type": "object",
+      "required": ["name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "All-caps C identifier; emitted as #define."
+        },
+        "value": {
+          "description": "Numeric or string literal; emitted verbatim after the macro name. Strings are emitted as-is (no quoting); pass already-quoted forms for string macros.",
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "string" }
+          ]
+        },
+        "doc": {
+          "type": "string",
+          "description": "Optional; copied as a leading-line comment above the #define."
+        }
+      }
+    },
+    "op_spec": {
+      "type": "object",
+      "required": ["name", "op_id", "params", "returns"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Op identifier; matches a C function-pointer field name in struct nx_<iface>_ops."
+        },
+        "op_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Stable; never reused. Removed ops leave a gravestone."
+        },
+        "doc": {
+          "type": "string",
+          "description": "Optional; copied verbatim into generated comments above the op declaration."
+        },
+        "context": {
+          "type": "string",
+          "enum": ["task", "irq"],
+          "default": "task",
+          "description": "Execution context. 'irq' ops emit a fixed-size pre-built pool and an ISR enqueue helper; reserved for slice 8.0pre.3's char_device work."
+        },
+        "pause_policy": {
+          "type": ["string", "null"],
+          "enum": ["queue", "reject", "redirect", null],
+          "default": null,
+          "description": "Per-op override of the slot's pause policy. v1 ignores any non-null value (reserved-only)."
+        },
+        "trace_tag": {
+          "type": "string",
+          "description": "Optional override for the default trace tag (default: <iface>_<name>)."
+        },
+        "params": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/param_spec" },
+          "description": "Ordered, named params. May be empty."
+        },
+        "returns": { "$ref": "#/$defs/return_spec" }
+      }
+    },
+    "param_spec": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "description": "Parameter identifier."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "u8", "u16", "u32", "u64",
+            "i8", "i16", "i32", "i64",
+            "usize", "bool",
+            "string_in",
+            "bytes_in", "bytes_out",
+            "struct_in", "struct_out", "struct_inout",
+            "slot_ref",
+            "opaque_self_handle"
+          ],
+          "description": "Closed type set per IDL-SCHEMA.md."
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["in", "out", "inout"],
+          "default": "in",
+          "description": "Drives copy-in/copy-out behavior in the wrapper and dispatch template."
+        },
+        "doc": {
+          "type": "string"
+        },
+        "len": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "description": "For bytes_in: name of the param holding the length."
+        },
+        "cap": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "description": "For bytes_out: name of the param holding the buffer cap."
+        },
+        "ctype": {
+          "type": "string",
+          "description": "For struct_in/_out/_inout: verbatim C type name (e.g. 'struct nx_fs_stat', 'uint32_t')."
+        },
+        "ownership": {
+          "type": "string",
+          "enum": ["borrow", "transfer"],
+          "default": "borrow",
+          "description": "For slot_ref: cap ownership semantic."
+        },
+        "max_len": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4096,
+          "description": "For string_in: per-param ceiling on length (NUL excluded). Generator caps at this value."
+        }
+      }
+    },
+    "return_spec": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["void", "int_status", "i64_count_or_status", "usize", "void_ptr"],
+          "description": "Principal return shape."
+        },
+        "out_param": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "description": "Optional; names the param carrying principal output (the param itself must have direction: 'out' or 'inout')."
+        },
+        "doc": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

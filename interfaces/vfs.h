@@ -1,3 +1,9 @@
+/*
+ * GENERATED — DO NOT EDIT.
+ * Source: interfaces/idl/vfs.json
+ * Generator: tools/gen-iface.py
+ */
+
 #ifndef NONUX_INTERFACE_VFS_H
 #define NONUX_INTERFACE_VFS_H
 
@@ -29,9 +35,11 @@
  * NX_E* return codes unchanged.
  */
 
-/* Open flags — same bit meanings as `NX_FS_OPEN_*` from fs.h.  Defined
+/*
+ * Open flags — same bit meanings as `NX_FS_OPEN_*` from fs.h.  Defined
  * here so consumers don't have to include fs.h just to call into the
- * VFS.  The VFS layer forwards them to the mounted driver unchanged. */
+ * VFS.  The VFS layer forwards them to the mounted driver unchanged.
+ */
 #define NX_VFS_OPEN_READ     (1U << 0)
 #define NX_VFS_OPEN_WRITE    (1U << 1)
 #define NX_VFS_OPEN_CREATE   (1U << 2)
@@ -42,10 +50,12 @@
 #define NX_VFS_SEEK_CUR      1
 #define NX_VFS_SEEK_END      2
 
-/* Forward-declare — full definition in interfaces/fs.h.  Readdir at
+/*
+ * Forward-declare — full definition in interfaces/fs.h.  Readdir at
  * the VFS layer uses the same entry shape as the fs driver; a future
  * multi-mount VFS may wrap it with mount-path prefixing but the
- * caller-facing struct stays the same. */
+ * caller-facing struct stays the same.
+ */
 struct nx_fs_dirent;
 struct nx_fs_stat;
 
@@ -61,19 +71,22 @@ struct nx_vfs_ops {
      * NX_ENOMEM, NX_EINVAL).  Additional VFS-specific status:
      *   NX_ENOENT  — no filesystem mounted at the resolved mount point.
      */
-    int (*open)(void *self, const char *path, uint32_t flags,
-                void **out_file);
+    int (*open)(void *self, const char *path, uint32_t flags, void **out_file);
 
     /* Release per-open state.  See `nx_fs_ops.close`. */
     void (*close)(void *self, void *file);
 
-    /* Retain (bump refcount on) per-open state — slice 7.6d.N.8.
+    /*
+     * Retain (bump refcount on) per-open state — slice 7.6d.N.8.
      * See `nx_fs_ops.retain`.  Forwards to the active mount's
-     * driver. */
+     * driver.
+     */
     void (*retain)(void *self, void *file);
 
-    /* Read / write delegate to the driver's ops.  See `nx_fs_ops.read
-     * / .write` for the byte-count return convention. */
+    /*
+     * Read / write delegate to the driver's ops.  See `nx_fs_ops.read
+     * / .write` for the byte-count return convention.
+     */
     int64_t (*read)(void *self, void *file, void *buf, size_t cap);
     int64_t (*write)(void *self, void *file, const void *buf, size_t len);
 
@@ -90,17 +103,13 @@ struct nx_vfs_ops {
      * boundaries here — the caller's cookie will then carry a (mount,
      * fs-cookie) pair rather than the raw driver cookie.
      */
-    int (*readdir)(void *self, const char *dir_path,
-                   uint32_t *cookie, struct nx_fs_dirent *out);
+    int (*readdir)(void *self, const char *dir_path, uint32_t *cookie,
+                   struct nx_fs_dirent *out);
 
-    /*
-     * Create a directory (slice 7.7b.1).  See `nx_fs_ops.mkdir`.
-     */
+    /* Create a directory (slice 7.7b.1).  See `nx_fs_ops.mkdir`. */
     int (*mkdir)(void *self, const char *path);
 
-    /*
-     * Report metadata for `path` (slice 7.7b.1).  See `nx_fs_ops.stat`.
-     */
+    /* Report metadata for `path` (slice 7.7b.1).  See `nx_fs_ops.stat`. */
     int (*stat)(void *self, const char *path, struct nx_fs_stat *out);
 };
 

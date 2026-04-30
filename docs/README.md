@@ -84,4 +84,4 @@ upgrade is a barrier swap, not a restructure.
 
 - [`../README.md`](../README.md) — project-level overview and quick-start.
 - [`../tools/README.md`](../tools/README.md) — build tooling (`gen-config.py`,
-  `validate-config.py`, `verify-registry.py`).
+  `gen-iface.py`, `validate-config.py`, `verify-registry.py`).

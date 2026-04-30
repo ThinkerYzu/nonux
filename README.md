@@ -21,7 +21,7 @@ make run-busybox          # interactive busybox shell over UART — Ctrl-A X to 
 tools/run-qemu.sh -t 5    # timed run (the kernel halts in wfe)
 
 # Test
-make test                 # 432/432 green
+make test                 # 471/471 green
 make test-interactive     # canned scripts piped into the busybox shell
 
 # Validate config
@@ -48,7 +48,7 @@ the code under [`docs/`](docs/):
 - [Component lifecycle](docs/framework-components.md) — six-verb state machine, `nx_component_ops`, pause protocol, dependency injection.
 - [IPC router](docs/framework-ipc.md) — `nx_ipc_send` / dispatch, pause-policy routing, capabilities, `slot_ref_retain/release`.
 - [Hook framework](docs/framework-hooks.md) — per-hook-point chains, typed contexts, mark-then-sweep unregister.
-- [Tool chain](tools/README.md) — `gen-config.py`, `validate-config.py`, `verify-registry.py`.
+- [Tool chain](tools/README.md) — `gen-config.py`, `gen-iface.py`, `validate-config.py`, `verify-registry.py`.
 
 Start at [`docs/README.md`](docs/README.md) for the index and the
 shared error-code table.

@@ -1,9 +1,13 @@
 # nonux build tooling
 
-Small Python tool chain that drives the nonux build. Three scripts:
+Small Python tool chain that drives the nonux build. Four scripts:
 
 - **`gen-config.py`** — code generator. Stdlib-only; emits C and Make
   artefacts from JSON inputs.
+- **`gen-iface.py`** — IDL-driven interface generator (slice 8.0pre.1).
+  Reads `interfaces/idl/<iface>.json`; emits the typedef header, message
+  structs, sender wrappers, and dispatch template per interface.  Uses
+  `jsonschema` if available, with a stdlib fallback.
 - **`validate-config.py`** — whole-tree validator. Needs the venv
   (depends on `jsonschema`).
 - **`verify-registry.py`** — Layer-1 machine checker for DESIGN.md's
@@ -168,6 +172,79 @@ stays as a convenience alias.
 
 ---
 
+## `gen-iface.py`
+
+IDL-driven interface code generator (slice 8.0pre.1).  Per DESIGN.md
+R7, the IDL is the source of truth post-cutover; the C-level shape
+(preprocessor macros, struct fields, forward declarations, signatures)
+is a deterministic function of the IDL.  See
+`tools/idl-meta-schema.json` for the per-interface JSON schema.
+
+Reads `interfaces/idl/<iface>.json` files and emits four artefacts per
+interface:
+
+- **`interfaces/<iface>.h`** — `struct nx_<iface>_ops` typedef +
+  constants + forward declarations.  Carries a
+  `GENERATED — DO NOT EDIT` banner; byte-equality is enforced by
+  `make verify-iface-fresh`.
+- **`interfaces/<iface>_msg.h`** — `enum nx_<iface>_op_id` + per-op
+  request/reply message structs.
+- **`framework/<iface>_call.h`** — per-op sender wrappers that call
+  `nx_slot_call_blocking()` (lands in slice 8.0a).
+- **`framework/<iface>_dispatch.h`** — receiver-side `handle_msg`
+  dispatch template.
+
+The generated `_msg.h` / `_call.h` / `_dispatch.h` files are not
+included by production code today; slice 8.0a–e migrates the kernel
+onto them.
+
+### Subcommands
+
+```
+gen-iface.py all    <idl_dir> <interfaces_dir> <framework_dir>
+gen-iface.py one    <idl_file> <interfaces_dir> <framework_dir>
+gen-iface.py verify <idl_dir> <interfaces_dir> <framework_dir>
+```
+
+- **`all`** — scan `idl_dir` for `*.json`; regenerate every artefact.
+  Backed by `make gen-iface`.
+- **`one`** — regenerate artefacts for a single interface.  Used by
+  the test suite.
+- **`verify`** — re-run the generator into a tempdir and diff against
+  the in-tree files.  Exits non-zero on any drift, on a stale IDL, or
+  on a meta-schema check failure.  Backed by `make verify-iface-fresh`,
+  which is wired as a prerequisite of `all` and `test` alongside
+  `verify-registry`.
+
+### Type system
+
+Closed param-type set (12 types): `u8`/`u16`/`u32`/`u64` /
+`i8`/`i16`/`i32`/`i64` / `usize` / `bool`, `string_in`,
+`bytes_in`/`bytes_out`, `struct_in`/`struct_out`/`struct_inout`,
+`slot_ref` (lives in `msg->caps[]`, not payload),
+`opaque_self_handle` (plain `u64`).  Type mapping is asymmetric to
+match today's hand-written headers: `u32 → uint32_t` but
+`i32 → int` (C's `int` is 32-bit on aarch64); `i64 → int64_t`.
+
+### Exit codes
+
+`0` on success; `2` on schema validation failure, malformed JSON, or
+(for `verify`) any drift between the IDL and the in-tree generated
+files.
+
+### Makefile targets
+
+```sh
+make gen-iface           # regenerate every artefact
+make verify-iface-fresh  # diff in-tree against fresh regeneration
+```
+
+`verify-iface-fresh` is implicitly run by `make` and `make test`, so
+hand-edits to a generated header (or an unregenerated IDL) block the
+build.
+
+---
+
 ## `validate-config.py`
 
 Whole-tree validation. Walks `kernel.json` + every referenced
@@ -287,9 +364,15 @@ they arrive.
 
 ## Unit tests
 
-47 stdlib-unittest tests under `tools/tests/`:
+69 stdlib-unittest tests under `tools/tests/`:
 
 - `test_gen_config.py` — 15 tests covering both subcommands
+- `test_gen_iface.py` — 18 tests across 9 classes covering schema
+  validation, byte-for-byte regeneration of in-tree `vfs.h`, generator
+  determinism, forward-decl auto-detection, constant grouping +
+  global value-column alignment, msg-header op-id enum + per-op
+  req/reply structs, wrapper signatures, dispatch macro coverage, and
+  `verify` drift detection
 - `test_validate_config.py` — 16 tests covering version parsing,
   cycle detection, and 8 end-to-end tempdir-based fixtures
 - `test_verify_registry.py` — 16 tests covering the `--list` output,
