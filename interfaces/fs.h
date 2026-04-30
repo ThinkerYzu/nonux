@@ -1,8 +1,15 @@
+/*
+ * GENERATED — DO NOT EDIT.
+ * Source: interfaces/idl/fs.json
+ * Generator: tools/gen-iface.py
+ */
+
 #ifndef NONUX_INTERFACE_FS_H
 #define NONUX_INTERFACE_FS_H
 
 #include <stddef.h>
 #include <stdint.h>
+#include "interfaces/fs_types.h"  /* Data shapes (struct nx_fs_dirent, struct nx_fs_stat) and their bound constants (NX_FS_DIRENT_NAME_MAX, NX_FS_KIND_*) — hand-written, shared with vfs.h. */
 
 /*
  * Filesystem-driver interface — slice 6.1.
@@ -44,15 +51,14 @@
  *   declared `void` — callers cannot recover from a bad close.
  */
 
-/* ---------- Open flags -------------------------------------------------- */
 /*
- * Bitmask passed to `open`.  READ and WRITE select the requested access
- * mode (a driver MAY reject write-on-read-only or similar, returning
- * NX_EPERM).  CREATE asks the driver to create the file if absent —
- * absent this flag, `open` on a missing path returns NX_ENOENT.  Opening
- * an existing file WITH `CREATE` is permitted (not an error); truncate
- * semantics are driver-defined in v1 (a future slice adds an explicit
- * TRUNCATE bit when a consumer needs it).
+ * Open flags.  Bitmask passed to `open`.  READ and WRITE select the
+ * requested access mode (a driver MAY reject write-on-read-only or
+ * similar, returning NX_EPERM).  CREATE asks the driver to create the
+ * file if absent — absent this flag, `open` on a missing path returns
+ * NX_ENOENT.  Opening an existing file WITH `CREATE` is permitted (not
+ * an error); truncate semantics are driver-defined in v1 (a future
+ * slice adds an explicit TRUNCATE bit when a consumer needs it).
  *
  * APPEND (slice 7.6d.N.11): every `write` advances the cursor to
  * end-of-file *before* writing.  Maps to POSIX `O_APPEND`; ash uses it
@@ -65,49 +71,13 @@
 #define NX_FS_OPEN_CREATE   (1U << 2)
 #define NX_FS_OPEN_APPEND   (1U << 3)
 
-/* ---------- Seek whence (slice 6.4) ------------------------------------ */
-#define NX_FS_SEEK_SET      0    /* absolute offset */
-#define NX_FS_SEEK_CUR      1    /* relative to current cursor */
-#define NX_FS_SEEK_END      2    /* relative to current file size */
-
-/* ---------- Readdir entry (slice 6.4) ---------------------------------- */
 /*
- * A single directory entry.  Fixed-size `name[]` for v1 so readdir can
- * bulk-copy into user space without per-entry malloc; `name_len` is
- * the byte count excluding the trailing NUL.  Name is always NUL-
- * terminated even when `name_len == NX_FS_DIRENT_NAME_MAX - 1`.
- *
- * Slice 7.7b.1: readdir takes a `dir_path` argument and returns
- * basenames of immediate children of that directory.  Drivers that
- * stored hierarchical paths verbatim (e.g. ramfs's `/bin/busybox`)
- * project them to the segment immediately following `dir_path` and
- * deduplicate within a single iteration so each directory child is
- * yielded exactly once.
+ * Seek whence (slice 6.4).  SET = absolute offset, CUR = relative to
+ * current cursor, END = relative to current file size.
  */
-#define NX_FS_DIRENT_NAME_MAX  64u
-
-struct nx_fs_dirent {
-    uint32_t name_len;
-    char     name[NX_FS_DIRENT_NAME_MAX];
-};
-
-/* ---------- Stat info (slice 7.7b.1) ----------------------------------- */
-/*
- * Minimum metadata the syscall layer needs to distinguish a file from
- * a directory and report a size.  Filesystems may surface richer info
- * later; for v1 the shape is "kind + size" only — the syscall layer
- * synthesises owner/perms/timestamps when packing the Linux struct
- * stat for `sys_fstatat`.
- */
-#define NX_FS_KIND_FILE   1u
-#define NX_FS_KIND_DIR    2u
-
-struct nx_fs_stat {
-    uint32_t kind;     /* NX_FS_KIND_FILE or NX_FS_KIND_DIR */
-    int64_t  size;     /* bytes; 0 for directories in v1 */
-};
-
-/* ---------- Ops table --------------------------------------------------- */
+#define NX_FS_SEEK_SET      0
+#define NX_FS_SEEK_CUR      1
+#define NX_FS_SEEK_END      2
 
 struct nx_fs_ops {
     /*
@@ -122,8 +92,7 @@ struct nx_fs_ops {
      *   NX_EPERM   — driver refuses the requested access mode.
      *   NX_ENOMEM  — driver could not allocate per-open state.
      */
-    int (*open)(void *self, const char *path, uint32_t flags,
-                void **out_file);
+    int (*open)(void *self, const char *path, uint32_t flags, void **out_file);
 
     /*
      * Release per-open state returned by `open`.  Idempotent against
@@ -226,8 +195,8 @@ struct nx_fs_ops {
      *                does not name an existing directory.
      *   NX_EINVAL  — NULL args / `dir_path` not absolute.
      */
-    int (*readdir)(void *self, const char *dir_path,
-                   uint32_t *cookie, struct nx_fs_dirent *out);
+    int (*readdir)(void *self, const char *dir_path, uint32_t *cookie,
+                   struct nx_fs_dirent *out);
 
     /*
      * Create a directory at `path` (slice 7.7b.1).  `path` is absolute.

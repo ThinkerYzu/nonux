@@ -123,6 +123,30 @@ class TestVfsByteForByte(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class TestFsByteForByte(unittest.TestCase):
+    """Slice 8.0pre.2: in-tree interfaces/fs.h is byte-identical to a
+    fresh regeneration from interfaces/idl/fs.json.  Both fs.json and
+    vfs.json declare interfaces/fs_types.h via the `includes:` array
+    so the typedef header transitively pulls in struct nx_fs_dirent /
+    struct nx_fs_stat from a hand-written types header — IDL describes
+    operations only; data layout stays in C."""
+
+    def test_fs_h_is_canonical(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "fs.json"
+        intree_h  = ROOT / "interfaces" / "fs.h"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        regenerated = gi.render_iface_header(idl, idl_path.name)
+        self.assertEqual(intree_h.read_text(), regenerated)
+
+    def test_fs_idl_declares_types_header_include(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "fs.json"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        paths = [inc["path"] for inc in idl.get("includes", [])]
+        self.assertIn("interfaces/fs_types.h", paths)
+
+
 class TestGeneratorDeterminism(unittest.TestCase):
     """Same input + same generator version → byte-identical output across
     invocations.  Required for verify-iface-fresh to be a meaningful
@@ -253,6 +277,73 @@ class TestDispatchHeader(unittest.TestCase):
         self.assertIn("#define NX_DEMO_DISPATCH(self, ops, msg)", d)
         self.assertIn("case NX_DEMO_OP_PING:", d)
         self.assertIn("case NX_DEMO_OP_BLOB:", d)
+
+
+class TestIncludesAuthorDeclared(unittest.TestCase):
+    """Slice 8.0pre.2: the IDL's `includes:` array names hand-written
+    headers that provide types referenced by op-param ctypes.  The
+    generator emits those includes in BOTH the typedef header and the
+    msg header (the msg header embeds struct values by sizeof, so it
+    needs the full def too).  When `includes:` is non-empty, the
+    auto-detected forward-declaration list is suppressed — the
+    author's includes carry the definitions."""
+
+    def _idl_with_include(self) -> dict:
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["includes"] = [
+            {"path": "interfaces/demo_types.h",
+             "doc": "Hand-written types shared with another iface."}
+        ]
+        idl["ops"].append({
+            "name": "fetch", "op_id": 3,
+            "params": [
+                {"name": "out", "type": "struct_out",
+                 "ctype": "struct nx_demo_blob", "direction": "out"}
+            ],
+            "returns": {"type": "int_status"},
+        })
+        return idl
+
+    def test_include_emitted_in_typedef_header(self):
+        h = gi.render_iface_header(self._idl_with_include(), "demo.json")
+        self.assertIn('#include "interfaces/demo_types.h"', h)
+
+    def test_include_emitted_in_msg_header(self):
+        m = gi.render_msg_header(self._idl_with_include(), "demo.json")
+        self.assertIn('#include "interfaces/demo_types.h"', m)
+
+    def test_includes_present_suppresses_forward_decls(self):
+        # When includes: is non-empty, types referenced via op-param
+        # ctypes are assumed provided by the include — no auto-detected
+        # forward decl emitted (which would shadow the include's full def).
+        h = gi.render_iface_header(self._idl_with_include(), "demo.json")
+        self.assertNotIn("\nstruct nx_demo_blob;\n", h)
+
+    def test_no_includes_keeps_forward_decls(self):
+        # Without includes: the auto-detected forward decls still fire
+        # (legacy behavior; required for interfaces that consume types
+        # via opaque pointer without including the defining header).
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "fetch", "op_id": 3,
+            "params": [
+                {"name": "out", "type": "struct_out",
+                 "ctype": "struct nx_demo_blob", "direction": "out"}
+            ],
+            "returns": {"type": "int_status"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("struct nx_demo_blob;", h)
+
+    def test_msg_header_includes_match_typedef_header(self):
+        """The IDL's `includes:` should appear in BOTH headers — the
+        typedef sees them for forward-decl suppression and signature
+        types; the msg header sees them for embedded struct sizeof."""
+        idl = self._idl_with_include()
+        h = gi.render_iface_header(idl, "demo.json")
+        m = gi.render_msg_header(idl, "demo.json")
+        self.assertIn('#include "interfaces/demo_types.h"', h)
+        self.assertIn('#include "interfaces/demo_types.h"', m)
 
 
 class TestVerifyDetectsDrift(unittest.TestCase):

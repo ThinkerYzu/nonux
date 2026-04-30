@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "interfaces/fs_types.h"  /* Data shapes (struct nx_fs_dirent, struct nx_fs_stat) shared with fs.h.  Readdir at the VFS layer uses the same entry shape as the fs driver; a future multi-mount VFS may wrap it with mount-path prefixing but the caller-facing struct stays the same. */
 
 /*
  * Virtual filesystem interface — slice 6.2.
@@ -49,15 +50,6 @@
 #define NX_VFS_SEEK_SET      0
 #define NX_VFS_SEEK_CUR      1
 #define NX_VFS_SEEK_END      2
-
-/*
- * Forward-declare — full definition in interfaces/fs.h.  Readdir at
- * the VFS layer uses the same entry shape as the fs driver; a future
- * multi-mount VFS may wrap it with mount-path prefixing but the
- * caller-facing struct stays the same.
- */
-struct nx_fs_dirent;
-struct nx_fs_stat;
 
 struct nx_vfs_ops {
     /*

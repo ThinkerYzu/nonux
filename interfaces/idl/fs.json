@@ -1,0 +1,115 @@
+{
+  "interface": "fs",
+  "version": 1,
+  "iface_id": 4098,
+  "doc": "Filesystem-driver interface — slice 6.1.\n\nEvery filesystem driver (ramfs in slice 6.2, a future ext2 / tmpfs / ...)\nimplements a `const struct nx_fs_ops` table and exposes a `void *self`\ninstance carrying its private state.  The upper VFS layer (slice 6.2's\n`components/vfs_simple/`) consumes this interface once per active mount:\nit calls through `ops->open / close / read / write` to translate a\n`(path, flags)` pair on behalf of a userspace syscall into per-open\nstate and byte-stream operations on the underlying driver.\n\nPath convention.\n  Paths passed to `open` are driver-local — the VFS strips any mount\n  prefix before dispatch.  A single leading '/' is the root.  Slice\n  6.1 permits any NUL-terminated string; ramfs will define its own\n  naming rules when it lands.  Implementations must not dereference\n  the `path` pointer past the call (they may copy the bytes they\n  care about; the caller's buffer may be reused immediately after).\n\nOwnership.\n  `open` returns an opaque per-open \"file state\" pointer.  Callers\n  must pair each successful open with a matching `close` — the driver\n  owns the state between those two calls and may free it in `close`.\n  `read` / `write` advance a per-open cursor that lives inside the\n  file-state object; two distinct opens on the same path have two\n  distinct cursors.\n\nConcurrency.\n  v1 is single-CPU.  All ops run under the same preemption discipline\n  as the calling VFS layer (caller holds any serialisation it needs).\n  Implementations do not need internal locks in slice 6.1.\n\nError convention.\n  Status-returning ops (`open`) use `NX_OK` / negative `NX_E*` from\n  `framework/registry.h`.  Byte-count ops (`read` / `write`) return\n  `>= 0` on success and a negative `NX_E*` on failure, matching the\n  channel send/recv shape (see `framework/channel.h`).  `close` is\n  declared `void` — callers cannot recover from a bad close.",
+  "includes": [
+    { "path": "interfaces/fs_types.h",
+      "doc": "Data shapes (struct nx_fs_dirent, struct nx_fs_stat) and their bound constants (NX_FS_DIRENT_NAME_MAX, NX_FS_KIND_*) — hand-written, shared with vfs.h." }
+  ],
+  "constants": [
+    { "name": "NX_FS_OPEN_READ",   "value": "(1U << 0)",
+      "doc": "Open flags.  Bitmask passed to `open`.  READ and WRITE select the\nrequested access mode (a driver MAY reject write-on-read-only or\nsimilar, returning NX_EPERM).  CREATE asks the driver to create the\nfile if absent — absent this flag, `open` on a missing path returns\nNX_ENOENT.  Opening an existing file WITH `CREATE` is permitted (not\nan error); truncate semantics are driver-defined in v1 (a future\nslice adds an explicit TRUNCATE bit when a consumer needs it).\n\nAPPEND (slice 7.6d.N.11): every `write` advances the cursor to\nend-of-file *before* writing.  Maps to POSIX `O_APPEND`; ash uses it\nfor `>>`-style stdout redirection.  Independent of WRITE in the bit\nmask, but a driver MAY return NX_EPERM if a write happens on an\nAPPEND-only open without WRITE set." },
+    { "name": "NX_FS_OPEN_WRITE",  "value": "(1U << 1)" },
+    { "name": "NX_FS_OPEN_CREATE", "value": "(1U << 2)" },
+    { "name": "NX_FS_OPEN_APPEND", "value": "(1U << 3)" },
+    { "name": "NX_FS_SEEK_SET", "value": 0,
+      "doc": "Seek whence (slice 6.4).  SET = absolute offset, CUR = relative to\ncurrent cursor, END = relative to current file size." },
+    { "name": "NX_FS_SEEK_CUR", "value": 1 },
+    { "name": "NX_FS_SEEK_END", "value": 2 }
+  ],
+  "ops": [
+    {
+      "name": "open",
+      "op_id": 1,
+      "doc": "Open `path` on the driver instance `self`.  `flags` is a bitmask\nof `NX_FS_OPEN_*`.  On success, `*out_file` is written with an\nopaque per-open state pointer and NX_OK is returned.\n\nReturns:\n  NX_OK      — *out_file holds the new file-state pointer.\n  NX_EINVAL  — NULL args / empty path / unknown flag bits.\n  NX_ENOENT  — path missing and CREATE not set.\n  NX_EPERM   — driver refuses the requested access mode.\n  NX_ENOMEM  — driver could not allocate per-open state.",
+      "params": [
+        { "name": "path", "type": "string_in" },
+        { "name": "flags", "type": "u32" },
+        { "name": "out_file", "type": "opaque_self_handle", "direction": "out" }
+      ],
+      "returns": { "type": "int_status", "out_param": "out_file" }
+    },
+    {
+      "name": "close",
+      "op_id": 2,
+      "doc": "Release per-open state returned by `open`.  Idempotent against\nNULL.  After close, the `file` pointer is dead — passing it to\nany other op is a programmer error (driver may assert / trap /\nsilently corrupt state; well-behaved callers don't do it).\n\nSlice 7.6d.N.8 introduces refcounted per-open state (see\n`retain` below) so a `dup3(file_fd, ...)` + `close(file_fd)`\nsequence keeps the duplicated handle alive.  `close` becomes\n\"decrement the refcount; release when zero\".  Callers don't\nsee the refcount: pair every successful open / retain with\nexactly one close.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" }
+      ],
+      "returns": { "type": "void" }
+    },
+    {
+      "name": "retain",
+      "op_id": 3,
+      "doc": "Bump the per-open's reference count (slice 7.6d.N.8).  Used by\nthe syscall layer when the same per-open state is referenced\nfrom multiple handle slots (POSIX dup / dup2 / dup3 / fcntl\nF_DUPFD; future fork-FILE inheritance) — the retained\nreference must be paired with a matching `close`.\n\nDrivers that don't implement refcounting MAY leave this op\nNULL; the syscall layer falls back to \"no retain\" in that\ncase.  ramfs implements it as a refcount bump on its\nper-open struct.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" }
+      ],
+      "returns": { "type": "void" }
+    },
+    {
+      "name": "read",
+      "op_id": 4,
+      "doc": "Read up to `cap` bytes from `file` into `buf`, starting at the\nper-open cursor.  Advances the cursor by the number of bytes\nactually read.  `cap == 0` is permitted and returns 0.\n\nReturns:\n  >= 0       — bytes read (0 = end-of-file at current cursor).\n  NX_EINVAL  — NULL args (except `buf` when `cap == 0`).\n  NX_EPERM   — file was opened without NX_FS_OPEN_READ.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "buf", "type": "bytes_out", "cap": "cap", "direction": "out" },
+        { "name": "cap", "type": "usize" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "write",
+      "op_id": 5,
+      "doc": "Write `len` bytes from `buf` into `file` at the per-open cursor,\nextending the file if the cursor is at (or past) end-of-file.\nAdvances the cursor by the number of bytes actually written.\n`len == 0` is permitted and returns 0.\n\nReturns:\n  >= 0       — bytes written (may be < len if the backing store\n               filled; caller retries with the remaining tail).\n  NX_EINVAL  — NULL args (except `buf` when `len == 0`).\n  NX_EPERM   — file was opened without NX_FS_OPEN_WRITE.\n  NX_ENOMEM  — backing store exhausted before any bytes written.",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "buf", "type": "bytes_in", "len": "len" },
+        { "name": "len", "type": "usize" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "seek",
+      "op_id": 6,
+      "doc": "Reposition the per-open cursor (slice 6.4).  `whence` is one of\n`NX_FS_SEEK_SET` (absolute), `_CUR` (relative to current cursor),\nor `_END` (relative to current size).  The new position must\nland in `[0, size]` inclusive — past-EOF seeks return NX_EINVAL\n(no hole-filling in v1; callers write in sequence or SEEK_END).\n\nReturns the new absolute cursor position on success (≥ 0), or a\nnegative NX_E* on failure:\n  NX_EINVAL  — NULL args, unknown whence, or resulting position\n               outside [0, size].",
+      "params": [
+        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "offset", "type": "i64" },
+        { "name": "whence", "type": "i32" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "readdir",
+      "op_id": 7,
+      "doc": "Read the next entry under `dir_path` (slice 7.7b.1).\n\n`dir_path` is an absolute path (starts with `/`) naming a\ndirectory whose immediate children should be enumerated.  For\n`dir_path == \"/\"` the driver yields each top-level child.  For\n`dir_path == \"/bin\"` the driver yields each entry whose stored\nname has `/bin/` as a prefix, projected to the segment between\n`/bin/` and the next `/` (or end-of-string).\n\n`cookie` is caller-owned iterator state: initialise to 0, pass\nthe same pointer on every call; the driver advances it so the\nnext call returns the next entry.  Cookies are driver-defined\n(v1 ramfs uses the slot index directly) but always monotonically\nadvance — callers may save a cookie and resume later without\nlosing iteration position, but must not tamper with values the\ndriver wrote.\n\n`out->name` carries the basename only (no leading slash, no\nembedded `/`).  Drivers must deduplicate within a single\niteration so each immediate child is yielded exactly once even\nwhen several stored paths project to the same first segment\n(e.g. `/bin/sh` and `/bin/cat` both project to `bin` when\niterating `/`).\n\nReturns:\n  NX_OK      — `*out` populated; `*cookie` advanced.\n  NX_ENOENT  — no more entries (iteration complete) or `dir_path`\n               does not name an existing directory.\n  NX_EINVAL  — NULL args / `dir_path` not absolute.",
+      "params": [
+        { "name": "dir_path", "type": "string_in" },
+        { "name": "cookie", "type": "struct_inout", "ctype": "uint32_t", "direction": "inout" },
+        { "name": "out", "type": "struct_out", "ctype": "struct nx_fs_dirent", "direction": "out" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "mkdir",
+      "op_id": 8,
+      "doc": "Create a directory at `path` (slice 7.7b.1).  `path` is absolute.\nParent directory existence is not enforced in v1 — `mkdir\n/a/b/c` succeeds even when `/a` and `/a/b` are absent (consistent\nwith how the cpio loader stores file paths verbatim without\nintermediate dir entries).\n\nReturns:\n  NX_OK      — directory created.\n  NX_EEXIST  — `path` already names a file or directory.\n  NX_ENOMEM  — driver storage exhausted.\n  NX_EINVAL  — NULL args / non-absolute / empty path.",
+      "params": [
+        { "name": "path", "type": "string_in" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "stat",
+      "op_id": 9,
+      "doc": "Report metadata for `path` (slice 7.7b.1).  Used by the syscall\nlayer to distinguish file from directory before deciding whether\nto allocate a HANDLE_FILE or a HANDLE_DIR, and to report sizes\nto `fstatat` callers.\n\nDrivers may synthesise directory results for path prefixes that\nmatch no stored entry but match as a parent of one (e.g.\n`stat(\"/bin\")` returns DIR if `/bin/sh` is stored even though\n`/bin` itself was never explicitly created).  The root path\n`\"/\"` always reports DIR.\n\nReturns:\n  NX_OK      — `*out` populated.\n  NX_ENOENT  — no entry matches `path`.\n  NX_EINVAL  — NULL args / non-absolute path.",
+      "params": [
+        { "name": "path", "type": "string_in" },
+        { "name": "out", "type": "struct_out", "ctype": "struct nx_fs_stat", "direction": "out" }
+      ],
+      "returns": { "type": "int_status" }
+    }
+  ]
+}

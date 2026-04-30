@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "interfaces/fs_types.h"
 
 /* Op-IDs for `vfs` interface.  Stable across versions; removed ops
  * leave their slot as a gravestone — never reuse a freed id. */

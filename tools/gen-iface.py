@@ -197,7 +197,12 @@ _TAGGED_TYPE_RE = re.compile(r"^(struct|union|enum)\s+\S+$")
 
 def collect_forward_decls(idl: dict) -> list[str]:
     """Return tagged-type ctypes referenced by op params, in order of
-    first appearance (op_id ascending; param order within an op)."""
+    first appearance (op_id ascending; param order within an op).
+    When the IDL declares author-supplied `includes:`, those are assumed
+    to provide the full definitions for any tagged types so we skip
+    forward decls — the include's full definition is the declaration."""
+    if idl.get("includes"):
+        return []
     seen: set[str] = set()
     order: list[str] = []
     for op in idl["ops"]:
@@ -555,6 +560,15 @@ def render_msg_header(idl: dict, idl_filename: str) -> str:
     out.append("")
     out.append("#include <stddef.h>")
     out.append("#include <stdint.h>")
+    # Author-supplied includes (e.g., interfaces/fs_types.h).  The msg
+    # struct may embed types declared there by value (e.g.,
+    # `struct nx_fs_dirent out;`), so the full definition must be in
+    # scope here just like in the typedef header.
+    for inc in idl.get("includes", []):
+        sysinc = inc.get("system", False)
+        path = inc["path"]
+        formatted = f"<{path}>" if sysinc else f'"{path}"'
+        out.append(f"#include {formatted}")
     out.append("")
     out.append(
         f"/* Op-IDs for `{name}` interface.  Stable across versions; "

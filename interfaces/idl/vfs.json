@@ -3,7 +3,10 @@
   "version": 1,
   "iface_id": 4097,
   "doc": "Virtual filesystem interface — slice 6.2.\n\n`nx_vfs_ops` is the upper-layer API that the syscall entry point\n(slice 6.3's `NX_SYS_OPEN / _READ / _WRITE`) calls into.  Bound\nagainst the `vfs` slot; the live implementation is `vfs_simple`,\nwhich delegates to whatever filesystem driver is active at the\nmount point (currently always `/`, served by whatever implements\nthe `filesystem.root` slot).\n\nShape parity with `interfaces/fs.h` is deliberate for v1.  The VFS\nlayer's job in slice 6.2 is a thin pass-through: path stripping +\ndriver dispatch with no semantic additions.  Slice 6.4 grows this\ninterface with `readdir` and `stat` — ops that the lower fs-driver\nAPI also gets but with subtly different contracts (e.g. readdir at\nthe VFS layer iterates across mount boundaries; at the driver\nlayer it stops at the current filesystem's boundary).  Keeping the\ntwo headers separate now means that divergence doesn't require a\nheader split later.\n\nOwnership / concurrency / error conventions match `interfaces/fs.h`\n— see that header's contract.  The VFS layer forwards `nx_fs_ops`'s\nNX_E* return codes unchanged.",
-  "forward_decls_doc": "Forward-declare — full definition in interfaces/fs.h.  Readdir at\nthe VFS layer uses the same entry shape as the fs driver; a future\nmulti-mount VFS may wrap it with mount-path prefixing but the\ncaller-facing struct stays the same.",
+  "includes": [
+    { "path": "interfaces/fs_types.h",
+      "doc": "Data shapes (struct nx_fs_dirent, struct nx_fs_stat) shared with fs.h.  Readdir at the VFS layer uses the same entry shape as the fs driver; a future multi-mount VFS may wrap it with mount-path prefixing but the caller-facing struct stays the same." }
+  ],
   "constants": [
     { "name": "NX_VFS_OPEN_READ",   "value": "(1U << 0)",
       "doc": "Open flags — same bit meanings as `NX_FS_OPEN_*` from fs.h.  Defined\nhere so consumers don't have to include fs.h just to call into the\nVFS.  The VFS layer forwards them to the mounted driver unchanged." },
