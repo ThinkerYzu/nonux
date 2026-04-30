@@ -113,8 +113,8 @@ def load_idl(path: pathlib.Path, meta_schema: dict) -> dict:
 
 # Param-type → C type emitted in the typedef header signature.  The IDL
 # spec's Param Type System maps these; the asymmetric `i32 → int` (vs
-# `u32 → uint32_t`) matches existing hand-written conventions and is
-# documented in IDL-SCHEMA.md.
+# `u32 → uint32_t`) is the codified convention and is documented in
+# IDL-SCHEMA.md.
 SCALAR_C_TYPES = {
     "u8":  "uint8_t",
     "u16": "uint16_t",
@@ -309,8 +309,8 @@ def wrap_signature(indent: int, prefix: str, params: list[str],
     """
     head = " " * indent + prefix
     single = head + ", ".join(params) + trailing
-    # Wrap if the single-line form would exceed 79 chars (matches today's
-    # hand-written conventions; an 80-char `open` signature wraps).
+    # Wrap if the single-line form would exceed 79 chars (the codified
+    # rule; an 80-char `open` signature wraps).
     if len(single) <= 79:
         return [single]
 
@@ -376,8 +376,8 @@ def render_constants(constants: list[dict]) -> list[str]:
 
     # Global value-column alignment (NOT per-group): the longest name
     # across the whole constant list determines the value column for
-    # every group.  Matches today's hand-written headers (vfs.h, fs.h
-    # both align across groups).  Min separator = 3 spaces.
+    # every group (vfs.h, fs.h both align across groups).  Min separator
+    # = 3 spaces.
     max_name_global = max(len(c["name"]) for c in constants)
     out: list[str] = []
     for gi, g in enumerate(groups):

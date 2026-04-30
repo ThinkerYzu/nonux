@@ -33,12 +33,12 @@
     "includes": {
       "type": "array",
       "items": { "$ref": "#/$defs/include_spec" },
-      "description": "Additional headers to #include in the generated typedef header (above and beyond <stddef.h>/<stdint.h> which are always included). Forward extension to the spec; supports interfaces whose ops reference external types (e.g. vfs uses struct nx_fs_dirent from interfaces/fs.h)."
+      "description": "Additional headers to #include in the generated typedef header and message header (above and beyond <stddef.h>/<stdint.h> which are always included). Used by interfaces whose ops reference external types (e.g. vfs/fs declare interfaces/fs_types.h to share struct nx_fs_dirent / struct nx_fs_stat; scheduler declares core/sched/task.h for struct nx_task). When non-empty, the generator suppresses auto-detected forward declarations — the included header carries the full definitions."
     },
     "constants": {
       "type": "array",
       "items": { "$ref": "#/$defs/constant_spec" },
-      "description": "Public #define constants emitted at the top of the typedef header. Forward extension to the spec; preserves API surface (e.g. NX_VFS_OPEN_READ) when the hand-written header is replaced by the generator output."
+      "description": "Public #define constants emitted at the top of the typedef header. Carries the API surface (e.g. NX_VFS_OPEN_READ) that the IDL declares for the interface; the generator owns the value-column alignment and the per-group leading prose."
     },
     "ops": {
       "type": "array",

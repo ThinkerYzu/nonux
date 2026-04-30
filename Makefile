@@ -141,9 +141,12 @@ verify-registry:
 	$(PYTHON) $(VERIFY) components/
 .PHONY: verify-registry
 
-# IDL → C generator (slice 8.0pre.1).  Reads interfaces/idl/*.json,
-# emits per-interface typedef header + msg structs + sender wrappers
-# + receiver dispatch template.  See proj_docs/nonux/IDL-SCHEMA.md.
+# IDL → C generator (slices 8.0pre.1 – 8.0pre.4).  Reads
+# interfaces/idl/*.json, emits per-interface typedef header + msg
+# structs + sender wrappers + receiver dispatch template (and, for
+# IRQ-bearing IDLs, an _isr.h declaration header).  See
+# proj_docs/nonux/IDL-SCHEMA.md and DESIGN.md §"Interface Definition
+# Language".
 GEN_IFACE := tools/gen-iface.py
 
 gen-iface: $(GEN_IFACE) $(VENV_STAMP)
@@ -153,7 +156,9 @@ gen-iface: $(GEN_IFACE) $(VENV_STAMP)
 # Verify the in-tree generated files are byte-identical to a fresh
 # regeneration.  Fails the build if any IDL has been edited without
 # regenerating, or if any generated artefact has been hand-edited.
-# Per DESIGN.md R7, the IDL is the source of truth.
+# Per DESIGN.md §"Interface Definition Language", the IDL is the source
+# of truth and this is the machine check (a parallel rule to R7's
+# manifest-derived gen/<name>_deps.h).
 verify-iface-fresh: $(GEN_IFACE) $(VENV_STAMP)
 	$(PYTHON) $(GEN_IFACE) verify interfaces/idl/ interfaces/ framework/
 .PHONY: verify-iface-fresh

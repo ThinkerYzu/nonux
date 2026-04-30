@@ -174,11 +174,12 @@ stays as a convenience alias.
 
 ## `gen-iface.py`
 
-IDL-driven interface code generator (slice 8.0pre.1).  Per DESIGN.md
-R7, the IDL is the source of truth post-cutover; the C-level shape
-(preprocessor macros, struct fields, forward declarations, signatures)
-is a deterministic function of the IDL.  See
-`tools/idl-meta-schema.json` for the per-interface JSON schema.
+IDL-driven interface code generator (slices 8.0pre.1 – 8.0pre.4).  Per
+DESIGN.md §"Interface Definition Language", the IDL is the source of
+truth for cross-component interfaces; the C-level shape (preprocessor
+macros, struct fields, forward declarations, signatures) is a
+deterministic function of the IDL.  See `tools/idl-meta-schema.json`
+for the per-interface JSON schema.
 
 Reads `interfaces/idl/<iface>.json` files and emits four artefacts per
 interface:
@@ -222,9 +223,10 @@ Closed param-type set (12 types): `u8`/`u16`/`u32`/`u64` /
 `i8`/`i16`/`i32`/`i64` / `usize` / `bool`, `string_in`,
 `bytes_in`/`bytes_out`, `struct_in`/`struct_out`/`struct_inout`,
 `slot_ref` (lives in `msg->caps[]`, not payload),
-`opaque_self_handle` (plain `u64`).  Type mapping is asymmetric to
-match today's hand-written headers: `u32 → uint32_t` but
-`i32 → int` (C's `int` is 32-bit on aarch64); `i64 → int64_t`.
+`opaque_self_handle` (plain `u64`; optional `ctype` substitutes a named
+pointer type into the C signature).  Type mapping is asymmetric:
+`u32 → uint32_t` but `i32 → int` (C's `int` is 32-bit on aarch64);
+`i64 → int64_t`.
 
 ### Exit codes
 
