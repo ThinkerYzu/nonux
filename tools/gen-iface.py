@@ -128,14 +128,30 @@ SCALAR_C_TYPES = {
     "bool": "bool",
 }
 
-# Return-type code → C return-type token.
+# Return-type code → C return-type token.  `void_ptr` may carry an
+# optional `ctype` (e.g. "struct nx_task") that the renderer substitutes
+# in for "void"; see `return_c_type` below.  `u32` was added in slice
+# 8.0pre.3 to cover scalar unsigned-int returns (mm.max_order); the
+# asymmetric u32→uint32_t mapping that holds for params applies here too.
 RETURN_C_TYPES = {
     "void":                 "void",
     "int_status":           "int",
     "i64_count_or_status":  "int64_t",
     "usize":                "size_t",
     "void_ptr":             "void *",
+    "u32":                  "uint32_t",
+    "u64":                  "uint64_t",
 }
+
+
+def return_c_type(ret: dict) -> str:
+    """Render a return-type spec to its C token.  `void_ptr` with an
+    optional `ctype` field becomes `<ctype> *` (e.g. "struct nx_task *");
+    without a ctype it remains the unqualified `void *`."""
+    t = ret["type"]
+    if t == "void_ptr" and ret.get("ctype"):
+        return f"{ret['ctype']} *"
+    return RETURN_C_TYPES[t]
 
 
 def param_c_signature(p: dict) -> str:
@@ -177,10 +193,16 @@ def param_c_signature(p: dict) -> str:
 
     if t == "opaque_self_handle":
         # `void *` for direction=in (the common case, e.g. `file`); a
-        # `void **` for direction=out (e.g. `out_file`).
+        # `void **` for direction=out (e.g. `out_file`).  Slice 8.0pre.3
+        # added an optional `ctype` field that replaces `void` with a
+        # named type (e.g. `struct nx_task *task`) — wire shape unchanged
+        # (still encoded as u64 in payload), only the C-level signature
+        # gains the type.  Used by scheduler ops where `struct nx_task *`
+        # crosses the IPC boundary as a borrowed kernel-object pointer.
+        base = p.get("ctype") or "void"
         if p.get("direction") == "out":
-            return f"void **{name}"
-        return f"void *{name}"
+            return f"{base} **{name}"
+        return f"{base} *{name}"
 
     raise IDLError(f"unknown param type {t!r}")
 
@@ -196,21 +218,28 @@ _TAGGED_TYPE_RE = re.compile(r"^(struct|union|enum)\s+\S+$")
 
 
 def collect_forward_decls(idl: dict) -> list[str]:
-    """Return tagged-type ctypes referenced by op params, in order of
-    first appearance (op_id ascending; param order within an op).
-    When the IDL declares author-supplied `includes:`, those are assumed
-    to provide the full definitions for any tagged types so we skip
+    """Return tagged-type ctypes referenced by op params or returns, in
+    order of first appearance (op_id ascending; param order within an
+    op; param ctypes precede the op's return ctype).  Walks `ctype`
+    fields on `struct_*` params, on `opaque_self_handle` params (slice
+    8.0pre.3), and on `void_ptr` returns (slice 8.0pre.3).  When the
+    IDL declares author-supplied `includes:`, those are assumed to
+    provide the full definitions for any tagged types so we skip
     forward decls — the include's full definition is the declaration."""
     if idl.get("includes"):
         return []
     seen: set[str] = set()
     order: list[str] = []
+
+    def maybe_add(ctype: str | None) -> None:
+        if ctype and _TAGGED_TYPE_RE.match(ctype) and ctype not in seen:
+            seen.add(ctype)
+            order.append(ctype)
+
     for op in idl["ops"]:
         for p in op.get("params", []):
-            ctype = p.get("ctype")
-            if ctype and _TAGGED_TYPE_RE.match(ctype) and ctype not in seen:
-                seen.add(ctype)
-                order.append(ctype)
+            maybe_add(p.get("ctype"))
+        maybe_add(op.get("returns", {}).get("ctype"))
     return order
 
 
@@ -377,7 +406,7 @@ def render_op_member(op: dict) -> list[str]:
     if op.get("doc"):
         out.extend(render_block_comment(op["doc"], indent=4))
 
-    rtype = RETURN_C_TYPES[op["returns"]["type"]]
+    rtype = return_c_type(op["returns"])
     params: list[str] = ["void *self"]
     for p in op.get("params", []):
         params.append(param_c_signature(p))
@@ -417,7 +446,7 @@ def render_iface_ops_struct(idl: dict) -> list[str]:
         # Subsequent members in the group: signature only, no doc, no
         # blank line above (they share the group doc).
         for op in group[1:]:
-            rtype = RETURN_C_TYPES[op["returns"]["type"]]
+            rtype = return_c_type(op["returns"])
             params: list[str] = ["void *self"]
             for p in op.get("params", []):
                 params.append(param_c_signature(p))
@@ -611,8 +640,12 @@ def render_msg_header(idl: dict, idl_filename: str) -> str:
             out.append("    int64_t rc;")
         elif ret_type == "usize":
             out.append("    size_t rc;")
+        elif ret_type == "u32":
+            out.append("    uint32_t rc;")
+        elif ret_type == "u64":
+            out.append("    uint64_t rc;")
         elif ret_type == "void_ptr":
-            out.append("    uint64_t rc; /* void * encoded as u64 */")
+            out.append("    uint64_t rc; /* pointer encoded as u64 */")
         elif ret_type == "void":
             out.append("    int rc; /* always NX_OK; placeholder for void ops */")
         any_out = False
@@ -644,7 +677,7 @@ def wrapper_param_c(p: dict) -> str:
 
 
 def wrapper_return_type(op: dict) -> str:
-    return RETURN_C_TYPES[op["returns"]["type"]]
+    return return_c_type(op["returns"])
 
 
 def render_call_header(idl: dict, idl_filename: str) -> str:
@@ -747,17 +780,101 @@ def render_dispatch_header(idl: dict, idl_filename: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# framework/<iface>_isr.h emission (IRQ-entry helpers — slice 8.0pre.3)
+# ---------------------------------------------------------------------------
+
+# Default IRQ-entry message pool size, per IDL-SCHEMA.md §IRQ-Entry Ops.
+# A future schema field may make this per-interface configurable; v1 is
+# fixed.  Sized to absorb a short burst of IRQ events without dropping
+# while the dispatcher kthread catches up.
+DEFAULT_IRQ_POOL_SIZE = 32
+
+
+def has_irq_ops(idl: dict) -> bool:
+    return any(op.get("context") == "irq" for op in idl["ops"])
+
+
+def render_isr_header(idl: dict, idl_filename: str) -> str:
+    """Emit framework/<iface>_isr.h — IRQ-entry helpers for ops with
+    context: "irq".  Only the declarations land in slice 8.0pre.3; the
+    bodies (which grab a pool slot, fill the message, call
+    nx_ipc_enqueue_from_irq) are part of slice 8.0a's runtime infra."""
+    name = idl["interface"]
+    upper = name.upper()
+    guard = f"NONUX_FRAMEWORK_{upper}_ISR_H"
+
+    out: list[str] = []
+    out.extend(banner(idl_filename))
+    out.append("")
+    out.append(f"#ifndef {guard}")
+    out.append(f"#define {guard}")
+    out.append("")
+    out.append("#include <stddef.h>")
+    out.append("#include <stdint.h>")
+    out.append("")
+    out.append(f'#include "interfaces/{name}.h"')
+    out.append(f'#include "interfaces/{name}_msg.h"')
+    out.append('#include "framework/registry.h"')
+    out.append('#include "framework/ipc.h"')
+    out.append("")
+    out.append(
+        f"/* IRQ-entry helpers for the `{name}` interface.  Each op")
+    out.append(
+        " * declared `context: \"irq\"` in the IDL gets a `_from_irq`")
+    out.append(
+        " * wrapper that grabs a slot from a fixed-size pre-built")
+    out.append(
+        " * message pool, fills the per-op request fields, and hands")
+    out.append(
+        " * the message off to the framework dispatcher via")
+    out.append(
+        " * `nx_ipc_enqueue_from_irq` — bounded instructions, no")
+    out.append(
+        " * allocation, no caps (per IDL-SCHEMA.md §IRQ-Entry Ops). */")
+    out.append(
+        f"#define NX_{upper}_ISR_POOL_SIZE {DEFAULT_IRQ_POOL_SIZE}")
+    out.append("")
+    out.append(
+        "/* Slice 8.0a defines the bodies + pool storage; until that")
+    out.append(
+        " * lands these wrappers reference the framework-side enqueue")
+    out.append(" * helper as extern. */")
+    out.append("")
+
+    for op in idl["ops"]:
+        if op.get("context") != "irq":
+            continue
+        rtype = wrapper_return_type(op)
+        params: list[str] = ["struct nx_slot *slot"]
+        for p in op.get("params", []):
+            params.append(wrapper_param_c(p))
+        if rtype.endswith("*"):
+            prefix = f"{rtype}nx_{name}_{op['name']}_from_irq("
+        else:
+            prefix = f"{rtype} nx_{name}_{op['name']}_from_irq("
+        out.extend(wrap_signature(indent=0, prefix=prefix, params=params,
+                                  trailing=");"))
+
+    out.append("")
+    out.append(f"#endif /* {guard} */")
+    out.append("")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Filesystem write
 # ---------------------------------------------------------------------------
 
 def write_artifacts(idl: dict, idl_path: pathlib.Path,
                     interfaces_dir: pathlib.Path,
                     framework_dir: pathlib.Path) -> dict[pathlib.Path, str]:
-    """Produce the four artifacts; return path → content mapping.  Caller
-    decides whether to write to disk (regen) or only diff (verify)."""
+    """Produce the per-interface artifacts; return path → content
+    mapping.  Caller decides whether to write to disk (regen) or only
+    diff (verify).  framework/<iface>_isr.h is emitted only for IDLs
+    that declare any op with `context: "irq"`."""
     name = idl["interface"]
     idl_filename = idl_path.name
-    return {
+    artifacts: dict[pathlib.Path, str] = {
         interfaces_dir / f"{name}.h":
             render_iface_header(idl, idl_filename),
         interfaces_dir / f"{name}_msg.h":
@@ -767,6 +884,10 @@ def write_artifacts(idl: dict, idl_path: pathlib.Path,
         framework_dir / f"{name}_dispatch.h":
             render_dispatch_header(idl, idl_filename),
     }
+    if has_irq_ops(idl):
+        artifacts[framework_dir / f"{name}_isr.h"] = \
+            render_isr_header(idl, idl_filename)
+    return artifacts
 
 
 def regenerate(idl_dir: pathlib.Path, interfaces_dir: pathlib.Path,

@@ -1,7 +1,15 @@
+/*
+ * GENERATED — DO NOT EDIT.
+ * Source: interfaces/idl/scheduler.json
+ * Generator: tools/gen-iface.py
+ */
+
 #ifndef NONUX_INTERFACE_SCHEDULER_H
 #define NONUX_INTERFACE_SCHEDULER_H
 
-#include "core/sched/task.h"
+#include <stddef.h>
+#include <stdint.h>
+#include "core/sched/task.h"  /* struct nx_task — borrowed kernel-object pointer carried in nearly every op. */
 
 /*
  * Scheduler interface.

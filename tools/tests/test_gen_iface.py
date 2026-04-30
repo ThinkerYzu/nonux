@@ -366,3 +366,231 @@ class TestVerifyDetectsDrift(unittest.TestCase):
             # verify must detect drift.
             rc = gi.main(["verify", str(idl_dir), str(iface_dir), str(fw_dir)])
             self.assertEqual(rc, 1)
+
+
+class TestSchedulerByteForByte(unittest.TestCase):
+    """Slice 8.0pre.3: in-tree interfaces/scheduler.h is byte-identical
+    to a fresh regeneration from interfaces/idl/scheduler.json.  This
+    IDL was the first to exercise typed `opaque_self_handle.ctype` (for
+    `struct nx_task *task` params) and typed `void_ptr.ctype` (for
+    `pick_next` returning `struct nx_task *`)."""
+
+    def test_scheduler_h_is_canonical(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "scheduler.json"
+        intree_h  = ROOT / "interfaces" / "scheduler.h"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        regenerated = gi.render_iface_header(idl, idl_path.name)
+        self.assertEqual(intree_h.read_text(), regenerated)
+
+    def test_scheduler_idl_uses_typed_opaque_handle(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "scheduler.json"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        # enqueue's `task` param uses the new typed-opaque-handle shape.
+        enqueue = next(op for op in idl["ops"] if op["name"] == "enqueue")
+        task_p  = enqueue["params"][0]
+        self.assertEqual(task_p["type"], "opaque_self_handle")
+        self.assertEqual(task_p["ctype"], "struct nx_task")
+        # pick_next's return uses the new typed-void_ptr shape.
+        pick    = next(op for op in idl["ops"] if op["name"] == "pick_next")
+        self.assertEqual(pick["returns"]["type"], "void_ptr")
+        self.assertEqual(pick["returns"]["ctype"], "struct nx_task")
+
+
+class TestMmByteForByte(unittest.TestCase):
+    """Slice 8.0pre.3: in-tree interfaces/mm.h is byte-identical to a
+    fresh regeneration from interfaces/idl/mm.json.  This IDL was the
+    first to exercise the `u32` return type (mm.max_order)."""
+
+    def test_mm_h_is_canonical(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "mm.json"
+        intree_h  = ROOT / "interfaces" / "mm.h"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        regenerated = gi.render_iface_header(idl, idl_path.name)
+        self.assertEqual(intree_h.read_text(), regenerated)
+
+
+class TestCharDeviceByteForByte(unittest.TestCase):
+    """Slice 8.0pre.3: in-tree interfaces/char_device.h is byte-identical
+    to a fresh regeneration.  This IDL was authored fresh (no hand-written
+    predecessor) and is the first to exercise `context: "irq"`."""
+
+    def test_char_device_h_is_canonical(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "char_device.json"
+        intree_h  = ROOT / "interfaces" / "char_device.h"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        regenerated = gi.render_iface_header(idl, idl_path.name)
+        self.assertEqual(intree_h.read_text(), regenerated)
+
+    def test_char_device_isr_header_is_canonical(self):
+        idl_path  = ROOT / "interfaces" / "idl" / "char_device.json"
+        intree_h  = ROOT / "framework" / "char_device_isr.h"
+        meta_schema = gi.load_meta_schema(ROOT / "tools")
+        idl = gi.load_idl(idl_path, meta_schema)
+        regenerated = gi.render_isr_header(idl, idl_path.name)
+        self.assertEqual(intree_h.read_text(), regenerated)
+
+
+class TestIrqEntryArtifact(unittest.TestCase):
+    """Slice 8.0pre.3: framework/<iface>_isr.h emission.  Emitted only
+    when at least one op declares `context: "irq"`; carries the pool
+    size define + per-IRQ-op `_from_irq` declarations."""
+
+    def _idl_with_irq_op(self) -> dict:
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "rx_byte", "op_id": 3,
+            "context": "irq",
+            "params": [{"name": "byte", "type": "u8"}],
+            "returns": {"type": "void"},
+        })
+        return idl
+
+    def test_isr_header_emitted_only_for_irq_ops(self):
+        # SAMPLE_IDL has no irq ops → no isr header.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = pathlib.Path(d)
+            idl_dir, iface_dir, fw_dir = make_tmpdirs(tmp)
+            idl_path = idl_dir / "demo.json"
+            idl_path.write_text(json.dumps(SAMPLE_IDL))
+            self.assertEqual(
+                gi.main(["all", str(idl_dir), str(iface_dir), str(fw_dir)]),
+                0)
+            self.assertFalse((fw_dir / "demo_isr.h").exists())
+
+    def test_isr_header_emitted_when_op_has_irq_context(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = pathlib.Path(d)
+            idl_dir, iface_dir, fw_dir = make_tmpdirs(tmp)
+            idl_path = idl_dir / "demo.json"
+            idl_path.write_text(json.dumps(self._idl_with_irq_op()))
+            self.assertEqual(
+                gi.main(["all", str(idl_dir), str(iface_dir), str(fw_dir)]),
+                0)
+            isr = (fw_dir / "demo_isr.h").read_text()
+            self.assertIn("NX_DEMO_ISR_POOL_SIZE", isr)
+            # Per-IRQ-op `_from_irq` wrapper declared.
+            self.assertIn("nx_demo_rx_byte_from_irq(struct nx_slot *slot,", isr)
+            # The non-irq ops in SAMPLE_IDL must NOT get _from_irq wrappers.
+            self.assertNotIn("nx_demo_ping_from_irq", isr)
+            self.assertNotIn("nx_demo_blob_from_irq", isr)
+
+    def test_pool_size_default_is_thirty_two(self):
+        h = gi.render_isr_header(self._idl_with_irq_op(), "demo.json")
+        self.assertIn("#define NX_DEMO_ISR_POOL_SIZE 32", h)
+
+
+class TestTypedOpaqueSelfHandle(unittest.TestCase):
+    """Slice 8.0pre.3: opaque_self_handle params with `ctype` emit
+    typed C signatures (e.g. `struct nx_task *task`) instead of the
+    default `void *`.  Wire shape unchanged."""
+
+    def test_no_ctype_emits_void_ptr(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "lookup", "op_id": 3,
+            "params": [{"name": "h", "type": "opaque_self_handle"}],
+            "returns": {"type": "int_status"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("void *h", h)
+
+    def test_ctype_emits_typed_pointer(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "lookup", "op_id": 3,
+            "params": [{"name": "task", "type": "opaque_self_handle",
+                        "ctype": "struct nx_task"}],
+            "returns": {"type": "int_status"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("struct nx_task *task", h)
+
+    def test_ctype_with_direction_out_emits_double_pointer(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "alloc", "op_id": 3,
+            "params": [{"name": "out_task", "type": "opaque_self_handle",
+                        "ctype": "struct nx_task", "direction": "out"}],
+            "returns": {"type": "int_status", "out_param": "out_task"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("struct nx_task **out_task", h)
+
+    def test_ctype_struct_participates_in_forward_decl_set(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "lookup", "op_id": 3,
+            "params": [{"name": "task", "type": "opaque_self_handle",
+                        "ctype": "struct nx_task"}],
+            "returns": {"type": "int_status"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        # No includes: → forward decl emits.
+        self.assertIn("struct nx_task;", h)
+
+
+class TestTypedVoidPtrReturn(unittest.TestCase):
+    """Slice 8.0pre.3: void_ptr returns with `ctype` emit typed C
+    return signatures (e.g. `struct nx_task *`) instead of the default
+    `void *`.  Wire shape unchanged."""
+
+    def test_no_ctype_emits_void_ptr(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "alloc", "op_id": 3,
+            "params": [], "returns": {"type": "void_ptr"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("void *(*alloc)(void *self)", h)
+
+    def test_ctype_emits_typed_return(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "pick_next", "op_id": 3,
+            "params": [],
+            "returns": {"type": "void_ptr", "ctype": "struct nx_task"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("struct nx_task *(*pick_next)(void *self)", h)
+
+    def test_returned_ctype_struct_participates_in_forward_decl_set(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "pick_next", "op_id": 3,
+            "params": [],
+            "returns": {"type": "void_ptr", "ctype": "struct nx_task"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("struct nx_task;", h)
+
+
+class TestU32Return(unittest.TestCase):
+    """Slice 8.0pre.3: `u32` return type (and `u64`) added for scalar
+    unsigned-int returns like mm.max_order; the asymmetric u32→uint32_t
+    convention applies on the return side too."""
+
+    def test_u32_return_emits_uint32_t(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "max_order", "op_id": 3,
+            "params": [], "returns": {"type": "u32"},
+        })
+        h = gi.render_iface_header(idl, "demo.json")
+        self.assertIn("uint32_t (*max_order)(void *self)", h)
+
+    def test_u32_return_in_reply_struct_uses_uint32_t(self):
+        idl = copy.deepcopy(SAMPLE_IDL)
+        idl["ops"].append({
+            "name": "max_order", "op_id": 3,
+            "params": [], "returns": {"type": "u32"},
+        })
+        m = gi.render_msg_header(idl, "demo.json")
+        self.assertIn("struct nx_demo_reply_max_order {", m)
+        # Reply struct's rc field carries the u32 value.
+        idx = m.index("struct nx_demo_reply_max_order {")
+        end = m.index("};", idx)
+        self.assertIn("uint32_t rc;", m[idx:end])

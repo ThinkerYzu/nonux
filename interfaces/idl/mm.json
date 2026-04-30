@@ -1,0 +1,41 @@
+{
+  "interface": "mm",
+  "version": 1,
+  "iface_id": 4099,
+  "doc": "Memory page allocator interface — slice 5.2.\n\nEvery `memory.page_alloc` component implements a\n`const struct nx_mm_ops` table and exposes a `void *self` instance\nthat carries its private state.  The kernel's MMU subsystem, handle\nframework, and per-process address-space code consume this interface\nthrough the component bound to the `memory.page_alloc` slot.\n\nAllocation granularity is always a power-of-two number of pages.\n`alloc_pages(self, order)` returns a contiguous run of\n`1 << order` pages, each `page_size(self)` bytes.  A free must name\nthe SAME order as the matching alloc — the allocator is not required\nto remember per-block sizes and will typically corrupt its free\nlists if this is violated.\n\nOwnership.\n  The returned pointer is caller-owned until passed back to\n  `free_pages`.  The allocator never reads or writes the backing\n  storage while it is owned by the caller (so caller memory is not\n  clobbered by other allocations).\n\nConcurrency.\n  v1 is single-CPU.  Implementations do not need internal locks in\n  slice 5.2.  Future SMP support will wrap the ops in a per-component\n  spinlock or swap the free-list primitives for lock-free variants;\n  consumers will not need to change.\n\nError convention.\n  Out-of-memory + invalid-order on alloc returns NULL.  Free is\n  declared `void` — callers cannot recover from a bad free, so the\n  allocator is free to assert / trap / silently corrupt its state\n  on misuse.  Well-behaved callers pair every alloc with exactly one\n  matching free (by pointer AND order).",
+  "ops": [
+    {
+      "name": "alloc_pages",
+      "op_id": 1,
+      "doc": "Allocate 2^order contiguous pages.  Returns a pointer aligned to\nat least `page_size(self)` bytes on success, or NULL if the\nrequest cannot be satisfied (pool exhausted, or `order` exceeds\n`max_order(self)`).\n\nThe implementation MAY return pointers aligned to higher\nboundaries (up to the block size), but callers must not rely on\nalignment beyond `page_size`.  A dedicated `alloc_pages_aligned`\nop will land when an in-tree consumer needs it.",
+      "params": [
+        { "name": "order", "type": "u32" }
+      ],
+      "returns": { "type": "void_ptr" }
+    },
+    {
+      "name": "free_pages",
+      "op_id": 2,
+      "doc": "Release a block previously returned by `alloc_pages`.  `order`\nMUST match the order passed to the matching `alloc_pages` call;\nmismatches corrupt the free lists.  `ptr == NULL` is a no-op.",
+      "params": [
+        { "name": "ptr", "type": "opaque_self_handle" },
+        { "name": "order", "type": "u32" }
+      ],
+      "returns": { "type": "void" }
+    },
+    {
+      "name": "page_size",
+      "op_id": 3,
+      "doc": "Page size in bytes.  For the kernel's MMU this is 4096 (matches\n`PMM_PAGE_SIZE`); an implementation that supports multiple\ngranules chooses one at init and returns that value here.",
+      "params": [],
+      "returns": { "type": "usize" }
+    },
+    {
+      "name": "max_order",
+      "op_id": 4,
+      "doc": "Largest supported order (inclusive).  `alloc_pages` with an\norder > this bound returns NULL.  The value is static for the\nlifetime of the component instance.",
+      "params": [],
+      "returns": { "type": "u32" }
+    }
+  ]
+}

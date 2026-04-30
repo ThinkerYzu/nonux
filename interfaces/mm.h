@@ -1,7 +1,14 @@
+/*
+ * GENERATED — DO NOT EDIT.
+ * Source: interfaces/idl/mm.json
+ * Generator: tools/gen-iface.py
+ */
+
 #ifndef NONUX_INTERFACE_MM_H
 #define NONUX_INTERFACE_MM_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /*
  * Memory page allocator interface — slice 5.2.
@@ -51,14 +58,14 @@ struct nx_mm_ops {
      * alignment beyond `page_size`.  A dedicated `alloc_pages_aligned`
      * op will land when an in-tree consumer needs it.
      */
-    void *(*alloc_pages)(void *self, unsigned order);
+    void *(*alloc_pages)(void *self, uint32_t order);
 
     /*
      * Release a block previously returned by `alloc_pages`.  `order`
      * MUST match the order passed to the matching `alloc_pages` call;
      * mismatches corrupt the free lists.  `ptr == NULL` is a no-op.
      */
-    void  (*free_pages)(void *self, void *ptr, unsigned order);
+    void (*free_pages)(void *self, void *ptr, uint32_t order);
 
     /*
      * Page size in bytes.  For the kernel's MMU this is 4096 (matches
@@ -72,7 +79,7 @@ struct nx_mm_ops {
      * order > this bound returns NULL.  The value is static for the
      * lifetime of the component instance.
      */
-    unsigned (*max_order)(void *self);
+    uint32_t (*max_order)(void *self);
 };
 
 #endif /* NONUX_INTERFACE_MM_H */

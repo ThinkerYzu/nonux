@@ -178,7 +178,7 @@
         },
         "ctype": {
           "type": "string",
-          "description": "For struct_in/_out/_inout: verbatim C type name (e.g. 'struct nx_fs_stat', 'uint32_t')."
+          "description": "For struct_in/_out/_inout: verbatim C type name (e.g. 'struct nx_fs_stat', 'uint32_t').  For opaque_self_handle: optional named type that replaces the default `void *` in the generated C signature (slice 8.0pre.3); wire shape is unchanged (still u64 in payload), only the typedef gains `<ctype> *<name>`."
         },
         "ownership": {
           "type": "string",
@@ -201,13 +201,17 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["void", "int_status", "i64_count_or_status", "usize", "void_ptr"],
-          "description": "Principal return shape."
+          "enum": ["void", "int_status", "i64_count_or_status", "usize", "void_ptr", "u32", "u64"],
+          "description": "Principal return shape.  `u32`/`u64` added in slice 8.0pre.3 for scalar unsigned-int returns (e.g. mm.max_order); `u32 → uint32_t` matches the asymmetric param-side convention."
         },
         "out_param": {
           "type": "string",
           "pattern": "^[a-z_][a-z0-9_]*$",
           "description": "Optional; names the param carrying principal output (the param itself must have direction: 'out' or 'inout')."
+        },
+        "ctype": {
+          "type": "string",
+          "description": "For void_ptr returns: optional named type that replaces `void` in the generated C return signature (slice 8.0pre.3).  Example: ctype: 'struct nx_task' → return type emits as `struct nx_task *`.  Wire shape unchanged (still u64 in reply), only the typedef gains the type."
         },
         "doc": {
           "type": "string"

@@ -1,0 +1,61 @@
+{
+  "interface": "scheduler",
+  "version": 1,
+  "iface_id": 4100,
+  "doc": "Scheduler interface.\n\nEvery scheduler policy component (e.g. components/sched_rr/) implements\na `const struct nx_scheduler_ops` table and a matching `void *self`\ninstance.  The core scheduler driver (core/sched/) holds both in a\nstashed pointer pair after `sched_init(ops, self)` runs at the end of\nboot bring-up — see DESIGN.md §Scheduler: Core Driver + Component.\n\nOwnership.\n  Every `struct nx_task *` parameter is `borrow`: the scheduler keeps\n  the pointer valid while the task sits on its runqueue, but never\n  frees the storage.  Tasks are created / destroyed through the core\n  driver (`nx_task_create` / `nx_task_destroy`); policy impls only\n  link/unlink them on their internal queues.\n\nConcurrency.\n  Phase 4 is single-CPU, so every op is called by the per-CPU\n  dispatcher (slice 3.9b) or the IRQ-return reschedule shim.\n  Implementations don't need internal locks in v1 but must not\n  block — every op is bounded, non-preemptible, and fast.\n\nError convention.\n  `int` returns use NX_OK / NX_E* from framework/registry.h.  See\n  the individual op docs below for the per-op status set.",
+  "includes": [
+    { "path": "core/sched/task.h",
+      "doc": "struct nx_task — borrowed kernel-object pointer carried in nearly every op." }
+  ],
+  "ops": [
+    {
+      "name": "pick_next",
+      "op_id": 1,
+      "doc": "Return the task that should run next on this CPU, or NULL if the\nrunqueue is empty.  Borrow.  The scheduler neither advances its\ninternal \"current\" marker nor dequeues the returned task — the\ndriver decides whether to switch to it and may call pick_next\nrepeatedly without side effects (idempotent against the same\nqueue state).\n\nImplementations must be bounded O(n) in runqueue length and\npreserve FIFO-equivalence within the same priority level when a\npolicy exposes priorities.",
+      "params": [],
+      "returns": { "type": "void_ptr", "ctype": "struct nx_task" }
+    },
+    {
+      "name": "enqueue",
+      "op_id": 2,
+      "doc": "Add `task` to the runqueue.  Borrow.\n\nReturns:\n  NX_OK       — task queued.\n  NX_EEXIST   — task already on the runqueue (double-enqueue).\n  NX_EINVAL   — NULL task.",
+      "params": [
+        { "name": "task", "type": "opaque_self_handle", "ctype": "struct nx_task" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "dequeue",
+      "op_id": 3,
+      "doc": "Remove `task` from the runqueue.  Borrow.\n\nReturns:\n  NX_OK      — removed.\n  NX_ENOENT  — task is not on the runqueue.\n  NX_EINVAL  — NULL task.",
+      "params": [
+        { "name": "task", "type": "opaque_self_handle", "ctype": "struct nx_task" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "yield",
+      "op_id": 4,
+      "doc": "The current task voluntarily gives up the rest of its quantum.\nSlice 4.4 wires this into the reschedule shim.  In Phase 4 it\nmay no-op if the runqueue has no other runnable tasks (caller\nloop back through pick_next handles that case).",
+      "params": [],
+      "returns": { "type": "void" }
+    },
+    {
+      "name": "set_priority",
+      "op_id": 5,
+      "doc": "Set `task`'s priority.  `priority` is policy-defined; the only\nuniversal contract is \"higher number = higher priority, zero is\nthe default.\"\n\nReturns:\n  NX_OK       — policy implements priorities and accepted the value.\n  NX_EINVAL   — policy does not support priorities (round-robin),\n                or the value is out of range.  Callers can treat\n                NX_EINVAL as \"priorities not honoured by this\n                policy\" without distinguishing the two sub-cases.\n  NX_ENOENT   — task is not on the runqueue.",
+      "params": [
+        { "name": "task", "type": "opaque_self_handle", "ctype": "struct nx_task" },
+        { "name": "priority", "type": "i32" }
+      ],
+      "returns": { "type": "int_status" }
+    },
+    {
+      "name": "tick",
+      "op_id": 6,
+      "doc": "Called once per timer tick from the core driver's `sched_tick`\n(slice 4.4).  The policy typically decrements the current task's\nremaining quantum and sets `need_resched` when it reaches zero —\nthe core driver reads `current->need_resched` at IRQ-return time\nand reschedules there.\n\nMust be bounded and non-blocking; runs with preemption disabled\non the interrupted task's kernel stack.",
+      "params": [],
+      "returns": { "type": "void" }
+    }
+  ]
+}

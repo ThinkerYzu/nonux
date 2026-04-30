@@ -1,0 +1,28 @@
+{
+  "interface": "char_device",
+  "version": 1,
+  "iface_id": 4101,
+  "doc": "Character-device interface — byte-stream peripherals (UART, virtio-console, …).\n\nSlice 8.0pre.3 introduces this interface; first concrete consumer is\n`components/uart_pl011/` once slice 8.0b activates the generated\nhandle_msg shims.  The interface is intentionally minimal: a\n`write` op for buffered output (the path syscall layer already\nuses for serial console) and an IRQ-entry `rx_byte` op for input\nbytes delivered from an ISR.  More ops (flush, get_modem_status,\nset_baud) will land when a real driver demands them.\n\nOwnership.\n  `write`'s `buf` is borrowed for the duration of the call — drivers\n  copy any bytes they intend to keep before returning.  `rx_byte`\n  takes a single byte by value; nothing to own.\n\nConcurrency.\n  `write` runs in task context (caller blocks for the duration);\n  `rx_byte` runs in IRQ context (ISR calls the framework's\n  `nx_<iface>_rx_byte_from_irq` helper which bounds-checks pool\n  allocation and enqueues the message for the dispatcher kthread\n  to handle later).  Drivers must not block in `rx_byte`.\n\nError convention.\n  `write` returns POSIX-style byte-count-or-status (>=0 on success,\n  negative `NX_E*` on failure) matching `nx_fs_ops.write`.\n  `rx_byte` is `void` — the IRQ path cannot recover from a failed\n  delivery (pool exhaustion drops the byte; the framework counts\n  drops via a future telemetry hook).",
+  "ops": [
+    {
+      "name": "write",
+      "op_id": 1,
+      "doc": "Write `len` bytes from `buf` to the device.  Blocking in v1\n(uart_pl011 polls the TX-empty bit per byte).  Future drivers\nMAY return a partial count if the device's TX FIFO fills before\n`len` bytes are accepted; callers retry with the remaining tail.\n\nReturns:\n  >= 0       — bytes written.\n  NX_EINVAL  — NULL buf with non-zero len.\n  NX_EIO     — device-level failure (not used by uart_pl011 today).",
+      "params": [
+        { "name": "buf", "type": "bytes_in", "len": "len" },
+        { "name": "len", "type": "usize" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
+      "name": "rx_byte",
+      "op_id": 2,
+      "context": "irq",
+      "doc": "Deliver one received byte to the driver.  Called from ISR\ncontext via the generated `nx_char_device_rx_byte_from_irq`\nhelper, which grabs a slot from a fixed-size pre-built message\npool and enqueues the message for later dispatch on the\nframework dispatcher kthread.\n\nThe driver's task-context handler runs after the ISR returns;\nit typically pushes the byte onto a per-device receive ring and\nwakes any reader blocked in `read` (when that op lands).\n\nNo return value: the IRQ path cannot back-propagate failures.\nPool-exhaustion drops the byte silently in v1; a future\ntelemetry hook will count drops.",
+      "params": [
+        { "name": "byte", "type": "u8" }
+      ],
+      "returns": { "type": "void" }
+    }
+  ]
+}
