@@ -17,7 +17,9 @@
 
 #include "core/sched/task.h"
 #include "core/sched/sched.h"
+#include "core/sched/waitq.h"
 #include "framework/process.h"
+#include "framework/registry.h"
 #if !__STDC_HOSTED__
 #include "core/mmu/mmu.h"          /* mmu_user_window_base() */
 #endif
@@ -109,6 +111,148 @@ static void free_task_struct(struct nx_task *t)
     free(t);
 }
 
+/* --- per-task caller_slot wiring (slice 8.0a.5) ---------------------- */
+
+/*
+ * Render `id` into `buf` as `task#<decimal>`, NUL-terminated.  `cap`
+ * is the buffer capacity; truncation is benign (caller_slot names
+ * only need uniqueness, and `g_task_id_seq` is bounded by uint32_t →
+ * 10 digits + 5 prefix + NUL = 16, well under NX_TASK_SLOT_NAME_MAX).
+ */
+static void render_caller_slot_name(char *buf, size_t cap, uint32_t id)
+{
+    if (cap == 0) return;
+    static const char prefix[] = "task#";
+    size_t pos = 0;
+    for (size_t i = 0; i < sizeof prefix - 1 && pos + 1 < cap; i++)
+        buf[pos++] = prefix[i];
+
+    char digits[16];
+    int n = 0;
+    if (id == 0) {
+        digits[n++] = '0';
+    } else {
+        uint32_t v = id;
+        while (v > 0 && n < (int)sizeof digits) {
+            digits[n++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+    }
+    while (n > 0 && pos + 1 < cap)
+        buf[pos++] = digits[--n];
+    buf[pos] = '\0';
+}
+
+struct clone_edge_ctx {
+    struct nx_task *task;
+    int             rc;
+};
+
+static void clone_edge_cb(struct nx_connection *parent, void *ctx)
+{
+    struct clone_edge_ctx *cc = ctx;
+    if (cc->rc != NX_OK) return;          /* short-circuit on first error */
+    if (!parent || !parent->to_slot) return;
+
+    int err = NX_OK;
+    (void)nx_connection_register(&cc->task->caller_slot,
+                                 parent->to_slot,
+                                 parent->mode,
+                                 parent->stateful,
+                                 parent->policy,
+                                 &err);
+    if (err != NX_OK) cc->rc = err;
+}
+
+static void capture_first_dep_cb(struct nx_connection *c, void *ctx)
+{
+    struct nx_connection **out = ctx;
+    if (!*out) *out = c;
+}
+
+/*
+ * Walk `t->caller_slot`'s outgoing edges and unregister each.
+ * Re-fetch the head every iteration because `nx_connection_unregister`
+ * mutates the list `nx_slot_foreach_dependency` walks.
+ */
+static void unwire_caller_slot_edges(struct nx_task *t)
+{
+    for (;;) {
+        struct nx_connection *first = NULL;
+        nx_slot_foreach_dependency(&t->caller_slot,
+                                   capture_first_dep_cb, &first);
+        if (!first) break;
+        (void)nx_connection_unregister(first);
+    }
+}
+
+/*
+ * Register `t->caller_slot`, bind it to the live posix_shim
+ * component, and clone posix_shim's outgoing edges as parallel
+ * `(caller_slot → svc_slot)` connections.  Soft-skips (returns
+ * NX_OK with `caller_slot_active = false`) when posix_shim isn't
+ * registered or has no active impl — host unit tests that don't
+ * run framework_bootstrap rely on this.
+ *
+ * On any registry-side failure (NX_ENOMEM from the slot/connection
+ * allocs), rolls back partial state — every successfully registered
+ * edge unregistered, slot unbound and unregistered — so the task
+ * struct can be freed without leaking registry nodes.
+ */
+static int wire_caller_slot(struct nx_task *t)
+{
+    struct nx_slot *posix_slot = nx_slot_lookup("posix_shim");
+    if (!posix_slot || !posix_slot->active) {
+        /* posix_shim absent — leave caller_slot zeroed and proceed.
+         * Slice 8.0a.6 will need posix_shim to be live before any
+         * blocking call can actually round-trip; until then,
+         * unwired tasks are functionally indistinguishable from
+         * pre-8.0a.5 tasks. */
+        return NX_OK;
+    }
+
+    render_caller_slot_name(t->caller_slot_name,
+                            sizeof t->caller_slot_name, t->id);
+    t->caller_slot.name        = t->caller_slot_name;
+    t->caller_slot.iface       = "task";
+    t->caller_slot.mutability  = NX_MUT_HOT;
+    t->caller_slot.concurrency = NX_CONC_SHARED;
+    t->caller_slot.active      = NULL;
+    t->caller_slot.fallback    = NULL;
+    /* `pause_state`, `resume_waitq`, and `in_flight_calls` are
+     * (re)initialised inside nx_slot_register. */
+
+    int rc = nx_slot_register(&t->caller_slot);
+    if (rc != NX_OK) return rc;
+
+    rc = nx_slot_swap(&t->caller_slot, posix_slot->active);
+    if (rc != NX_OK) {
+        (void)nx_slot_unregister(&t->caller_slot);
+        return rc;
+    }
+
+    struct clone_edge_ctx cc = { .task = t, .rc = NX_OK };
+    nx_slot_foreach_dependency(posix_slot, clone_edge_cb, &cc);
+    if (cc.rc != NX_OK) {
+        unwire_caller_slot_edges(t);
+        (void)nx_slot_swap(&t->caller_slot, NULL);
+        (void)nx_slot_unregister(&t->caller_slot);
+        return cc.rc;
+    }
+
+    t->caller_slot_active = true;
+    return NX_OK;
+}
+
+static void unwire_caller_slot(struct nx_task *t)
+{
+    if (!t->caller_slot_active) return;
+    unwire_caller_slot_edges(t);
+    (void)nx_slot_swap(&t->caller_slot, NULL);
+    (void)nx_slot_unregister(&t->caller_slot);
+    t->caller_slot_active = false;
+}
+
 /* --- public API ------------------------------------------------------ */
 
 struct nx_task *nx_task_create(const char *name,
@@ -150,6 +294,10 @@ struct nx_task *nx_task_create(const char *name,
     t->wait_woken      = 0;
     t->deadline_node.next = &t->deadline_node;
     t->deadline_node.prev = &t->deadline_node;
+    nx_waitq_init(&t->reply_waitq);
+    t->in_flight_reply_buf     = NULL;
+    t->in_flight_reply_buf_len = 0;
+    t->in_flight_reply_rc      = 0;
 
     /* SP starts at the top of the kstack, 16-byte aligned.  ARM64 AAPCS
      * requires 16-byte alignment at any public interface boundary, which
@@ -202,6 +350,13 @@ struct nx_task *nx_task_create(const char *name,
     t->tpidr_el0 = 0;
 #endif
 
+    if (wire_caller_slot(t) != NX_OK) {
+        free_kstack(t->kstack_base,
+                    t->kstack_size / 4096U ? t->kstack_size / 4096U : 1);
+        free_task_struct(t);
+        return NULL;
+    }
+
     return t;
 }
 
@@ -246,6 +401,10 @@ struct nx_task *nx_task_create_forked(const char *name,
     t->wait_woken      = 0;
     t->deadline_node.next = &t->deadline_node;
     t->deadline_node.prev = &t->deadline_node;
+    nx_waitq_init(&t->reply_waitq);
+    t->in_flight_reply_buf     = NULL;
+    t->in_flight_reply_buf_len = 0;
+    t->in_flight_reply_rc      = 0;
 
     /* Top of kstack, 16-byte aligned. */
     uintptr_t sp_top = (uintptr_t)stack + t->kstack_size;
@@ -302,6 +461,13 @@ struct nx_task *nx_task_create_forked(const char *name,
      * the user backing, which it does for musl's mallocng-backed
      * allocator). */
     asm volatile ("mrs %0, tpidr_el0" : "=r"(t->tpidr_el0));
+
+    if (wire_caller_slot(t) != NX_OK) {
+        free_kstack(t->kstack_base, 1);
+        free_task_struct(t);
+        return NULL;
+    }
+
     return t;
 #endif
 }
@@ -309,6 +475,13 @@ struct nx_task *nx_task_create_forked(const char *name,
 void nx_task_destroy(struct nx_task *t)
 {
     if (!t) return;
+
+    /* Tear down the per-task graph identity before freeing the
+     * struct so the registry never holds a dangling slot pointer.
+     * No-op for tasks that never wired up (caller_slot_active is
+     * false for `g_idle_task` and for any task created before
+     * posix_shim's slot was bound). */
+    unwire_caller_slot(t);
 
     size_t pages = t->kstack_size / 4096U;
     if (pages == 0) pages = 1;

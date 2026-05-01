@@ -1,11 +1,14 @@
 #ifndef NONUX_SCHED_TASK_H
 #define NONUX_SCHED_TASK_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "core/cpu/monotonic.h"
 #include "core/lib/list.h"
+#include "core/sched/waitq.h"
+#include "framework/registry.h"
 
 /*
  * Task + saved CPU context.  This is the frozen core-side view of a
@@ -71,7 +74,17 @@ enum nx_task_state {
  * during bootstrap).  Slice 7.1 added this field.
  */
 struct nx_process;
-struct nx_waitq;
+
+/*
+ * Slice 8.0a.5 — slot-name buffer.  Per-task `caller_slot` names are
+ * synthesized as `task#<id>` so the registry's name-uniqueness check
+ * passes; 24 bytes covers `task#` + a 19-digit decimal `id` + NUL,
+ * which is more than enough for `uint32_t` (max 10 digits).  The
+ * buffer lives on the task struct so the slot's `const char *name`
+ * pointer is valid for the slot's whole lifetime (slot is embedded
+ * in the same task).
+ */
+#define NX_TASK_SLOT_NAME_MAX 24
 
 /*
  * `cpu_ctx` is first so `cpu_switch_to(struct task *)` can treat the task
@@ -117,6 +130,37 @@ struct nx_task {
     int                 wait_has_deadline;
     int                 wait_woken;
     struct nx_list_node deadline_node;
+
+    /*
+     * Slice 8.0a.5 — per-task graph identity for the IPC router.
+     * `caller_slot` is registered at task_create-time and bound to
+     * the singleton `posix_shim` component (registry's N→1
+     * binding), so every blocking call this task issues carries a
+     * real `src_slot` and rides on a registered `(caller_slot →
+     * svc_slot)` edge cloned from posix_shim's outgoing deps.  See
+     * SLOT-CALL-API.md §"Per-Task `caller_slot`" + DESIGN.md
+     * §"Tasks as IPC Senders" + §"Edge inheritance".
+     *
+     * `caller_slot_active` is set true once wire-up succeeded; the
+     * destroy path keys off it so tasks created before posix_shim
+     * is bound (e.g. host unit tests that don't run framework
+     * bootstrap, or the static `g_idle_task`) tear down cleanly
+     * without touching the registry.  `caller_slot_name` is the
+     * backing storage for `caller_slot.name`.
+     *
+     * `reply_waitq` is the single in-flight blocking-call's wakeup
+     * channel; `in_flight_reply_buf*` are populated by
+     * `nx_slot_call_blocking` (slice 8.0a.6) and consumed by
+     * posix_shim's reply handler.
+     */
+    struct nx_slot      caller_slot;
+    char                caller_slot_name[NX_TASK_SLOT_NAME_MAX];
+    bool                caller_slot_active;
+
+    struct nx_waitq     reply_waitq;
+    void               *in_flight_reply_buf;
+    size_t              in_flight_reply_buf_len;
+    int                 in_flight_reply_rc;
 };
 
 _Static_assert(offsetof(struct nx_task, cpu_ctx) == 0,
