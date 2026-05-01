@@ -1,6 +1,9 @@
 #ifndef NX_FRAMEWORK_DISPATCHER_H
 #define NX_FRAMEWORK_DISPATCHER_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #include "framework/ipc.h"
 
 /*
@@ -65,5 +68,24 @@ int nx_dispatcher_pump_once(void);
  * build this does not tear down the kthread; it just drains
  * outstanding messages. */
 void nx_dispatcher_reset(void);
+
+/* ---------- Reply-pool test surface (slice 8.0a.6) ------------------- */
+
+/* Capacity of the per-CPU reply-message pool (= NX_REPLY_POOL_SIZE).
+ * Returned as `size_t` so tests can use the standard ASSERT_EQ_U
+ * comparators. */
+size_t nx_dispatcher_reply_pool_capacity_for_test(void);
+
+/* Number of pool entries currently allocated.  Useful for asserting
+ * "the dispatcher freed the reply after delivery". */
+size_t nx_dispatcher_reply_pool_in_use_for_test(void);
+
+/* Reset every entry's in-use bit to 0.  Called from
+ * `nx_dispatcher_reset` and may also be called directly from tests
+ * that build pool entries by hand. */
+void   nx_dispatcher_reply_pool_reset_for_test(void);
+
+/* True if `m` is a pointer into the reply pool's static storage. */
+bool   nx_dispatcher_reply_pool_owns_for_test(const struct nx_ipc_message *m);
 
 #endif /* NX_FRAMEWORK_DISPATCHER_H */

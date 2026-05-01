@@ -2,6 +2,7 @@
 #define NX_FRAMEWORK_SLOT_CALL_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "framework/ipc.h"
 
@@ -66,5 +67,38 @@ int nx_slot_call_blocking(struct nx_slot       *slot,
                           struct nx_ipc_message *msg,
                           void                  *reply_buf,
                           size_t                 reply_buf_len);
+
+/*
+ * Slice 8.0a.6 — reply payload header.
+ *
+ * Every blocking-call reply payload begins with `struct nx_reply_header`.
+ * Per-op reply structs (emitted by `tools/gen-iface.py` once slice 8.0b
+ * activates the generated dispatch shims) embed the header as their
+ * first field and append op-specific output fields after it; for slice
+ * 8.0a.6's round-trip, the entire reply payload is just this header.
+ *
+ * `posix_shim_handle_msg` reads `rc` out of the header to set the
+ * caller task's `in_flight_reply_rc` and copies the full payload bytes
+ * into the caller's wrapper-allocated reply buffer.
+ */
+struct nx_reply_header {
+    int32_t rc;
+};
+
+/*
+ * Per-CPU reply-message pool — sized 256, matching the existing
+ * ISR-message-pool discipline (see `framework/dispatcher.h`).  The
+ * dispatcher allocates a reply on every `NX_MSG_FLAG_REPLY_REQUESTED`
+ * round-trip; the entry is freed after the reply leg's `handle_msg`
+ * returns.  Pool exhaustion asserts (kpanic on kernel, abort on host)
+ * so the round-trip can never silently drop a wakeup.
+ *
+ * `NX_REPLY_PAYLOAD_MAX` bounds the largest reply struct the pool
+ * accommodates.  Slice 8.0a.6 only carries `struct nx_reply_header`
+ * (4 bytes); 512 bytes leaves comfortable headroom for slice 8.0b's
+ * generated reply structs without forcing per-op pool tuning yet.
+ */
+#define NX_REPLY_POOL_SIZE   256u
+#define NX_REPLY_PAYLOAD_MAX 512u
 
 #endif /* NX_FRAMEWORK_SLOT_CALL_H */

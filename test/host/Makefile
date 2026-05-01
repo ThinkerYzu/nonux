@@ -30,6 +30,7 @@ SRCS := main.c \
         component_ramfs_test.c \
         component_vfs_simple_test.c \
         dispatcher_test.c \
+        slot_call_test.c \
         handle_test.c \
         syscall_test.c \
         channel_test.c \

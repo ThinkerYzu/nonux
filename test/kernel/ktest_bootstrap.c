@@ -1,9 +1,13 @@
 #include "ktest.h"
 #include "core/sched/task.h"
+#include "core/sched/sched.h"
 #include "framework/bootstrap.h"
 #include "framework/component.h"
+#include "framework/dispatcher.h"
 #include "framework/hook.h"
+#include "framework/ipc.h"
 #include "framework/registry.h"
+#include "framework/slot_call.h"
 
 /*
  * Kernel-side coverage for slice 3.9a.
@@ -212,4 +216,106 @@ KTEST(bootstrap_caller_slot_create_destroy_round_trip_in_kernel)
     nx_task_destroy(t);
     KASSERT_EQ_U(nx_graph_slot_count(),       slots_before);
     KASSERT_EQ_U(nx_graph_connection_count(), conns_before);
+}
+
+/* ---- slice 8.0a.6: blocking-call round-trip on the live composition ---- *
+ *
+ * The first end-to-end exercise of `nx_slot_call_blocking`.  A fresh
+ * kthread (real `nx_task_current()`, `caller_slot_active == true`)
+ * issues a blocking call to the `char_device.serial` slot — bound to
+ * `uart_pl011`, which has a real `handle_msg` returning 0.  The
+ * dispatcher kthread runs the request, posts the reply, runs
+ * `posix_shim_handle_msg` to copy the reply payload into the caller's
+ * `in_flight_reply_buf` and wake the caller's `reply_waitq`; the
+ * caller resumes and `nx_slot_call_blocking` returns rc.
+ *
+ * The ktest runs in idle-task context and yields the CPU until the
+ * caller kthread sets `g_blocking_call_finished`.  Bounded yield budget
+ * matches the existing argv_push / fork ktest convention.
+ */
+
+static struct nx_task *g_blocking_call_task;
+static volatile int    g_blocking_call_finished;
+static volatile int    g_blocking_call_rc;
+static volatile size_t g_blocking_call_pool_at_start;
+static volatile size_t g_blocking_call_pool_after_call;
+
+static void blocking_call_kthread(void *arg)
+{
+    (void)arg;
+    struct nx_task *me = nx_task_current();
+    struct nx_slot *uart = nx_slot_lookup("char_device.serial");
+    if (!me || !uart || !me->caller_slot_active) {
+        g_blocking_call_rc       = -999;
+        g_blocking_call_finished = 1;
+        for (;;) nx_task_yield();
+    }
+
+    g_blocking_call_pool_at_start =
+        nx_dispatcher_reply_pool_in_use_for_test();
+
+    static char    reply_buf[NX_REPLY_PAYLOAD_MAX];
+    static const char payload_bytes[] = "x";
+
+    struct nx_ipc_message msg = {
+        .src_slot    = &me->caller_slot,
+        .dst_slot    = uart,
+        .msg_type    = 1,                /* UART_MSG_WRITE */
+        .flags       = 0,
+        .payload     = payload_bytes,
+        .payload_len = (uint32_t)(sizeof payload_bytes - 1),
+        .n_caps      = 0,
+        .caps        = NULL,
+    };
+
+    int rc = nx_slot_call_blocking(uart, &msg, reply_buf, sizeof reply_buf);
+
+    g_blocking_call_pool_after_call =
+        nx_dispatcher_reply_pool_in_use_for_test();
+    g_blocking_call_rc       = rc;
+    g_blocking_call_finished = 1;
+
+    for (;;) nx_task_yield();
+}
+
+KTEST(slot_call_blocking_round_trip_via_uart_returns_handler_rc)
+{
+    g_blocking_call_finished       = 0;
+    g_blocking_call_rc             = 0xdead;
+    g_blocking_call_pool_at_start  = 0;
+    g_blocking_call_pool_after_call = 0;
+
+    g_blocking_call_task = sched_spawn_kthread("ktest_blocking",
+                                               blocking_call_kthread,
+                                               NULL, NULL);
+    KASSERT_NOT_NULL(g_blocking_call_task);
+
+    /* Yield until the call returns.  Generous bound — the round trip
+     * is two voluntary task switches plus a dispatcher iteration; we
+     * just need to yield often enough to let the dispatcher run. */
+    const int max_yields = 4096;
+    int reached = 0;
+    for (int i = 0; i < max_yields; i++) {
+        if (g_blocking_call_finished) { reached = 1; break; }
+        nx_task_yield();
+    }
+    KASSERT(reached);
+
+    /* uart_pl011_handle_msg returns 0 on success — that's the rc the
+     * caller observes after the round-trip. */
+    KASSERT_EQ_U(g_blocking_call_rc, 0);
+
+    /* Pool entry was returned after delivery.  Other tests in the
+     * suite may have left entries in flight (e.g. earlier kthreads
+     * that issued blocking calls during this same test pass), so
+     * assert "did not grow" rather than "exact zero". */
+    KASSERT_EQ_U(g_blocking_call_pool_after_call,
+                 g_blocking_call_pool_at_start);
+
+    /* Quiesce the kthread by removing it from the runqueue (still
+     * yielding in its tail loop is fine — the scheduler skips
+     * dequeued tasks). */
+    const struct nx_scheduler_ops *ops = sched_ops_for_test();
+    void *self = sched_self_for_test();
+    if (ops && self) ops->dequeue(self, g_blocking_call_task);
 }
