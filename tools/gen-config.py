@@ -110,8 +110,17 @@ def parse_dep(dep_name: str, spec: dict, required: bool) -> dict:
             f"dep {dep_name!r}: version must be string, got "
             f"{type(version_req).__name__}")
 
+    # Dep keys may be dotted slot names (e.g. "char_device.serial") so
+    # that validate-config.py can directly match them against kernel.json
+    # slot names.  For C codegen we flatten dots → underscores; the
+    # `.name = "..."` literal in the descriptor stays dotted for runtime
+    # `nx_slot_lookup` to find the right slot.
+    c_field = dep_name.replace(".", "_")
+    c_ident(c_field)  # sanity-check the post-flatten identifier
+
     return {
         "name":        dep_name,
+        "c_field":     c_field,
         "required":    required,
         "version_req": version_req,
         "mode":        MODE_MAP[mode],
@@ -177,9 +186,11 @@ def render_deps_header(manifest: dict, manifest_path: pathlib.Path) -> str:
         for d in deps:
             tag = "required" if d["required"] else "optional"
             ver = f' — "{d["version_req"]}"' if d["version_req"] else ""
+            slot_note = (f' — slot "{d["name"]}"'
+                         if d["c_field"] != d["name"] else "")
             lines.append(
-                f"    struct nx_slot *{d['name']};"
-                f"   /* {tag}{ver} */")
+                f"    struct nx_slot *{d['c_field']};"
+                f"   /* {tag}{ver}{slot_note} */")
     else:
         lines.append("    char _nx_no_deps;  /* placeholder — manifest has no deps */")
     lines.append("};")
@@ -194,7 +205,7 @@ def render_deps_header(manifest: dict, manifest_path: pathlib.Path) -> str:
             stateful = "true" if d["stateful"] else "false"
             entry = (
                 f"    {{ .name = \"{d['name']}\","
-                f" .offset = offsetof(CONTAINER, FIELD.{d['name']}),"
+                f" .offset = offsetof(CONTAINER, FIELD.{d['c_field']}),"
                 f" .required = {required}, .version_req = {version},"
                 f" .mode = {d['mode']}, .stateful = {stateful},"
                 f" .policy = {d['policy']} }}")

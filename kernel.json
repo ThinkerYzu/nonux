@@ -27,6 +27,10 @@
     "vfs": {
       "impl": "vfs_simple",
       "config": {}
+    },
+    "posix_shim": {
+      "impl": "posix_shim",
+      "config": {}
     }
   },
 

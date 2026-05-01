@@ -118,6 +118,13 @@ gen/sources.mk: kernel.json $(GENCONFIG)
 gen/config.h: gen/sources.mk
 gen/slot_table.c: gen/sources.mk
 
+# Per-component manifest → gen/<name>_deps.h.  Slice 8.0a.4 lands the
+# first user (posix_shim).  The pattern rule lets future components
+# with deps just drop a manifest in place; no Makefile churn needed.
+gen/%_deps.h: components/%/manifest.json $(GENCONFIG)
+	@mkdir -p gen
+	$(PYTHON) $(GENCONFIG) manifest $< gen/
+
 kernel-config: gen/sources.mk
 .PHONY: kernel-config
 
@@ -462,6 +469,9 @@ components/libnxlibc/nxlibc.o: components/libnxlibc/nxlibc.c \
                                 components/libnxlibc/posix.h \
                                 components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
+
+# Slice 8.0a.4 — posix_shim depends on its manifest-derived deps header.
+components/posix_shim/posix_shim.o: gen/posix_shim_deps.h
 
 components/libnxlibc/libnxlibc.a: components/libnxlibc/crt0.o \
                                    components/libnxlibc/nxlibc.o

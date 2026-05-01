@@ -173,10 +173,29 @@ def scan_slot_fields(src: str) -> list[tuple[str, int]]:
     return out
 
 
+_GEN_DEPS_FIELD_RE = re.compile(
+    r"^\s+struct\s+\w+_deps\s+\w+\s*;",
+    re.MULTILINE,
+)
+
+
 def check_r2(comp_dir: pathlib.Path, manifest: dict) -> list[Finding]:
     findings: list[Finding] = []
     declared = set(manifest.get("requires", {}).keys()) \
              | set(manifest.get("optional", {}).keys())
+
+    # Slice 8.0a.4 — components using the gen-config deps-injection pattern
+    # embed `struct <name>_deps <field>;` in their state struct rather than
+    # declaring `struct nx_slot *X;` fields directly.  In that mode the
+    # manifest↔fields mapping is enforced by gen-config (one struct field
+    # per manifest dep, generated deterministically from the manifest), so
+    # R2's premise is already covered and a re-check here would just
+    # duplicate gen-config's job — and produce false positives because
+    # dotted slot names (e.g. "memory.page_alloc") get dot-flattened to
+    # underscores in the generated C field names.
+    for c_file in sorted(comp_dir.glob("*.c")):
+        if _GEN_DEPS_FIELD_RE.search(c_file.read_text()):
+            return findings
 
     seen_fields: dict[str, tuple[pathlib.Path, int]] = {}
     for c_file in sorted(comp_dir.glob("*.c")):

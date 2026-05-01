@@ -61,7 +61,12 @@ KTEST(bootstrap_component_count_matches_descriptor_section)
 
 KTEST(bootstrap_snapshot_json_contains_bound_impl)
 {
-    static char buf[2048];
+    /* Bumped 2048 → 4096 in slice 8.0a.4 — adding posix_shim grew the
+     * composition to 7 slots + 7 components + 4 connections (the
+     * `posix_shim → {vfs, scheduler, memory.page_alloc, char_device.serial}`
+     * edges from manifest deps), pushing the rendered JSON past 2 KiB.
+     * Future composition growth will need another bump. */
+    static char buf[4096];
     struct nx_graph_snapshot *snap = nx_graph_snapshot_take();
     KASSERT_NOT_NULL(snap);
 

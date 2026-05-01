@@ -1,0 +1,31 @@
+{
+  "name": "posix_shim",
+  "version": "0.1.0",
+  "iface": "posix_shim",
+  "requires": {
+    "vfs": {
+      "version": ">=0.1.0",
+      "mode": "async",
+      "stateful": true,
+      "policy": "queue"
+    },
+    "scheduler": {
+      "version": ">=0.1.0",
+      "mode": "async",
+      "stateful": false,
+      "policy": "queue"
+    },
+    "memory.page_alloc": {
+      "version": ">=0.1.0",
+      "mode": "async",
+      "stateful": false,
+      "policy": "queue"
+    },
+    "char_device.serial": {
+      "version": ">=0.1.0",
+      "mode": "async",
+      "stateful": false,
+      "policy": "queue"
+    }
+  }
+}
