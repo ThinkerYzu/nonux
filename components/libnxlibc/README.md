@@ -1,16 +1,22 @@
-# posix_shim
+# libnxlibc
 
-Header-only POSIX-style C wrappers over the `NX_SYS_*` syscall surface.
-Introduced in slice 7.4d; the spine of any future user-C code that
-wants to target nonux without hand-rolling `svc #0` asm.
+> **Renamed from `posix_shim` in slice 8.0a.1** — the `posix_shim`
+> name is reserved for the kernel-side boundary component landing in
+> slice 8.0a.2 (per [SLOT-CALL-API.md](../../../proj_docs/nonux/SLOT-CALL-API.md)).
+> This directory now holds the *userspace* POSIX-style C wrappers and
+> EL0 C-runtime bootstrap (crt0.S + nxlibc.c).
+
+POSIX-style C wrappers over the `NX_SYS_*` syscall surface.
+Introduced in slice 7.4d; the spine of any user-C code that wants to
+target nonux without hand-rolling `svc #0` asm.
 
 ## Interface
 
-- **iface:** *none* — posix_shim doesn't bind to a kernel slot.  It
+- **iface:** *none* — libnxlibc doesn't bind to a kernel slot.  It
   lives entirely on the EL0 side of the boundary.
 - **Bound by default:** *no* — **not** referenced in `kernel.json`
   and **not** linked into `kernel.bin`.  EL0 C programs `#include
-  "components/posix_shim/posix.h"` directly; the kernel stays
+  "components/libnxlibc/posix.h"` directly; the kernel stays
   unaware.
 - **Dependencies:** none.
 - **Worker threads:** none.

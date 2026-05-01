@@ -3,7 +3,7 @@
  *
  * Loads the C-compiled `posix_pipe_prog.elf` (which uses the
  * `nx_posix_pipe / write / read / close` wrappers from
- * `components/posix_shim/posix.h`) into a fresh process, drops to
+ * `components/libnxlibc/posix.h`) into a fresh process, drops to
  * EL0, and verifies the live log gains `[pipe-ok]` + the process
  * ends EXITED with exit_code == 29.  Mechanics:
  *

@@ -20,7 +20,7 @@
  *   4. nxlibc_exit(53) — matches the ktest's expected exit code.
  */
 
-#include "components/posix_shim/nxlibc.h"
+#include "components/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

@@ -17,7 +17,7 @@
  * the QEMU log for human inspection).
  */
 
-#include "components/posix_shim/nxlibc.h"
+#include "components/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

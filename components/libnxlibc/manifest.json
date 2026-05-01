@@ -1,4 +1,4 @@
 {
-  "name": "posix_shim",
+  "name": "libnxlibc",
   "version": "0.1.0"
 }

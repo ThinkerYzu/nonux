@@ -2,7 +2,7 @@
  * Kernel-side coverage for slice 7.6c.0 — EL0 C-runtime bootstrap.
  *
  * Validates that:
- *   1. `components/posix_shim/crt0.S`'s `_start` is at the ELF entry
+ *   1. `components/libnxlibc/crt0.S`'s `_start` is at the ELF entry
  *      and gets invoked by `drop_to_el0` cleanly.
  *   2. crt0 sets up argc=1 + argv={ "nonux", NULL } and calls
  *      `main(argc, argv, envp)`.

@@ -40,7 +40,7 @@
  * so the read side stays open until the child closes it (or exits).
  */
 
-#include "components/posix_shim/posix.h"
+#include "components/libnxlibc/posix.h"
 
 static int bufeq(const char *a, const char *b, nx_posix_ssize_t n)
 {

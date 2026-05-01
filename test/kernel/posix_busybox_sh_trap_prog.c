@@ -18,7 +18,7 @@
  * Expected output: "body\n" then "bye\n", parent exits with status 0.
  */
 
-#include "components/posix_shim/nxlibc.h"
+#include "components/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

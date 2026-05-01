@@ -11,7 +11,7 @@
  * offset 0 and overwrite the first `a\n`.
  */
 
-#include "components/posix_shim/nxlibc.h"
+#include "components/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

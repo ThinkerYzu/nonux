@@ -299,15 +299,16 @@ test/kernel/init_prog.elf: test/kernel/init_prog.o test/kernel/init_prog.ld
 # .incbin dependencies automatically, so add an explicit one.
 test/kernel/init_prog_blob.o: test/kernel/init_prog_blob.S test/kernel/init_prog.elf
 
-# Slice 7.4d: a C-compiled EL0 ELF that exercises the posix_shim
-# header-only wrappers.  Reuses init_prog.ld for the user-window
+# Slice 7.4d: a C-compiled EL0 ELF that exercises the libnxlibc
+# header-only POSIX wrappers (renamed from posix_shim in slice 8.0a.1
+# to free the posix_shim name for the kernel-side component).  Reuses init_prog.ld for the user-window
 # VA.  -ffreestanding -nostdlib keeps the build independent of any
 # libc; -mgeneral-regs-only / -mno-outline-atomics mirror the
 # kernel's flags so we produce pure integer EL0 code.
 POSIX_PROG_CFLAGS := -ffreestanding -nostdlib -Wall -Wextra -Werror -O2 \
                      -mno-outline-atomics -mgeneral-regs-only \
                      -fno-stack-protector -fno-pic -I.
-test/kernel/posix_prog.o: test/kernel/posix_prog.c components/posix_shim/posix.h
+test/kernel/posix_prog.o: test/kernel/posix_prog.c components/libnxlibc/posix.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_prog.elf: test/kernel/posix_prog.o test/kernel/init_prog.ld
@@ -318,7 +319,7 @@ test/kernel/posix_prog_blob.o: test/kernel/posix_prog_blob.S test/kernel/posix_p
 # Slice 7.5 pipe demo — same flag / linker-script recipe as
 # posix_prog.elf.  Single-process write→read roundtrip through the
 # NX_SYS_PIPE + type-polymorphic NX_SYS_READ/WRITE path.
-test/kernel/posix_pipe_prog.o: test/kernel/posix_pipe_prog.c components/posix_shim/posix.h
+test/kernel/posix_pipe_prog.o: test/kernel/posix_pipe_prog.c components/libnxlibc/posix.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_pipe_prog.elf: test/kernel/posix_pipe_prog.o test/kernel/init_prog.ld
@@ -327,7 +328,7 @@ test/kernel/posix_pipe_prog.elf: test/kernel/posix_pipe_prog.o test/kernel/init_
 test/kernel/posix_pipe_prog_blob.o: test/kernel/posix_pipe_prog_blob.S test/kernel/posix_pipe_prog.elf
 
 # Slice 7.8b ppoll demo — same recipe as posix_pipe_prog.elf.
-test/kernel/posix_ppoll_prog.o: test/kernel/posix_ppoll_prog.c components/posix_shim/posix.h
+test/kernel/posix_ppoll_prog.o: test/kernel/posix_ppoll_prog.c components/libnxlibc/posix.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_ppoll_prog.elf: test/kernel/posix_ppoll_prog.o test/kernel/init_prog.ld
@@ -336,7 +337,7 @@ test/kernel/posix_ppoll_prog.elf: test/kernel/posix_ppoll_prog.o test/kernel/ini
 test/kernel/posix_ppoll_prog_blob.o: test/kernel/posix_ppoll_prog_blob.S test/kernel/posix_ppoll_prog.elf
 
 # Slice 7.5 signal demo — parent fork + SIGTERM to child.
-test/kernel/posix_signal_prog.o: test/kernel/posix_signal_prog.c components/posix_shim/posix.h
+test/kernel/posix_signal_prog.o: test/kernel/posix_signal_prog.c components/libnxlibc/posix.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_signal_prog.elf: test/kernel/posix_signal_prog.o test/kernel/init_prog.ld
@@ -347,7 +348,7 @@ test/kernel/posix_signal_prog_blob.o: test/kernel/posix_signal_prog_blob.S test/
 # Slice 7.6 prereq — cross-process pipe demo.  Same flag set + linker
 # script as posix_prog.elf; just a different .c source.  Validates
 # fork's handle-table inheritance for HANDLE_CHANNEL endpoints.
-test/kernel/posix_pipe_xproc_prog.o: test/kernel/posix_pipe_xproc_prog.c components/posix_shim/posix.h
+test/kernel/posix_pipe_xproc_prog.o: test/kernel/posix_pipe_xproc_prog.c components/libnxlibc/posix.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_pipe_xproc_prog.elf: test/kernel/posix_pipe_xproc_prog.o test/kernel/init_prog.ld
@@ -425,11 +426,11 @@ test/kernel/initramfs_blob.o: test/kernel/initramfs_blob.S \
 test/kernel/initramfs_busybox_blob.o: test/kernel/initramfs_busybox_blob.S \
                                       test/kernel/initramfs-busybox.cpio
 
-# Slice 7.6c.0 — EL0 C-runtime bootstrap.  posix_shim's crt0.S owns
+# Slice 7.6c.0 — EL0 C-runtime bootstrap.  libnxlibc's crt0.S owns
 # the ELF entry symbol `_start` and provides the standard POSIX
 # transition: argc/argv/envp setup, `bl main`, `nx_posix_exit(rv)`.
 # Linked first so `_start` lands at the user-window base.
-components/posix_shim/crt0.o: components/posix_shim/crt0.S
+components/libnxlibc/crt0.o: components/libnxlibc/crt0.S
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 # C demo using `int main(int argc, char **argv, char **envp)` entry
@@ -438,14 +439,14 @@ components/posix_shim/crt0.o: components/posix_shim/crt0.S
 # linker script, same freestanding stance.  Linker order matters:
 # crt0.o first so `_start` is at offset 0 in the .text section.
 test/kernel/posix_main_prog.o: test/kernel/posix_main_prog.c \
-                               components/posix_shim/posix.h
+                               components/libnxlibc/posix.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
-test/kernel/posix_main_prog.elf: components/posix_shim/crt0.o \
+test/kernel/posix_main_prog.elf: components/libnxlibc/crt0.o \
                                  test/kernel/posix_main_prog.o \
                                  test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
-	    components/posix_shim/crt0.o test/kernel/posix_main_prog.o
+	    components/libnxlibc/crt0.o test/kernel/posix_main_prog.o
 
 test/kernel/posix_main_prog_blob.o: test/kernel/posix_main_prog_blob.S \
                                     test/kernel/posix_main_prog.elf
@@ -456,14 +457,14 @@ test/kernel/posix_main_prog_blob.o: test/kernel/posix_main_prog_blob.S \
 # ...).  Slice 7.6c.2's musl pin will replace this archive with
 # musl's `libc.a`; programs don't need to change source.
 AR := $(CROSS)ar
-components/posix_shim/nxlibc.o: components/posix_shim/nxlibc.c \
-                                components/posix_shim/posix.h \
-                                components/posix_shim/nxlibc.h
+components/libnxlibc/nxlibc.o: components/libnxlibc/nxlibc.c \
+                                components/libnxlibc/posix.h \
+                                components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
-components/posix_shim/libnxlibc.a: components/posix_shim/crt0.o \
-                                   components/posix_shim/nxlibc.o
-	$(AR) rcs $@ components/posix_shim/crt0.o components/posix_shim/nxlibc.o
+components/libnxlibc/libnxlibc.a: components/libnxlibc/crt0.o \
+                                   components/libnxlibc/nxlibc.o
+	$(AR) rcs $@ components/libnxlibc/crt0.o components/libnxlibc/nxlibc.o
 
 # C demo that links against libnxlibc.a.  The linker pulls `crt0.o`
 # out of the archive (it's referenced through `_start` — the ELF
@@ -471,15 +472,15 @@ components/posix_shim/libnxlibc.a: components/posix_shim/crt0.o \
 # POSIX-named symbols the demo calls.  `-L` + `-l` is the standard
 # GNU ld archive-search incantation.
 test/kernel/posix_libc_prog.o: test/kernel/posix_libc_prog.c \
-                               components/posix_shim/nxlibc.h
+                               components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_libc_prog.elf: test/kernel/posix_libc_prog.o \
-                                 components/posix_shim/libnxlibc.a \
+                                 components/libnxlibc/libnxlibc.a \
                                  test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_libc_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_libc_prog_blob.o: test/kernel/posix_libc_prog_blob.S \
                                     test/kernel/posix_libc_prog.elf
@@ -487,15 +488,15 @@ test/kernel/posix_libc_prog_blob.o: test/kernel/posix_libc_prog_blob.S \
 # Slice 7.6c.2 — printf demo.  Same flag set + linker shape as
 # posix_libc_prog; just exercises printf / atoi / puts instead.
 test/kernel/posix_printf_prog.o: test/kernel/posix_printf_prog.c \
-                                 components/posix_shim/nxlibc.h
+                                 components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_printf_prog.elf: test/kernel/posix_printf_prog.o \
-                                   components/posix_shim/libnxlibc.a \
+                                   components/libnxlibc/libnxlibc.a \
                                    test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_printf_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_printf_prog_blob.o: test/kernel/posix_printf_prog_blob.S \
                                       test/kernel/posix_printf_prog.elf
@@ -507,26 +508,26 @@ test/kernel/posix_printf_prog_blob.o: test/kernel/posix_printf_prog_blob.S \
 #   argv_parent_prog.elf — drops to EL0 directly; forks + execve's
 #                          /argv_child with explicit argv, waits.
 test/kernel/argv_child_prog.o: test/kernel/argv_child_prog.c \
-                               components/posix_shim/nxlibc.h
+                               components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/argv_child_prog.elf: test/kernel/argv_child_prog.o \
-                                 components/posix_shim/libnxlibc.a \
+                                 components/libnxlibc/libnxlibc.a \
                                  test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/argv_child_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/argv_parent_prog.o: test/kernel/argv_parent_prog.c \
-                                components/posix_shim/nxlibc.h
+                                components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/argv_parent_prog.elf: test/kernel/argv_parent_prog.o \
-                                  components/posix_shim/libnxlibc.a \
+                                  components/libnxlibc/libnxlibc.a \
                                   test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/argv_parent_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/argv_parent_prog_blob.o: test/kernel/argv_parent_prog_blob.S \
                                      test/kernel/argv_parent_prog.elf
@@ -538,15 +539,15 @@ test/kernel/argv_parent_prog_blob.o: test/kernel/argv_parent_prog_blob.S \
 # slice 7.6c.3b's AUXV push only fires through sys_exec, and only
 # this test actually drives a sys_exec → musl-linked image.
 test/kernel/musl_exec_parent_prog.o: test/kernel/musl_exec_parent_prog.c \
-                                     components/posix_shim/nxlibc.h
+                                     components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/musl_exec_parent_prog.elf: test/kernel/musl_exec_parent_prog.o \
-                                       components/posix_shim/libnxlibc.a \
+                                       components/libnxlibc/libnxlibc.a \
                                        test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/musl_exec_parent_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/musl_exec_parent_prog_blob.o: test/kernel/musl_exec_parent_prog_blob.S \
                                           test/kernel/musl_exec_parent_prog.elf
@@ -556,15 +557,15 @@ test/kernel/musl_exec_parent_prog_blob.o: test/kernel/musl_exec_parent_prog_blob
 # against the initramfs-seeded busybox binary.  Same link recipe as
 # musl_exec_parent — small libnxlibc-linked C program, no musl.
 test/kernel/posix_busybox_help_prog.o: test/kernel/posix_busybox_help_prog.c \
-                                       components/posix_shim/nxlibc.h
+                                       components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_help_prog.elf: test/kernel/posix_busybox_help_prog.o \
-                                         components/posix_shim/libnxlibc.a \
+                                         components/libnxlibc/libnxlibc.a \
                                          test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_help_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_help_prog_blob.o: test/kernel/posix_busybox_help_prog_blob.S \
                                             test/kernel/posix_busybox_help_prog.elf
@@ -574,15 +575,15 @@ test/kernel/posix_busybox_help_prog_blob.o: test/kernel/posix_busybox_help_prog_
 # busybox via { "sh", "-c", "exit 42", NULL } so basename(argv[0])
 # routes to the ash applet (CONFIG_SH_IS_ASH=y).
 test/kernel/posix_busybox_sh_prog.o: test/kernel/posix_busybox_sh_prog.c \
-                                     components/posix_shim/nxlibc.h
+                                     components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_prog.elf: test/kernel/posix_busybox_sh_prog.o \
-                                       components/posix_shim/libnxlibc.a \
+                                       components/libnxlibc/libnxlibc.a \
                                        test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_prog_blob.o: test/kernel/posix_busybox_sh_prog_blob.S \
                                           test/kernel/posix_busybox_sh_prog.elf
@@ -592,15 +593,15 @@ test/kernel/posix_busybox_sh_prog_blob.o: test/kernel/posix_busybox_sh_prog_blob
 # differs.  Discovery-driven escalation past the slice-7.6d.N.1
 # `exit 42` baseline.
 test/kernel/posix_busybox_sh_echo_prog.o: test/kernel/posix_busybox_sh_echo_prog.c \
-                                          components/posix_shim/nxlibc.h
+                                          components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_echo_prog.elf: test/kernel/posix_busybox_sh_echo_prog.o \
-                                            components/posix_shim/libnxlibc.a \
+                                            components/libnxlibc/libnxlibc.a \
                                             test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_echo_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_echo_prog_blob.o: test/kernel/posix_busybox_sh_echo_prog_blob.S \
                                                test/kernel/posix_busybox_sh_echo_prog.elf
@@ -611,15 +612,15 @@ test/kernel/posix_busybox_sh_echo_prog_blob.o: test/kernel/posix_busybox_sh_echo
 # Discovery-driven escalation past slice 7.6d.N.2's single-
 # statement `echo hello` baseline.
 test/kernel/posix_busybox_sh_echo_seq_prog.o: test/kernel/posix_busybox_sh_echo_seq_prog.c \
-                                              components/posix_shim/nxlibc.h
+                                              components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_echo_seq_prog.elf: test/kernel/posix_busybox_sh_echo_seq_prog.o \
-                                                components/posix_shim/libnxlibc.a \
+                                                components/libnxlibc/libnxlibc.a \
                                                 test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_echo_seq_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_echo_seq_prog_blob.o: test/kernel/posix_busybox_sh_echo_seq_prog_blob.S \
                                                    test/kernel/posix_busybox_sh_echo_seq_prog.elf
@@ -629,15 +630,15 @@ test/kernel/posix_busybox_sh_echo_seq_prog_blob.o: test/kernel/posix_busybox_sh_
 # duplicate cpio entry pointing at the same busybox blob; busybox
 # dispatches to the `ls` applet via `basename(argv[0])`).
 test/kernel/posix_busybox_sh_ls_prog.o: test/kernel/posix_busybox_sh_ls_prog.c \
-                                        components/posix_shim/nxlibc.h
+                                        components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_ls_prog.elf: test/kernel/posix_busybox_sh_ls_prog.o \
-                                          components/posix_shim/libnxlibc.a \
+                                          components/libnxlibc/libnxlibc.a \
                                           test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_ls_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_ls_prog_blob.o: test/kernel/posix_busybox_sh_ls_prog_blob.S \
                                              test/kernel/posix_busybox_sh_ls_prog.elf
@@ -647,15 +648,15 @@ test/kernel/posix_busybox_sh_ls_prog_blob.o: test/kernel/posix_busybox_sh_ls_pro
 # stage), wires them with pipe(2) + dup2.  Will likely surface
 # unmapped __NR_pipe2 / __NR_dup3 / __NR_readv before it runs.
 test/kernel/posix_busybox_sh_pipe_prog.o: test/kernel/posix_busybox_sh_pipe_prog.c \
-                                          components/posix_shim/nxlibc.h
+                                          components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_pipe_prog.elf: test/kernel/posix_busybox_sh_pipe_prog.o \
-                                            components/posix_shim/libnxlibc.a \
+                                            components/libnxlibc/libnxlibc.a \
                                             test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_pipe_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_pipe_prog_blob.o: test/kernel/posix_busybox_sh_pipe_prog_blob.S \
                                                test/kernel/posix_busybox_sh_pipe_prog.elf
@@ -666,15 +667,15 @@ test/kernel/posix_busybox_sh_pipe_prog_blob.o: test/kernel/posix_busybox_sh_pipe
 # from a FILE handle (vs the CHANNEL handle exercised by the pipe
 # slice).
 test/kernel/posix_busybox_sh_cat_prog.o: test/kernel/posix_busybox_sh_cat_prog.c \
-                                         components/posix_shim/nxlibc.h
+                                         components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_cat_prog.elf: test/kernel/posix_busybox_sh_cat_prog.o \
-                                           components/posix_shim/libnxlibc.a \
+                                           components/libnxlibc/libnxlibc.a \
                                            test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_cat_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_cat_prog_blob.o: test/kernel/posix_busybox_sh_cat_prog_blob.S \
                                               test/kernel/posix_busybox_sh_cat_prog.elf
@@ -683,15 +684,15 @@ test/kernel/posix_busybox_sh_cat_prog_blob.o: test/kernel/posix_busybox_sh_cat_p
 # redirection-to-file escalation past the cat slice.  Same recipe as
 # posix_busybox_sh_cat_prog; only the embedded -c string differs.
 test/kernel/posix_busybox_sh_redir_prog.o: test/kernel/posix_busybox_sh_redir_prog.c \
-                                           components/posix_shim/nxlibc.h
+                                           components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_redir_prog.elf: test/kernel/posix_busybox_sh_redir_prog.o \
-                                             components/posix_shim/libnxlibc.a \
+                                             components/libnxlibc/libnxlibc.a \
                                              test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_redir_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_redir_prog_blob.o: test/kernel/posix_busybox_sh_redir_prog_blob.S \
                                                 test/kernel/posix_busybox_sh_redir_prog.elf
@@ -701,15 +702,15 @@ test/kernel/posix_busybox_sh_redir_prog_blob.o: test/kernel/posix_busybox_sh_red
 # (cat must inherit the FILE handle through fork+exec).  Same recipe
 # as the other busybox-sh variants; only the embedded -c string differs.
 test/kernel/posix_busybox_sh_copy_prog.o: test/kernel/posix_busybox_sh_copy_prog.c \
-                                          components/posix_shim/nxlibc.h
+                                          components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_copy_prog.elf: test/kernel/posix_busybox_sh_copy_prog.o \
-                                            components/posix_shim/libnxlibc.a \
+                                            components/libnxlibc/libnxlibc.a \
                                             test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_copy_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_copy_prog_blob.o: test/kernel/posix_busybox_sh_copy_prog_blob.S \
                                                test/kernel/posix_busybox_sh_copy_prog.elf
@@ -720,15 +721,15 @@ test/kernel/posix_busybox_sh_copy_prog_blob.o: test/kernel/posix_busybox_sh_copy
 # before exec'ing /bin/cat with no path arg.  Same recipe as the other
 # busybox-sh variants; only the embedded -c string differs.
 test/kernel/posix_busybox_sh_stdin_prog.o: test/kernel/posix_busybox_sh_stdin_prog.c \
-                                           components/posix_shim/nxlibc.h
+                                           components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_stdin_prog.elf: test/kernel/posix_busybox_sh_stdin_prog.o \
-                                             components/posix_shim/libnxlibc.a \
+                                             components/libnxlibc/libnxlibc.a \
                                              test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_stdin_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_stdin_prog_blob.o: test/kernel/posix_busybox_sh_stdin_prog_blob.S \
                                                 test/kernel/posix_busybox_sh_stdin_prog.elf
@@ -738,15 +739,15 @@ test/kernel/posix_busybox_sh_stdin_prog_blob.o: test/kernel/posix_busybox_sh_std
 # consumer, inverse of slice 7.6d.N.6b where the consumer was an
 # exec'd cat.  Same recipe as the other busybox-sh variants.
 test/kernel/posix_busybox_sh_cmdsub_prog.o: test/kernel/posix_busybox_sh_cmdsub_prog.c \
-                                            components/posix_shim/nxlibc.h
+                                            components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_cmdsub_prog.elf: test/kernel/posix_busybox_sh_cmdsub_prog.o \
-                                              components/posix_shim/libnxlibc.a \
+                                              components/libnxlibc/libnxlibc.a \
                                               test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_cmdsub_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_cmdsub_prog_blob.o: test/kernel/posix_busybox_sh_cmdsub_prog_blob.S \
                                                  test/kernel/posix_busybox_sh_cmdsub_prog.elf
@@ -756,15 +757,15 @@ test/kernel/posix_busybox_sh_cmdsub_prog_blob.o: test/kernel/posix_busybox_sh_cm
 # slice 7.6d.N.11 adds NX_VFS_OPEN_APPEND through interfaces/{fs,vfs}.h +
 # sys_openat translation + ramfs seek-to-end-before-each-write semantic.
 test/kernel/posix_busybox_sh_append_prog.o: test/kernel/posix_busybox_sh_append_prog.c \
-                                            components/posix_shim/nxlibc.h
+                                            components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_append_prog.elf: test/kernel/posix_busybox_sh_append_prog.o \
-                                              components/posix_shim/libnxlibc.a \
+                                              components/libnxlibc/libnxlibc.a \
                                               test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_append_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_append_prog_blob.o: test/kernel/posix_busybox_sh_append_prog_blob.S \
                                                  test/kernel/posix_busybox_sh_append_prog.elf
@@ -776,15 +777,15 @@ test/kernel/posix_busybox_sh_append_prog_blob.o: test/kernel/posix_busybox_sh_ap
 # entries.  EXIT pseudo-signal trap fires inside ash — no kernel
 # handler dispatch yet (that's slice 7.6d.N.final's territory).
 test/kernel/posix_busybox_sh_trap_prog.o: test/kernel/posix_busybox_sh_trap_prog.c \
-                                          components/posix_shim/nxlibc.h
+                                          components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_trap_prog.elf: test/kernel/posix_busybox_sh_trap_prog.o \
-                                            components/posix_shim/libnxlibc.a \
+                                            components/libnxlibc/libnxlibc.a \
                                             test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_trap_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_trap_prog_blob.o: test/kernel/posix_busybox_sh_trap_prog_blob.S \
                                                test/kernel/posix_busybox_sh_trap_prog.elf
@@ -795,15 +796,15 @@ test/kernel/posix_busybox_sh_trap_prog_blob.o: test/kernel/posix_busybox_sh_trap
 # kernel composition gap closed; just stub additions to keep ash +
 # its applets from bailing on ENOSYS.
 test/kernel/posix_busybox_sh_id_uname_prog.o: test/kernel/posix_busybox_sh_id_uname_prog.c \
-                                              components/posix_shim/nxlibc.h
+                                              components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_id_uname_prog.elf: test/kernel/posix_busybox_sh_id_uname_prog.o \
-                                                components/posix_shim/libnxlibc.a \
+                                                components/libnxlibc/libnxlibc.a \
                                                 test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_id_uname_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_id_uname_prog_blob.o: test/kernel/posix_busybox_sh_id_uname_prog_blob.S \
                                                    test/kernel/posix_busybox_sh_id_uname_prog.elf
@@ -813,15 +814,15 @@ test/kernel/posix_busybox_sh_id_uname_prog_blob.o: test/kernel/posix_busybox_sh_
 # verifies that the slice 7.6d.N.6b 2-stage CHANNEL plumbing scales
 # to N stages.  /bin/{tr,wc} initramfs entries added in slice N.13.
 test/kernel/posix_busybox_sh_pipe3_prog.o: test/kernel/posix_busybox_sh_pipe3_prog.c \
-                                           components/posix_shim/nxlibc.h
+                                           components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_pipe3_prog.elf: test/kernel/posix_busybox_sh_pipe3_prog.o \
-                                             components/posix_shim/libnxlibc.a \
+                                             components/libnxlibc/libnxlibc.a \
                                              test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_pipe3_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_pipe3_prog_blob.o: test/kernel/posix_busybox_sh_pipe3_prog_blob.S \
                                                 test/kernel/posix_busybox_sh_pipe3_prog.elf
@@ -832,15 +833,15 @@ test/kernel/posix_busybox_sh_pipe3_prog_blob.o: test/kernel/posix_busybox_sh_pip
 # alongside HANDLE_CHANNEL, using the slice 7.6d.N.8 vfs `retain`
 # op.  /bin/head initramfs entry added in slice N.13.
 test/kernel/posix_busybox_sh_xfile_prog.o: test/kernel/posix_busybox_sh_xfile_prog.c \
-                                           components/posix_shim/nxlibc.h
+                                           components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_xfile_prog.elf: test/kernel/posix_busybox_sh_xfile_prog.o \
-                                             components/posix_shim/libnxlibc.a \
+                                             components/libnxlibc/libnxlibc.a \
                                              test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_xfile_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_xfile_prog_blob.o: test/kernel/posix_busybox_sh_xfile_prog_blob.S \
                                                 test/kernel/posix_busybox_sh_xfile_prog.elf
@@ -850,15 +851,15 @@ test/kernel/posix_busybox_sh_xfile_prog_blob.o: test/kernel/posix_busybox_sh_xfi
 # `/m` (not `/tmp`) avoids EEXIST against the synthesised /tmp dir
 # left over from slices 7.6d.N.8/.9/.11.
 test/kernel/posix_busybox_sh_mkdir_prog.o: test/kernel/posix_busybox_sh_mkdir_prog.c \
-                                           components/posix_shim/nxlibc.h
+                                           components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_busybox_sh_mkdir_prog.elf: test/kernel/posix_busybox_sh_mkdir_prog.o \
-                                             components/posix_shim/libnxlibc.a \
+                                             components/libnxlibc/libnxlibc.a \
                                              test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_busybox_sh_mkdir_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_busybox_sh_mkdir_prog_blob.o: test/kernel/posix_busybox_sh_mkdir_prog_blob.S \
                                                 test/kernel/posix_busybox_sh_mkdir_prog.elf
@@ -869,29 +870,29 @@ test/kernel/posix_busybox_sh_mkdir_prog_blob.o: test/kernel/posix_busybox_sh_mkd
 # observes 128+SIGSEGV / 128+SIGILL via the new `on_sync` fault-
 # conversion path.
 test/kernel/posix_segfault_prog.o: test/kernel/posix_segfault_prog.c \
-                                   components/posix_shim/nxlibc.h
+                                   components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_segfault_prog.elf: test/kernel/posix_segfault_prog.o \
-                                     components/posix_shim/libnxlibc.a \
+                                     components/libnxlibc/libnxlibc.a \
                                      test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_segfault_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_segfault_prog_blob.o: test/kernel/posix_segfault_prog_blob.S \
                                         test/kernel/posix_segfault_prog.elf
 
 test/kernel/posix_undef_prog.o: test/kernel/posix_undef_prog.c \
-                                components/posix_shim/nxlibc.h
+                                components/libnxlibc/nxlibc.h
 	$(CC) $(POSIX_PROG_CFLAGS) -c $< -o $@
 
 test/kernel/posix_undef_prog.elf: test/kernel/posix_undef_prog.o \
-                                  components/posix_shim/libnxlibc.a \
+                                  components/libnxlibc/libnxlibc.a \
                                   test/kernel/init_prog.ld
 	$(LD) -n -T test/kernel/init_prog.ld -o $@ \
 	    test/kernel/posix_undef_prog.o \
-	    -Lcomponents/posix_shim -lnxlibc
+	    -Lcomponents/libnxlibc -lnxlibc
 
 test/kernel/posix_undef_prog_blob.o: test/kernel/posix_undef_prog_blob.S \
                                      test/kernel/posix_undef_prog.elf
@@ -1146,7 +1147,7 @@ clean:
 	       test/kernel/posix_busybox_sh_mkdir_prog.elf \
 	       test/kernel/posix_segfault_prog.elf \
 	       test/kernel/posix_undef_prog.elf \
-	       components/posix_shim/libnxlibc.a \
+	       components/libnxlibc/libnxlibc.a \
 	       test/kernel/initramfs.cpio test/kernel/banner.txt
 
 .PHONY: all run debug validate-config deps deps-dot test test-host test-kernel test-tools bench clean gen-iface verify-iface-fresh
