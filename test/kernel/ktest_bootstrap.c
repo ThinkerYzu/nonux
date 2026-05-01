@@ -66,17 +66,14 @@ KTEST(bootstrap_component_count_matches_descriptor_section)
 
 KTEST(bootstrap_snapshot_json_contains_bound_impl)
 {
-    /* Bumped 2048 → 4096 in slice 8.0a.4 — adding posix_shim grew the
-     * composition to 7 slots + 7 components + 4 connections (the
-     * `posix_shim → {vfs, scheduler, memory.page_alloc, char_device.serial}`
-     * edges from manifest deps), pushing the rendered JSON past 2 KiB.
-     * Slice 8.0a.5 adds per-task `caller_slot` registrations (one slot
-     * + 4 cloned edges per task) on top — the dispatcher kthread
-     * (and any other kthread spawned through `nx_task_create` after
-     * posix_shim is bound) contributes its own task-slot here.  4096
-     * still fits with comfortable headroom; future composition growth
-     * may need another bump. */
-    static char buf[4096];
+    /* Bumped 2048 → 4096 in slice 8.0a.4; bumped 4096 → 8192 in slice
+     * 8.0a.8.  Each slice 8.0a.6–8.0a.8 ktest spawns a kthread via
+     * sched_spawn_kthread; each kthread registers its own caller_slot +
+     * 4 cloned edges through wire_caller_slot, growing the graph by ~250
+     * bytes of JSON per kthread.  3 un-destroyed kthreads (one per ktest)
+     * accumulate before this test runs, pushing JSON past 4 KiB.
+     * 8192 provides ~4 KiB of headroom for future kthread growth. */
+    static char buf[8192];
     struct nx_graph_snapshot *snap = nx_graph_snapshot_take();
     KASSERT_NOT_NULL(snap);
 
@@ -318,4 +315,181 @@ KTEST(slot_call_blocking_round_trip_via_uart_returns_handler_rc)
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();
     if (ops && self) ops->dequeue(self, g_blocking_call_task);
+}
+
+/* ---- slice 8.0a.8: hook inspector fires during blocking call ----------- *
+ *
+ * Register an observe-only hook on NX_HOOK_IPC_SEND before the blocking
+ * call.  The hook increments a counter; the call result must be identical
+ * to the baseline test (rc == 0 from uart_pl011).  Verifies that the
+ * inspector infrastructure described in hook_inspector.h works in the
+ * live kernel composition and that observe-only hooks don't alter results.
+ */
+
+static volatile int g_hook_inspector_fire_count;
+
+static enum nx_hook_action ktest_observe_hook_fn(struct nx_hook_context *ctx,
+                                                  void *user)
+{
+    (void)ctx; (void)user;
+    __atomic_fetch_add(&g_hook_inspector_fire_count, 1, __ATOMIC_RELAXED);
+    return NX_HOOK_CONTINUE;
+}
+
+static struct nx_task   *g_hi_kthread;
+static volatile int      g_hi_finished;
+static volatile int      g_hi_rc;
+
+static void hook_inspector_kthread(void *arg)
+{
+    (void)arg;
+    struct nx_task *me = nx_task_current();
+    struct nx_slot *uart = nx_slot_lookup("char_device.serial");
+    if (!me || !uart || !me->caller_slot_active) {
+        g_hi_rc       = -999;
+        g_hi_finished = 1;
+        for (;;) nx_task_yield();
+    }
+
+    static char reply_buf_hi[NX_REPLY_PAYLOAD_MAX];
+    static const char payload_hi[] = "y";
+
+    struct nx_ipc_message msg = {
+        .src_slot    = &me->caller_slot,
+        .dst_slot    = uart,
+        .msg_type    = 1,
+        .flags       = 0,
+        .payload     = payload_hi,
+        .payload_len = (uint32_t)(sizeof payload_hi - 1),
+        .n_caps      = 0,
+        .caps        = NULL,
+    };
+    g_hi_rc       = nx_slot_call_blocking(uart, &msg,
+                                          reply_buf_hi, sizeof reply_buf_hi);
+    g_hi_finished = 1;
+    for (;;) nx_task_yield();
+}
+
+KTEST(hook_inspector_observe_only_does_not_alter_blocking_call_result)
+{
+    g_hook_inspector_fire_count = 0;
+    g_hi_finished               = 0;
+    g_hi_rc                     = 0xdead;
+
+    struct nx_hook obs_hook = {
+        .point    = NX_HOOK_IPC_SEND,
+        .priority = 50,
+        .fn       = ktest_observe_hook_fn,
+        .user     = NULL,
+        .name     = "ktest_observer",
+    };
+    KASSERT_EQ_U(nx_hook_register(&obs_hook), NX_OK);
+
+    g_hi_kthread = sched_spawn_kthread("ktest_hi", hook_inspector_kthread,
+                                       NULL, NULL);
+    KASSERT_NOT_NULL(g_hi_kthread);
+
+    const int max_yields = 4096;
+    int reached = 0;
+    for (int i = 0; i < max_yields; i++) {
+        if (g_hi_finished) { reached = 1; break; }
+        nx_task_yield();
+    }
+    KASSERT(reached);
+
+    /* Observer hook must have fired (IPC_SEND fires inside
+     * nx_slot_call_blocking before enqueue). */
+    KASSERT(g_hook_inspector_fire_count >= 1);
+
+    /* Result must be identical to the baseline blocking-call test. */
+    KASSERT_EQ_U(g_hi_rc, 0);
+
+    nx_hook_unregister(&obs_hook);
+
+    const struct nx_scheduler_ops *ops2 = sched_ops_for_test();
+    void *self2 = sched_self_for_test();
+    if (ops2 && self2) ops2->dequeue(self2, g_hi_kthread);
+}
+
+/* ---- slice 8.0a.8: cap-scan rejects forged cap during blocking call ---- *
+ *
+ * Build a message whose caps[] contains a slot_ref pointing to
+ * filesystem.root — a slot the caller_slot has no outgoing edge to.
+ * nx_slot_call_blocking's cap-scan step must reject it with NX_EINVAL
+ * before the message is enqueued, and the in_flight_reply_buf must be
+ * cleared on the way out.
+ */
+
+static struct nx_task   *g_capforge_task;
+static volatile int      g_capforge_finished;
+static volatile int      g_capforge_rc;
+static volatile int      g_capforge_buf_cleared;
+
+static void capforge_kthread(void *arg)
+{
+    (void)arg;
+    struct nx_task *me   = nx_task_current();
+    struct nx_slot *uart = nx_slot_lookup("char_device.serial");
+    struct nx_slot *fs   = nx_slot_lookup("filesystem.root");
+
+    if (!me || !uart || !fs || !me->caller_slot_active) {
+        g_capforge_rc       = -999;
+        g_capforge_finished = 1;
+        for (;;) nx_task_yield();
+    }
+
+    /* filesystem.root is not in caller_slot's outgoing edges — forged. */
+    static struct nx_ipc_cap forged_cap = {
+        .kind      = NX_CAP_SLOT_REF,
+        .ownership = NX_CAP_BORROW,
+        .cap_id    = 77,
+    };
+    forged_cap.u.slot_ref = fs;
+
+    static char reply_buf_cf[NX_REPLY_PAYLOAD_MAX];
+    struct nx_ipc_message msg = {
+        .src_slot    = &me->caller_slot,
+        .dst_slot    = uart,
+        .msg_type    = 1,
+        .flags       = 0,
+        .payload     = NULL,
+        .payload_len = 0,
+        .n_caps      = 1,
+        .caps        = &forged_cap,
+    };
+    g_capforge_rc          = nx_slot_call_blocking(uart, &msg,
+                                                   reply_buf_cf,
+                                                   sizeof reply_buf_cf);
+    g_capforge_buf_cleared = (me->in_flight_reply_buf == NULL) ? 1 : 0;
+    g_capforge_finished    = 1;
+    for (;;) nx_task_yield();
+}
+
+KTEST(cap_scan_rejects_forged_slot_ref_cap_during_blocking_call)
+{
+    g_capforge_finished    = 0;
+    g_capforge_rc          = 0xdead;
+    g_capforge_buf_cleared = 0;
+
+    g_capforge_task = sched_spawn_kthread("ktest_capforge", capforge_kthread,
+                                          NULL, NULL);
+    KASSERT_NOT_NULL(g_capforge_task);
+
+    const int max_yields = 4096;
+    int reached = 0;
+    for (int i = 0; i < max_yields; i++) {
+        if (g_capforge_finished) { reached = 1; break; }
+        nx_task_yield();
+    }
+    KASSERT(reached);
+
+    /* Cap-scan step must return NX_EINVAL. */
+    KASSERT_EQ_U((unsigned)g_capforge_rc, (unsigned)NX_EINVAL);
+
+    /* in_flight_reply_buf cleared on the error path. */
+    KASSERT_EQ_U(g_capforge_buf_cleared, 1);
+
+    const struct nx_scheduler_ops *ops3 = sched_ops_for_test();
+    void *self3 = sched_self_for_test();
+    if (ops3 && self3) ops3->dequeue(self3, g_capforge_task);
 }

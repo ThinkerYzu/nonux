@@ -32,6 +32,7 @@ SRCS := main.c \
         dispatcher_test.c \
         slot_call_test.c \
         handle_test.c \
+        slice_8_0a8_test.c \
         syscall_test.c \
         channel_test.c \
         file_syscall_test.c \
