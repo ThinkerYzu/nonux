@@ -95,10 +95,11 @@ typedef uint32_t nx_handle_t;
 /* ---------- Table ----------------------------------------------------- */
 
 struct nx_handle_entry {
-    enum nx_handle_type type;
-    uint32_t            rights;
-    void               *object;
-    uint32_t            generation;   /* bumped on close */
+    enum nx_handle_type  type;
+    uint32_t             rights;
+    void                *object;
+    uint32_t             generation;  /* bumped on close */
+    struct nx_slot      *slot;        /* NULL → immune to slot invalidation */
 };
 
 struct nx_handle_table {
@@ -172,6 +173,39 @@ int nx_handle_duplicate(struct nx_handle_table *t,
                         nx_handle_t             src,
                         uint32_t                new_rights,
                         nx_handle_t            *out);
+
+/*
+ * Allocate a handle and immediately wire its backing slot.  Equivalent to
+ * `nx_handle_alloc` followed by `nx_handle_set_slot`; provided as a single
+ * call so the two steps are always paired.  NULL slot is accepted and leaves
+ * the entry immune to slot-based invalidation (same as plain alloc).
+ */
+int nx_handle_alloc_with_slot(struct nx_handle_table *t,
+                              enum nx_handle_type     type,
+                              uint32_t                rights,
+                              void                   *object,
+                              struct nx_slot         *slot,
+                              nx_handle_t            *out);
+
+/*
+ * Wire `slot` onto an already-allocated handle.  No-op if `h` is invalid
+ * or if the entry already has a non-NULL slot.  Used by callers that must
+ * alloc first and wire after (e.g. when the slot pointer is only available
+ * after the object is created).
+ */
+void nx_handle_set_slot(struct nx_handle_table *t,
+                        nx_handle_t             h,
+                        struct nx_slot         *slot);
+
+/*
+ * Walk every process's handle table and invalidate all entries whose
+ * `slot` field equals `dep_slot`.  Matching entries are closed in-place
+ * (generation bumped, fields cleared, count decremented).  Subsequent
+ * userspace lookups against those handle values return NX_ENOENT.
+ *
+ * Called by posix_shim's on_dep_swapped when SWAP_STATE_LOST is set.
+ */
+void nx_handle_table_invalidate_for_slot(struct nx_slot *dep_slot);
 
 /* Number of currently-allocated handles.  Test helper. */
 size_t nx_handle_table_count(const struct nx_handle_table *t);

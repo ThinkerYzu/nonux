@@ -449,6 +449,9 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     const struct nx_vfs_ops *vops; void *vself;
     rc = resolve_vfs(&vops, &vself);
     if (rc != NX_OK) return rc;
+    /* Wire the vfs backing slot so handles can be bulk-invalidated on
+     * dep swap (slice 8.0a.7 / nx_handle_table_invalidate_for_slot). */
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
 
 #if !__STDC_HOSTED__
     /* Slice 7.7b.1: any directory path — not just "/" — gets a
@@ -472,7 +475,8 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
 
         struct nx_handle_table *t = nx_syscall_current_table();
         nx_handle_t h = NX_HANDLE_INVALID;
-        rc = nx_handle_alloc(t, NX_HANDLE_DIR, NX_RIGHT_READ, cur, &h);
+        rc = nx_handle_alloc_with_slot(t, NX_HANDLE_DIR, NX_RIGHT_READ,
+                                       cur, vfs_slot, &h);
         if (rc != NX_OK) { free(cur); return rc; }
         return (nx_status_t)h;
     }
@@ -493,7 +497,7 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
 
     struct nx_handle_table *t = nx_syscall_current_table();
     nx_handle_t h = NX_HANDLE_INVALID;
-    rc = nx_handle_alloc(t, NX_HANDLE_FILE, rights, file, &h);
+    rc = nx_handle_alloc_with_slot(t, NX_HANDLE_FILE, rights, file, vfs_slot, &h);
     if (rc != NX_OK) {
         /* Handle-table full or other alloc failure — roll back the
          * driver-side open so the per-open slot isn't leaked. */

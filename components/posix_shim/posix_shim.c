@@ -43,6 +43,7 @@
  */
 
 #include "framework/component.h"
+#include "framework/handle.h"
 #include "framework/ipc.h"
 #include "framework/registry.h"
 #include "framework/slot_call.h"
@@ -183,12 +184,25 @@ static int posix_shim_handle_msg(void *self, struct nx_ipc_message *msg)
     return NX_OK;
 }
 
+static int posix_shim_on_dep_swapped(void *self,
+                                     struct nx_slot      *dep_slot,
+                                     struct nx_component *old_comp,
+                                     struct nx_component *new_comp,
+                                     uint32_t             flags)
+{
+    (void)self; (void)old_comp; (void)new_comp;
+    if (flags & NX_SWAP_STATE_LOST)
+        nx_handle_table_invalidate_for_slot(dep_slot);
+    return NX_OK;
+}
+
 static const struct nx_component_ops posix_shim_component_ops = {
-    .init       = posix_shim_init,
-    .enable     = posix_shim_enable,
-    .disable    = posix_shim_disable,
-    .destroy    = posix_shim_destroy,
-    .handle_msg = posix_shim_handle_msg,
+    .init            = posix_shim_init,
+    .enable          = posix_shim_enable,
+    .disable         = posix_shim_disable,
+    .destroy         = posix_shim_destroy,
+    .handle_msg      = posix_shim_handle_msg,
+    .on_dep_swapped  = posix_shim_on_dep_swapped,
     /* No pause_hook: spawns_threads is false (manifest default). */
 };
 

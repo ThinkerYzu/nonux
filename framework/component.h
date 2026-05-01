@@ -79,6 +79,14 @@ int nx_component_destroy(struct nx_component *c);  /* READY  → DESTROYED */
 
 struct nx_ipc_message;  /* forward — full def in framework/ipc.h */
 
+struct nx_slot;       /* forward — full def in framework/registry.h */
+struct nx_component;  /* forward — full def in framework/registry.h */
+
+/* Passed to on_dep_swapped when the incoming component starts with fresh
+ * state and offers no migration path — open handles backed by the old
+ * component must be invalidated. */
+#define NX_SWAP_STATE_LOST   (1u << 0)
+
 struct nx_component_ops {
     int  (*init)   (void *self);
     int  (*enable) (void *self);
@@ -103,6 +111,16 @@ struct nx_component_ops {
     int  (*disable)(void *self);
     void (*destroy)(void *self);
     int  (*handle_msg)(void *self, struct nx_ipc_message *msg);
+
+    /* Called after a dep slot is hot-swapped.  flags carries
+     * NX_SWAP_STATE_LOST when the incoming component begins with fresh
+     * state.  May be NULL if the component needs no dep-swap notification.
+     * (Invoked by the framework recomposition path — Phase 8.1+.) */
+    int  (*on_dep_swapped)(void *self,
+                           struct nx_slot      *dep_slot,
+                           struct nx_component *old_comp,
+                           struct nx_component *new_comp,
+                           uint32_t             flags);
 };
 
 /* ======================================================================

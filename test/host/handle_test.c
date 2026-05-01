@@ -15,6 +15,7 @@
 #include "test_runner.h"
 
 #include "framework/handle.h"
+#include "framework/process.h"
 #include "framework/registry.h"   /* NX_OK / NX_E* */
 
 #include <string.h>
@@ -284,6 +285,184 @@ TEST(handle_alloc_close_1000_cycles_is_leak_free)
         ASSERT_EQ_U(nx_handle_close(&t, h), NX_OK);
     }
     ASSERT_EQ_U(nx_handle_table_count(&t), 0);
+}
+
+/* --- 6. Slot wiring (slice 8.0a.7) ---------------------------------- */
+
+TEST(handle_alloc_with_slot_wires_slot_field)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 1;
+    /* Use a stack int as a fake slot pointer — handle.c only compares
+     * the pointer value, never dereferences it in these helpers. */
+    struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0xABCD1234u;
+
+    nx_handle_t h = NX_HANDLE_INVALID;
+    ASSERT_EQ_U(nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE,
+                                          NX_RIGHT_READ, &dummy,
+                                          fake_slot, &h), NX_OK);
+    ASSERT(h != NX_HANDLE_INVALID);
+
+    /* The slot must be stored in the raw entry. */
+    size_t idx = (h & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[idx].slot, fake_slot);
+}
+
+TEST(handle_alloc_with_null_slot_leaves_entry_immune)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 2;
+    nx_handle_t h = NX_HANDLE_INVALID;
+    ASSERT_EQ_U(nx_handle_alloc_with_slot(&t, NX_HANDLE_CHANNEL,
+                                          NX_RIGHT_READ, &dummy,
+                                          NULL, &h), NX_OK);
+    size_t idx = (h & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[idx].slot, NULL);
+}
+
+TEST(handle_set_slot_wires_on_valid_handle)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 3;
+    nx_handle_t h = NX_HANDLE_INVALID;
+    nx_handle_alloc(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, &h);
+
+    struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0xDEADBEEFu;
+    nx_handle_set_slot(&t, h, fake_slot);
+
+    size_t idx = (h & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[idx].slot, fake_slot);
+}
+
+TEST(handle_set_slot_noop_if_already_wired)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 4;
+    nx_handle_t h = NX_HANDLE_INVALID;
+    struct nx_slot *slot_a = (struct nx_slot *)(uintptr_t)0x1000u;
+    struct nx_slot *slot_b = (struct nx_slot *)(uintptr_t)0x2000u;
+    nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, slot_a, &h);
+    nx_handle_set_slot(&t, h, slot_b);  /* second call must be a no-op */
+
+    size_t idx = (h & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[idx].slot, slot_a);  /* unchanged */
+}
+
+TEST(handle_close_clears_slot_field)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 5;
+    nx_handle_t h = NX_HANDLE_INVALID;
+    struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0x3000u;
+    nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, fake_slot, &h);
+
+    size_t idx = (h & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[idx].slot, fake_slot);
+
+    nx_handle_close(&t, h);
+    ASSERT_EQ_PTR(t.entries[idx].slot, NULL);
+}
+
+TEST(handle_duplicate_propagates_slot)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 6;
+    nx_handle_t src = NX_HANDLE_INVALID;
+    struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0x4000u;
+    nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE,
+                              NX_RIGHT_READ | NX_RIGHT_WRITE,
+                              &dummy, fake_slot, &src);
+
+    nx_handle_t dup = NX_HANDLE_INVALID;
+    ASSERT_EQ_U(nx_handle_duplicate(&t, src, NX_RIGHT_READ, &dup), NX_OK);
+
+    size_t dup_idx = (dup & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[dup_idx].slot, fake_slot);
+}
+
+TEST(handle_duplicate_null_slot_stays_null)
+{
+    struct nx_handle_table t;
+    table_reset(&t);
+
+    int dummy = 7;
+    nx_handle_t src = NX_HANDLE_INVALID;
+    nx_handle_alloc(&t, NX_HANDLE_CHANNEL, NX_RIGHT_READ, &dummy, &src);
+
+    nx_handle_t dup = NX_HANDLE_INVALID;
+    nx_handle_duplicate(&t, src, NX_RIGHT_READ, &dup);
+
+    size_t dup_idx = (dup & 0xFFu) - 1u;
+    ASSERT_EQ_PTR(t.entries[dup_idx].slot, NULL);
+}
+
+TEST(handle_invalidate_for_slot_clears_matching_entries)
+{
+    /* nx_process_create pre-installs 3 CONSOLE handles; capture the
+     * baseline count so the assertions are independent of that. */
+    struct nx_process *p = nx_process_create("inval_test");
+    ASSERT(p != NULL);
+    size_t base = nx_handle_table_count(&p->handles);
+
+    int file_obj = 10, other_obj = 20;
+    struct nx_slot *vfs_slot   = (struct nx_slot *)(uintptr_t)0x5000u;
+    struct nx_slot *other_slot = (struct nx_slot *)(uintptr_t)0x6000u;
+
+    nx_handle_t h_file, h_file2, h_other;
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_FILE, NX_RIGHT_READ,
+                              &file_obj, vfs_slot, &h_file);
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_FILE, NX_RIGHT_READ,
+                              &file_obj, vfs_slot, &h_file2);
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
+                              &other_obj, other_slot, &h_other);
+    ASSERT_EQ_U(nx_handle_table_count(&p->handles), base + 3);
+
+    nx_handle_table_invalidate_for_slot(vfs_slot);
+
+    /* Both vfs-backed handles are gone. */
+    ASSERT_EQ_U(nx_handle_lookup(&p->handles, h_file,  NULL, NULL, NULL), NX_ENOENT);
+    ASSERT_EQ_U(nx_handle_lookup(&p->handles, h_file2, NULL, NULL, NULL), NX_ENOENT);
+    /* The other-slot handle and all CONSOLE handles are unaffected. */
+    ASSERT_EQ_U(nx_handle_lookup(&p->handles, h_other, NULL, NULL, NULL), NX_OK);
+    ASSERT_EQ_U(nx_handle_table_count(&p->handles), base + 1);
+
+    nx_process_destroy(p);
+}
+
+TEST(handle_invalidate_for_slot_ignores_null_slot_entries)
+{
+    struct nx_process *p = nx_process_create("inval_immune_test");
+    ASSERT(p != NULL);
+    size_t base = nx_handle_table_count(&p->handles);
+
+    int obj = 30;
+    struct nx_slot *vfs_slot = (struct nx_slot *)(uintptr_t)0x7000u;
+
+    nx_handle_t h_wired, h_immune;
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_FILE, NX_RIGHT_READ,
+                              &obj, vfs_slot, &h_wired);
+    nx_handle_alloc(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
+                    &obj, &h_immune);  /* NULL slot — immune */
+
+    nx_handle_table_invalidate_for_slot(vfs_slot);
+
+    ASSERT_EQ_U(nx_handle_lookup(&p->handles, h_wired,  NULL, NULL, NULL), NX_ENOENT);
+    ASSERT_EQ_U(nx_handle_lookup(&p->handles, h_immune, NULL, NULL, NULL), NX_OK);
+    ASSERT_EQ_U(nx_handle_table_count(&p->handles), base + 1);
+
+    nx_process_destroy(p);
 }
 
 TEST(handle_interleaved_alloc_close_sustains_capacity)
