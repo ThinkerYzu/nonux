@@ -48,6 +48,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/registry.c \
         ../../framework/component.c \
         ../../framework/ipc.c \
+        ../../framework/slot_call.c \
         ../../framework/hook.c \
         ../../framework/dispatcher.c \
         ../../framework/handle.c \

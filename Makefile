@@ -40,6 +40,7 @@ FW_C     := framework/registry.c \
             framework/component.c \
             framework/hook.c \
             framework/ipc.c \
+            framework/slot_call.c \
             framework/dispatcher.c \
             framework/bootstrap.c \
             framework/handle.c \
