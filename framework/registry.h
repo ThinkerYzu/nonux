@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "core/sched/waitq.h"
+
 /*
  * Component Graph Registry — first-class runtime model of the live composition.
  *
@@ -128,6 +130,27 @@ struct nx_slot {
      * send.  `_Atomic` so the SMP build only needs a barrier swap, not a
      * restructure. */
     _Atomic(enum nx_slot_pause_state) pause_state;
+
+    /*
+     * Slice 8.0a.  `QUEUE`-policy callers blocked on a paused slot park
+     * here; resume's `nx_waitq_wake_all` releases all blocked callers
+     * atomically.  The blocking-call wrapper (SLOT-CALL-API.md §"Pause
+     * Protocol Interaction") may read this field from caller (non-
+     * dispatcher) context — atomic-load semantics make that safe; R8 is
+     * not violated because `slot->active` is not touched.
+     */
+    struct nx_waitq resume_waitq;
+
+    /*
+     * Slice 8.0a.  The dispatcher kthread increments this before invoking
+     * a slot's handler and decrements after.  The pause protocol's drain
+     * step waits for the counter to reach 0 before transitioning
+     * `DRAINING → DONE`, guaranteeing no handler is running on the slot
+     * when a swap proceeds.  The counter belongs on the slot rather than
+     * the component because handler-in-progress is the slot's invariant,
+     * not the component's (mid-swap, the slot is between two components).
+     */
+    _Atomic(uint32_t) in_flight_calls;
 };
 
 /* Forward declaration — full type in framework/component.h.  Kept here

@@ -311,6 +311,13 @@ int nx_slot_register(struct nx_slot *s)
     atomic_init(&s->pause_state, NX_SLOT_PAUSE_NONE);
     s->fallback = NULL;
 
+    /* Slice 8.0a scaffolding — wired up by `nx_slot_call_blocking` and
+     * the pause protocol's drain step in subsequent slices.  Zeroed here
+     * so unwiring stays a one-liner: callers never see uninitialised
+     * waitq / counter state. */
+    nx_waitq_init(&s->resume_waitq);
+    atomic_init(&s->in_flight_calls, 0);
+
     n->slot        = s;
     n->created_gen = bump_gen();
     n->next        = g_slots;

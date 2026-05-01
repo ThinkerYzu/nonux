@@ -53,8 +53,19 @@ struct nx_ipc_cap {
 
 /* ---------- Message format ------------------------------------------- */
 
-#define NX_MSG_FLAG_REPLY   (1u << 0)
-#define NX_MSG_FLAG_ONEWAY  (1u << 1)
+#define NX_MSG_FLAG_REPLY            (1u << 0)
+#define NX_MSG_FLAG_ONEWAY           (1u << 1)
+/*
+ * Slice 8.0a (post-Session-85 spec): the sender of a blocking call sets
+ * NX_MSG_FLAG_REPLY_REQUESTED on the request message; the dispatcher
+ * uses this to decide whether to post a reply leg back to the caller's
+ * `caller_slot` after the handler returns (or whether to synthesize an
+ * ABORT reply on a hook-chain ABORT).  The existing NX_MSG_FLAG_REPLY
+ * is set on the *reply* message itself; the new flag is set on the
+ * *request* — the two are not interchangeable.  See SLOT-CALL-API.md
+ * §"Reply Path (Option β)" for the full protocol.
+ */
+#define NX_MSG_FLAG_REPLY_REQUESTED  (1u << 2)
 
 struct nx_ipc_message {
     struct nx_slot        *src_slot;     /* sender; must be registered */
