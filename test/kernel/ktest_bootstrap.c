@@ -8,6 +8,7 @@
 #include "framework/ipc.h"
 #include "framework/registry.h"
 #include "framework/slot_call.h"
+#include "interfaces/char_device_msg.h"
 
 /*
  * Kernel-side coverage for slice 3.9a.
@@ -252,15 +253,25 @@ static void blocking_call_kthread(void *arg)
         nx_dispatcher_reply_pool_in_use_for_test();
 
     static char    reply_buf[NX_REPLY_PAYLOAD_MAX];
-    static const char payload_bytes[] = "x";
+    /* Properly-typed request: NX_CHAR_DEVICE_OP_WRITE expects a
+     * nx_char_device_msg_write (buf + len).  The dispatch writes the
+     * reply struct in-place at msg->payload, so the buffer must be
+     * writable and large enough for nx_char_device_reply_write (16 B).
+     * Sending 0 bytes to uart avoids any actual UART I/O. */
+    static const uint8_t uart_nul_byte = 0;
+    static struct nx_char_device_msg_write payload_write = {
+        .buf = 0,  /* filled at runtime below — not a compile-time constant */
+        .len = 0,
+    };
+    payload_write.buf = (uint64_t)(uintptr_t)&uart_nul_byte;
 
     struct nx_ipc_message msg = {
         .src_slot    = &me->caller_slot,
         .dst_slot    = uart,
-        .msg_type    = 1,                /* UART_MSG_WRITE */
+        .msg_type    = NX_CHAR_DEVICE_OP_WRITE,
         .flags       = 0,
-        .payload     = payload_bytes,
-        .payload_len = (uint32_t)(sizeof payload_bytes - 1),
+        .payload     = &payload_write,
+        .payload_len = (uint32_t)sizeof(payload_write),
         .n_caps      = 0,
         .caps        = NULL,
     };
@@ -352,15 +363,23 @@ static void hook_inspector_kthread(void *arg)
     }
 
     static char reply_buf_hi[NX_REPLY_PAYLOAD_MAX];
-    static const char payload_hi[] = "y";
+    /* Same fix as blocking_call_kthread: send a properly-typed
+     * nx_char_device_msg_write so nx_char_device_dispatch reads a
+     * valid len field and uart_write does not access garbage memory. */
+    static const uint8_t uart_nul_byte_hi = 0;
+    static struct nx_char_device_msg_write payload_hi = {
+        .buf = 0,  /* filled at runtime below */
+        .len = 0,
+    };
+    payload_hi.buf = (uint64_t)(uintptr_t)&uart_nul_byte_hi;
 
     struct nx_ipc_message msg = {
         .src_slot    = &me->caller_slot,
         .dst_slot    = uart,
-        .msg_type    = 1,
+        .msg_type    = NX_CHAR_DEVICE_OP_WRITE,
         .flags       = 0,
-        .payload     = payload_hi,
-        .payload_len = (uint32_t)(sizeof payload_hi - 1),
+        .payload     = &payload_hi,
+        .payload_len = (uint32_t)sizeof(payload_hi),
         .n_caps      = 0,
         .caps        = NULL,
     };
