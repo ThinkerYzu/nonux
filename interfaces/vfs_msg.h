@@ -58,19 +58,18 @@ struct nx_vfs_reply_retain {
 /* Request: nx_vfs_read() — Read / write delegate to the driver's ops.  See `nx_fs_ops.read */
 struct nx_vfs_msg_read {
     uint64_t file;
-    uint8_t buf[4096];
+    uint64_t buf; /* void * encoded as u64 */
     size_t cap;
 };
 
 struct nx_vfs_reply_read {
     int64_t rc;
-    uint8_t buf[4096];
     size_t bytes_actual;
 };
 
 struct nx_vfs_msg_write {
     uint64_t file;
-    uint8_t buf[4096];
+    uint64_t buf; /* const void * encoded as u64 */
     size_t len;
 };
 

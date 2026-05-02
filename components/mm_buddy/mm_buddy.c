@@ -30,6 +30,7 @@
  */
 
 #include "framework/component.h"
+#include "framework/mm_dispatch.h"
 #include "framework/registry.h"
 #include "interfaces/mm.h"
 #include "core/pmm/pmm.h"
@@ -236,13 +237,17 @@ static void mm_buddy_destroy(void *self)
         s->free_lists[k] = NULL;
 }
 
+static int mm_buddy_handle_msg(void *self, struct nx_ipc_message *msg)
+{
+    return nx_mm_dispatch(self, &mm_buddy_mm_ops, msg);
+}
+
 const struct nx_component_ops mm_buddy_component_ops = {
-    .init    = mm_buddy_init,
-    .enable  = mm_buddy_enable,
-    .disable = mm_buddy_disable,
-    .destroy = mm_buddy_destroy,
-    /* No pause_hook: spawns_threads is false in the manifest.
-     * No handle_msg: mm_buddy is called directly via iface_ops. */
+    .init       = mm_buddy_init,
+    .enable     = mm_buddy_enable,
+    .disable    = mm_buddy_disable,
+    .destroy    = mm_buddy_destroy,
+    .handle_msg = mm_buddy_handle_msg,
 };
 
 NX_COMPONENT_REGISTER_NO_DEPS_IFACE(mm_buddy,

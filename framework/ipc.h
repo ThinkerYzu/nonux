@@ -75,7 +75,12 @@ struct nx_ipc_message {
     uint32_t               n_caps;
     struct nx_ipc_cap     *caps;         /* may be NULL if n_caps == 0 */
     uint32_t               payload_len;
-    const void            *payload;
+    void                  *payload;
+    /* Set by the receiver's handle_msg (via nx_<iface>_dispatch) to the
+     * number of reply bytes written in-place at msg->payload.  Zero means
+     * the dispatcher should send a header-only reply carrying just the
+     * int rc from handle_msg.  Slice 8.0b activates this. */
+    uint32_t               reply_payload_len;
 
     /* Framework-owned link fields.  A message is on exactly one list
      * at a time:

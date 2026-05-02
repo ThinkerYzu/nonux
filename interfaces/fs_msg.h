@@ -58,20 +58,19 @@ struct nx_fs_reply_retain {
 /* Request: nx_fs_read() — Read up to `cap` bytes from `file` into `buf`, starting at the */
 struct nx_fs_msg_read {
     uint64_t file;
-    uint8_t buf[4096];
+    uint64_t buf; /* void * encoded as u64 */
     size_t cap;
 };
 
 struct nx_fs_reply_read {
     int64_t rc;
-    uint8_t buf[4096];
     size_t bytes_actual;
 };
 
 /* Request: nx_fs_write() — Write `len` bytes from `buf` into `file` at the per-open cursor, */
 struct nx_fs_msg_write {
     uint64_t file;
-    uint8_t buf[4096];
+    uint64_t buf; /* const void * encoded as u64 */
     size_t len;
 };
 

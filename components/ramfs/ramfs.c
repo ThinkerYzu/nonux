@@ -29,6 +29,7 @@
  */
 
 #include "framework/component.h"
+#include "framework/fs_dispatch.h"
 #include "framework/registry.h"
 #include "interfaces/fs.h"
 
@@ -660,14 +661,17 @@ static void ramfs_destroy(void *self)
      * everything.  The framework owns state allocation. */
 }
 
+static int ramfs_handle_msg(void *self, struct nx_ipc_message *msg)
+{
+    return nx_fs_dispatch(self, &ramfs_fs_ops, msg);
+}
+
 const struct nx_component_ops ramfs_component_ops = {
-    .init    = ramfs_init,
-    .enable  = ramfs_enable,
-    .disable = ramfs_disable,
-    .destroy = ramfs_destroy,
-    /* No pause_hook: spawns_threads is false in the manifest.
-     * No handle_msg: ramfs is consumed through iface_ops by vfs_simple,
-     * not via the IPC router. */
+    .init       = ramfs_init,
+    .enable     = ramfs_enable,
+    .disable    = ramfs_disable,
+    .destroy    = ramfs_destroy,
+    .handle_msg = ramfs_handle_msg,
 };
 
 NX_COMPONENT_REGISTER_NO_DEPS_IFACE(ramfs,

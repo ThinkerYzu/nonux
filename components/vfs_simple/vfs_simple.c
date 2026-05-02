@@ -35,6 +35,7 @@
 
 #include "framework/component.h"
 #include "framework/registry.h"
+#include "framework/vfs_dispatch.h"
 #include "interfaces/vfs.h"
 #include "interfaces/fs.h"
 
@@ -370,14 +371,17 @@ static void vfs_simple_destroy(void *self)
     s->destroy_called++;
 }
 
+static int vfs_simple_handle_msg(void *self, struct nx_ipc_message *msg)
+{
+    return nx_vfs_dispatch(self, &vfs_simple_vfs_ops, msg);
+}
+
 const struct nx_component_ops vfs_simple_component_ops = {
-    .init    = vfs_simple_init,
-    .enable  = vfs_simple_enable,
-    .disable = vfs_simple_disable,
-    .destroy = vfs_simple_destroy,
-    /* No pause_hook: spawns_threads is false in the manifest.
-     * No handle_msg: vfs_simple is driven through iface_ops by the
-     * syscall layer (slice 6.3), not via the IPC router. */
+    .init       = vfs_simple_init,
+    .enable     = vfs_simple_enable,
+    .disable    = vfs_simple_disable,
+    .destroy    = vfs_simple_destroy,
+    .handle_msg = vfs_simple_handle_msg,
 };
 
 NX_COMPONENT_REGISTER_NO_DEPS_IFACE(vfs_simple,

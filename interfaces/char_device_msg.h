@@ -19,7 +19,7 @@ enum nx_char_device_op_id {
 
 /* Request: nx_char_device_write() — Write `len` bytes from `buf` to the device.  Blocking in v1 */
 struct nx_char_device_msg_write {
-    uint8_t buf[4096];
+    uint64_t buf; /* const void * encoded as u64 */
     size_t len;
 };
 

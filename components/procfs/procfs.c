@@ -38,6 +38,7 @@
  */
 
 #include "framework/component.h"
+#include "framework/fs_dispatch.h"
 #include "framework/registry.h"
 #include "framework/process.h"
 #include "interfaces/fs.h"
@@ -504,14 +505,17 @@ static void procfs_destroy(void *self)
     s->destroy_called++;
 }
 
+static int procfs_handle_msg(void *self, struct nx_ipc_message *msg)
+{
+    return nx_fs_dispatch(self, &procfs_fs_ops, msg);
+}
+
 const struct nx_component_ops procfs_component_ops = {
-    .init    = procfs_init,
-    .enable  = procfs_enable,
-    .disable = procfs_disable,
-    .destroy = procfs_destroy,
-    /* No pause_hook: spawns_threads is false in the manifest.
-     * No handle_msg: procfs is consumed through iface_ops by vfs_simple,
-     * not via the IPC router. */
+    .init       = procfs_init,
+    .enable     = procfs_enable,
+    .disable    = procfs_disable,
+    .destroy    = procfs_destroy,
+    .handle_msg = procfs_handle_msg,
 };
 
 NX_COMPONENT_REGISTER_NO_DEPS_IFACE(procfs,

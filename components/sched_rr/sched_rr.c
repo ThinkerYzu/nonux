@@ -26,6 +26,7 @@
 #include "framework/component.h"
 #include "framework/process.h"
 #include "framework/registry.h"
+#include "framework/scheduler_dispatch.h"
 #include "interfaces/scheduler.h"
 #include "core/sched/task.h"
 #include "core/lib/list.h"
@@ -238,13 +239,17 @@ static void sched_rr_destroy(void *self)
      * destroy fired so tests can observe lifecycle symmetry. */
 }
 
+static int sched_rr_handle_msg(void *self, struct nx_ipc_message *msg)
+{
+    return nx_scheduler_dispatch(self, &sched_rr_scheduler_ops, msg);
+}
+
 const struct nx_component_ops sched_rr_component_ops = {
-    .init    = sched_rr_init,
-    .enable  = sched_rr_enable,
-    .disable = sched_rr_disable,
-    .destroy = sched_rr_destroy,
-    /* No pause_hook: spawns_threads is false in the manifest.
-     * No handle_msg: the scheduler is not IPC-driven in Phase 4. */
+    .init       = sched_rr_init,
+    .enable     = sched_rr_enable,
+    .disable    = sched_rr_disable,
+    .destroy    = sched_rr_destroy,
+    .handle_msg = sched_rr_handle_msg,
 };
 
 NX_COMPONENT_REGISTER_NO_DEPS_IFACE(sched_rr,

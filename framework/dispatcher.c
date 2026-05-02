@@ -197,29 +197,35 @@ bool nx_dispatcher_reply_pool_owns_for_test(const struct nx_ipc_message *m)
 }
 
 /* Build a reply message addressed to the original sender's
- * `caller_slot`.  The reply payload starts with `struct nx_reply_header`
- * carrying `rc`; trailing bytes are zero-initialised so future per-op
- * output fields (slice 8.0b) start from a clean slate.  Returns the
- * pool-allocated message ready for `nx_dispatcher_enqueue`. */
+ * `caller_slot`.  Slice 8.0b: if the handler's nx_<iface>_dispatch set
+ * req->reply_payload_len > 0, the per-op reply struct was written
+ * in-place at req->payload; copy it into the pool entry.  Otherwise
+ * (legacy handlers that don't use the generated dispatch), fall back to
+ * a header-only reply carrying just rc. */
 static struct nx_ipc_message *build_reply(struct nx_ipc_message *req, int rc)
 {
     struct nx_reply_pool_entry *e = reply_pool_alloc();
-    /* memset the entire payload area — slice 8.0a.6 only fills the
-     * 4-byte header but slice 8.0b's wrapper-emitted reply structs
-     * will append op-specific output fields; clearing now keeps every
-     * reply bit-stable across builds. */
     memset(&e->msg, 0, sizeof e->msg);
     memset(e->payload, 0, NX_REPLY_PAYLOAD_MAX);
 
-    struct nx_reply_header *hdr = (struct nx_reply_header *)e->payload;
-    hdr->rc = (int32_t)rc;
+    uint32_t plen = req->reply_payload_len;
+    if (plen > 0) {
+        /* Dispatch wrote a per-op reply struct at req->payload. */
+        if (plen > NX_REPLY_PAYLOAD_MAX) plen = NX_REPLY_PAYLOAD_MAX;
+        memcpy(e->payload, req->payload, plen);
+    } else {
+        /* Legacy path: header-only reply. */
+        struct nx_reply_header *hdr = (struct nx_reply_header *)e->payload;
+        hdr->rc = (int32_t)rc;
+        plen = (uint32_t)sizeof *hdr;
+    }
 
-    e->msg.src_slot    = req->dst_slot;        /* the service slot */
-    e->msg.dst_slot    = req->src_slot;        /* the caller_slot   */
-    e->msg.msg_type    = req->msg_type;        /* echo for tracers  */
+    e->msg.src_slot    = req->dst_slot;
+    e->msg.dst_slot    = req->src_slot;
+    e->msg.msg_type    = req->msg_type;
     e->msg.flags       = NX_MSG_FLAG_REPLY;
     e->msg.payload     = e->payload;
-    e->msg.payload_len = (uint32_t)sizeof *hdr;
+    e->msg.payload_len = plen;
     e->msg.n_caps      = 0;
     e->msg.caps        = NULL;
     return &e->msg;

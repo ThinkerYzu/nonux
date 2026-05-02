@@ -553,11 +553,15 @@ def msg_struct_field(p: dict) -> str | None:
         return f"    char {name}[{max_len}];"
 
     if t == "bytes_in":
-        return f"    uint8_t {name}[{DEFAULT_BYTES_MAX}];"
+        # Kernel IPC: pass as pointer-encoded-as-u64; caller owns buffer.
+        # Handler casts back to (const void *) and reads it directly.
+        return f"    uint64_t {name}; /* const void * encoded as u64 */"
 
     if t == "bytes_out":
-        # Reserved buffer the receiver fills.  Wrapper copies back.
-        return f"    uint8_t {name}[{DEFAULT_BYTES_MAX}];"
+        # Kernel IPC: pass as pointer-encoded-as-u64; handler writes
+        # directly into caller's buffer via this pointer.  The reply
+        # struct omits this field — data is already at the caller's buf.
+        return f"    uint64_t {name}; /* void * encoded as u64 */"
 
     if t == "struct_in":
         return f"    {p['ctype']} {name};"
@@ -651,6 +655,11 @@ def render_msg_header(idl: dict, idl_filename: str) -> str:
         any_out = False
         for p in op.get("params", []):
             if p.get("direction") in ("out", "inout"):
+                # bytes_out params are NOT in the reply struct: the handler
+                # writes directly into the caller's buffer via the pointer
+                # stored in the request, so there is nothing to return here.
+                if p["type"] == "bytes_out":
+                    continue
                 line = msg_struct_field(p)
                 if line is not None:
                     out.append(line)
@@ -729,11 +738,152 @@ def render_call_header(idl: dict, idl_filename: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# framework/<iface>_dispatch.h emission (receiver template)
+# framework/<iface>_dispatch.h emission (receiver dispatch function)
 # ---------------------------------------------------------------------------
 
+def _dispatch_case(op: dict, name: str, upper: str) -> list[str]:
+    """Render one switch-case body for nx_<name>_dispatch."""
+    op_name  = op["name"]
+    op_upper = op_name.upper()
+    params   = op.get("params", [])
+    ret      = op.get("returns", {})
+    ret_type = ret.get("type", "void")
+
+    L: list[str] = []
+    L.append(f"    case NX_{upper}_OP_{op_upper}: {{")
+
+    # --- load request struct (if any payload params) -----------------------
+    payload_params = [p for p in params
+                      if msg_struct_field(p) is not None]
+    if payload_params:
+        L.append(f"        struct nx_{name}_msg_{op_name} *_req =")
+        L.append(f"            (struct nx_{name}_msg_{op_name} *)msg->payload;")
+
+    # --- extract locals from request + build call-arg list ----------------
+    call_args: list[str] = []
+    for p in params:
+        pname = p["name"]
+        pt    = p["type"]
+        pdir  = p.get("direction", "in")
+        ctype = p.get("ctype")
+
+        if pt == "string_in":
+            L.append(f"        const char *_{pname} = _req->{pname};")
+            call_args.append(f"_{pname}")
+        elif pt == "bytes_in":
+            L.append(
+                f"        const void *_{pname} ="
+                f" (const void *)(uintptr_t)_req->{pname};")
+            call_args.append(f"_{pname}")
+        elif pt == "bytes_out":
+            L.append(
+                f"        void *_{pname} ="
+                f" (void *)(uintptr_t)_req->{pname};")
+            call_args.append(f"_{pname}")
+        elif pt in SCALAR_C_TYPES:
+            ctype_c = SCALAR_C_TYPES[pt]
+            L.append(f"        {ctype_c} _{pname} = _req->{pname};")
+            call_args.append(f"_{pname}")
+        elif pt == "opaque_self_handle":
+            base = ctype or "void"
+            if pdir == "out":
+                L.append(f"        {base} *_{pname} = NULL;")
+                call_args.append(f"&_{pname}")
+            else:
+                L.append(
+                    f"        {base} *_{pname} ="
+                    f" ({base} *)(uintptr_t)_req->{pname};")
+                call_args.append(f"_{pname}")
+        elif pt == "struct_inout":
+            L.append(
+                f"        {ctype} _{pname};"
+                f" memset(&_{pname}, 0, sizeof(_{pname}));"
+                f" _{pname} = _req->{pname};")
+            call_args.append(f"&_{pname}")
+        elif pt == "struct_out":
+            L.append(
+                f"        {ctype} _{pname};"
+                f" memset(&_{pname}, 0, sizeof(_{pname}));")
+            call_args.append(f"&_{pname}")
+        elif pt == "struct_in":
+            L.append(f"        {ctype} _{pname} = _req->{pname};")
+            call_args.append(f"_{pname}")
+        elif pt == "slot_ref":
+            call_args.append("NULL /* slot_ref via caps */")
+
+    # --- invoke op --------------------------------------------------------
+    args_str = ", ".join(["self"] + call_args)
+
+    if ret_type == "void":
+        L.append(f"        ops->{op_name}({args_str});")
+        rc_return = "0"
+    elif ret_type == "int_status":
+        L.append(f"        int _rc = ops->{op_name}({args_str});")
+        rc_return = "_rc"
+    elif ret_type == "i64_count_or_status":
+        L.append(f"        int64_t _rc64 = ops->{op_name}({args_str});")
+        L.append(f"        int _rc = (int)_rc64;")
+        rc_return = "_rc"
+    elif ret_type in ("void_ptr", "u64"):
+        L.append(
+            f"        uint64_t _rcptr ="
+            f" (uint64_t)(uintptr_t)ops->{op_name}({args_str});")
+        rc_return = "0"
+    elif ret_type == "usize":
+        L.append(f"        size_t _rcsz = ops->{op_name}({args_str});")
+        rc_return = "0"
+    elif ret_type == "u32":
+        L.append(f"        uint32_t _rcu32 = ops->{op_name}({args_str});")
+        rc_return = "0"
+    else:
+        raise IDLError(f"unknown return type {ret_type!r} in dispatch")
+
+    # --- write reply in-place at msg->payload -----------------------------
+    L.append(f"        struct nx_{name}_reply_{op_name} *_r =")
+    L.append(f"            (struct nx_{name}_reply_{op_name} *)msg->payload;")
+
+    if ret_type == "void":
+        L.append("        _r->rc = 0;")
+    elif ret_type == "int_status":
+        L.append("        _r->rc = _rc;")
+    elif ret_type == "i64_count_or_status":
+        L.append("        _r->rc = _rc64;")
+        L.append(
+            "        _r->bytes_actual ="
+            " _rc64 > 0 ? (size_t)_rc64 : 0;")
+    elif ret_type in ("void_ptr", "u64"):
+        L.append("        _r->rc = _rcptr;")
+    elif ret_type == "usize":
+        L.append("        _r->rc = _rcsz;")
+    elif ret_type == "u32":
+        L.append("        _r->rc = _rcu32;")
+
+    # out/inout params → reply fields
+    for p in params:
+        pname = p["name"]
+        pt    = p["type"]
+        pdir  = p.get("direction", "in")
+        if pdir not in ("out", "inout"):
+            continue
+        if pt == "bytes_out":
+            continue   # written directly via pointer; nothing to copy back
+        if pt == "opaque_self_handle":
+            L.append(
+                f"        _r->{pname} = (uint64_t)(uintptr_t)_{pname};")
+        elif pt in ("struct_out", "struct_inout"):
+            L.append(f"        _r->{pname} = _{pname};")
+        else:
+            L.append(f"        _r->{pname} = _{pname};")
+
+    L.append(
+        "        msg->reply_payload_len = (uint32_t)sizeof *_r;")
+    L.append(f"        return {rc_return};")
+    L.append("    }")
+    return L
+
+
 def render_dispatch_header(idl: dict, idl_filename: str) -> str:
-    name = idl["interface"]
+    name  = idl["interface"]
     upper = name.upper()
     guard = f"NONUX_FRAMEWORK_{upper}_DISPATCH_H"
 
@@ -743,36 +893,41 @@ def render_dispatch_header(idl: dict, idl_filename: str) -> str:
     out.append(f"#ifndef {guard}")
     out.append(f"#define {guard}")
     out.append("")
+    out.append("#include <stddef.h>")
+    out.append("#include <stdint.h>")
+    out.append("#include <string.h>")
+    out.append("")
     out.append('#include "framework/ipc.h"')
     out.append('#include "framework/registry.h"')
     out.append(f'#include "interfaces/{name}.h"')
     out.append(f'#include "interfaces/{name}_msg.h"')
     out.append("")
     out.append(
-        f"/* Receiver-side dispatch macro for the `{name}` interface.")
-    out.append(" * The component supplies a static handle_msg function and")
+        f"/* Receiver-side dispatch function for the `{name}` interface.")
     out.append(
-        f" * delegates to NX_{upper}_DISPATCH(self, ops, msg) which expands")
-    out.append(" * into a switch over msg->msg_type that unpacks each request")
-    out.append(" * struct and calls the matching op on `ops`. */")
+        " * The component's handle_msg delegates to this function, which")
     out.append(
-        f"#define NX_{upper}_DISPATCH(self, ops, msg) \\")
-    out.append("    do { \\")
+        " * switches on msg->msg_type, unpacks the per-op request struct,")
     out.append(
-        "        switch ((enum nx_" + name + "_op_id)((msg)->msg_type)) { \\")
+        " * calls the matching op on `ops`, writes the reply struct in-place")
+    out.append(
+        " * at msg->payload, and sets msg->reply_payload_len so the")
+    out.append(
+        " * dispatcher's build_reply picks up the full per-op output. */")
+    out.append(
+        f"static inline int nx_{name}_dispatch(")
+    out.append(f"    void *self, const struct nx_{name}_ops *ops,")
+    out.append(f"    struct nx_ipc_message *msg)")
+    out.append("{")
+    out.append(
+        f"    switch ((enum nx_{name}_op_id)(msg->msg_type)) {{")
     for op in idl["ops"]:
-        out.append(
-            f"        case NX_{upper}_OP_{op['name'].upper()}: \\")
-        out.append(
-            f"            /* impl: (ops)->{op['name']}(self, ...) — "
-            f"see template body. */ \\")
-        out.append(
-            "            break; \\")
-    out.append("        default: \\")
-    out.append("            /* unknown op — return NX_EINVAL via reply. */ \\")
-    out.append("            break; \\")
-    out.append("        } \\")
-    out.append("    } while (0)")
+        for line in _dispatch_case(op, name, upper):
+            out.append(line)
+    out.append("    default:")
+    out.append("        return NX_EINVAL;")
+    out.append("    }")
+    out.append("}")
     out.append("")
     out.append(f"#endif /* {guard} */")
     out.append("")

@@ -1,20 +1,22 @@
 /*
- * uart_pl011 — the thinnest possible component that proves slice 3.9a
- * boot-walking actually runs something.
+ * uart_pl011 — PL011 UART character-device component.
  *
- * The kernel's `boot_main` initialises the PL011 UART before running
- * `nx_framework_bootstrap()`, so by the time init/enable fire the low-
- * level hardware is already up.  This component is therefore a pure
- * handler: incoming messages carry a length-prefixed string in
- * msg->payload and the handler writes it byte-by-byte through the
- * existing `uart_putc` helper.
+ * Slice 8.0b: replaces the original smoke-test handle_msg (which only
+ * tracked message counts and checked UART_MSG_WRITE) with the IDL-
+ * generated nx_char_device_dispatch shim.  The component now implements
+ * struct nx_char_device_ops and delegates handle_msg entirely to the
+ * generated dispatcher.
  *
- * No dependencies, no state.  Manifest declares iface "char_device".
- * kernel.json's "char_device.serial" slot picks this up by name.
+ * Implements:
+ *   write(buf, len)  — writes len bytes to the PL011 TX FIFO via uart_putc.
+ *   rx_byte(byte)    — receives one byte from IRQ context (no-op in v1;
+ *                      a future RX ring-buffer will land here).
  */
 
+#include "framework/char_device_dispatch.h"
 #include "framework/component.h"
 #include "framework/ipc.h"
+#include "interfaces/char_device.h"
 
 #if __STDC_HOSTED__
 #include <string.h>
@@ -22,17 +24,41 @@
 #include "core/lib/lib.h"
 #endif
 
-/* Keep a tiny "hello from a component" marker we can poke to confirm
- * init/enable actually ran on the device.  Observable via handle_msg
- * and via the kernel test. */
 struct uart_pl011_state {
     unsigned init_called;
     unsigned enable_called;
-    unsigned messages_handled;
 };
 
-/* Generic "write payload as bytes" message type. */
-#define UART_MSG_WRITE 1
+/* ---------- char_device ops ------------------------------------------ */
+
+static int64_t uart_pl011_write(void *self, const void *buf, size_t len)
+{
+    (void)self;
+#if !__STDC_HOSTED__
+    const char *p = buf;
+    for (size_t i = 0; i < len; i++)
+        uart_putc(p[i]);
+#else
+    (void)buf;
+#endif
+    return (int64_t)len;
+}
+
+static void uart_pl011_rx_byte(void *self, uint8_t byte)
+{
+    /* v1: no RX ring buffer yet; bytes delivered from IRQ context are
+     * silently dropped.  A future slice wires this to a per-device
+     * receive queue and wakes any blocked reader. */
+    (void)self;
+    (void)byte;
+}
+
+static const struct nx_char_device_ops uart_pl011_char_device_ops = {
+    .write   = uart_pl011_write,
+    .rx_byte = uart_pl011_rx_byte,
+};
+
+/* ---------- component lifecycle -------------------------------------- */
 
 static int uart_pl011_init(void *self)
 {
@@ -50,22 +76,7 @@ static int uart_pl011_enable(void *self)
 
 static int uart_pl011_handle_msg(void *self, struct nx_ipc_message *msg)
 {
-    struct uart_pl011_state *s = self;
-    s->messages_handled++;
-    if (msg->msg_type == UART_MSG_WRITE && msg->payload && msg->payload_len) {
-#if __STDC_HOSTED__
-        /* Host tests never invoke handle_msg against this descriptor
-         * today; if that changes, wire to stdout.  For now this branch
-         * is a structural no-op — keeps the body tiny and obviously
-         * correct. */
-        (void)msg;
-#else
-        const char *p = msg->payload;
-        for (uint32_t i = 0; i < msg->payload_len; i++)
-            uart_putc(p[i]);
-#endif
-    }
-    return 0;
+    return nx_char_device_dispatch(self, &uart_pl011_char_device_ops, msg);
 }
 
 static const struct nx_component_ops uart_pl011_ops = {
@@ -74,6 +85,7 @@ static const struct nx_component_ops uart_pl011_ops = {
     .handle_msg = uart_pl011_handle_msg,
 };
 
-NX_COMPONENT_REGISTER_NO_DEPS(uart_pl011,
-                              struct uart_pl011_state,
-                              &uart_pl011_ops);
+NX_COMPONENT_REGISTER_NO_DEPS_IFACE(uart_pl011,
+                                    struct uart_pl011_state,
+                                    &uart_pl011_ops,
+                                    &uart_pl011_char_device_ops);

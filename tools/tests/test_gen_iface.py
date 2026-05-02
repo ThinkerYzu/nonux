@@ -270,11 +270,11 @@ class TestWrapperHeader(unittest.TestCase):
 
 
 class TestDispatchHeader(unittest.TestCase):
-    """Receiver dispatch macro shape."""
+    """Receiver dispatch function shape."""
 
     def test_dispatch_macro_covers_every_op(self):
         d = gi.render_dispatch_header(SAMPLE_IDL, "demo.json")
-        self.assertIn("#define NX_DEMO_DISPATCH(self, ops, msg)", d)
+        self.assertIn("static inline int nx_demo_dispatch(", d)
         self.assertIn("case NX_DEMO_OP_PING:", d)
         self.assertIn("case NX_DEMO_OP_BLOB:", d)
 
