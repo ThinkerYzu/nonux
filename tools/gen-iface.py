@@ -532,7 +532,13 @@ def render_iface_header(idl: dict, idl_filename: str) -> str:
 # today's syscall workloads without forcing a knob in the IDL.  Future
 # IDL extension may add per-op overrides; for slice 8.0pre.1 these are
 # fixed.  Documented in IDL-SCHEMA.md (open items #2/#3).
-DEFAULT_PATH_MAX  = 4096
+#
+# Slice 8.0c: DEFAULT_PATH_MAX reduced from 4096 to 128 to match
+# NX_PATH_MAX (framework/syscall.h).  User-task kstacks are 4 KiB
+# total; an inline 4096-byte path array would overflow the stack when
+# the wrapper allocates the request struct as a local variable.  128 is
+# sufficient for every path the syscall layer accepts.
+DEFAULT_PATH_MAX  = 128
 DEFAULT_BYTES_MAX = 4096
 
 
@@ -707,16 +713,7 @@ def render_call_header(idl: dict, idl_filename: str) -> str:
     out.append(f'#include "interfaces/{name}_msg.h"')
     out.append('#include "framework/registry.h"')
     out.append('#include "framework/ipc.h"')
-    out.append("")
-    out.append(
-        "/* Slice 8.0a defines `nx_slot_call_blocking` in")
-    out.append(
-        " * framework/slot_call.{h,c}; until that lands these wrappers")
-    out.append(" * reference it as extern. */")
-    out.append(
-        "extern int nx_slot_call_blocking(struct nx_slot *slot,")
-    out.append(
-        "                                 struct nx_ipc_message *msg);")
+    out.append('#include "framework/slot_call.h"')
     out.append("")
 
     for op in idl["ops"]:

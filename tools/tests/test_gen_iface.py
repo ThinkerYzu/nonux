@@ -266,7 +266,7 @@ class TestWrapperHeader(unittest.TestCase):
     def test_wrapper_signatures_use_struct_nx_slot(self):
         c = gi.render_call_header(SAMPLE_IDL, "demo.json")
         self.assertIn("int nx_demo_ping(struct nx_slot *slot, uint32_t x);", c)
-        self.assertIn("extern int nx_slot_call_blocking(", c)
+        self.assertIn('#include "framework/slot_call.h"', c)
 
 
 class TestDispatchHeader(unittest.TestCase):

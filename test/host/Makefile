@@ -34,6 +34,7 @@ SRCS := main.c \
         handle_test.c \
         slice_8_0a8_test.c \
         slice_8_0b_test.c \
+        slice_8_0c_test.c \
         syscall_test.c \
         channel_test.c \
         file_syscall_test.c \
@@ -52,6 +53,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/component.c \
         ../../framework/ipc.c \
         ../../framework/slot_call.c \
+        ../../framework/vfs_call.c \
         ../../framework/hook.c \
         ../../framework/dispatcher.c \
         ../../framework/handle.c \

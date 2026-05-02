@@ -27,7 +27,7 @@ enum nx_vfs_op_id {
 
 /* Request: nx_vfs_open() — Open `path` (absolute, rooted at `/`).  Resolves the mount and */
 struct nx_vfs_msg_open {
-    char path[4096];
+    char path[128];
     uint32_t flags;
     uint64_t out_file;
 };
@@ -92,7 +92,7 @@ struct nx_vfs_reply_seek {
 
 /* Request: nx_vfs_readdir() — Enumerate the immediate children of `dir_path` (slice 7.7b.1). */
 struct nx_vfs_msg_readdir {
-    char dir_path[4096];
+    char dir_path[128];
     uint32_t cookie;
     struct nx_fs_dirent out;
 };
@@ -105,7 +105,7 @@ struct nx_vfs_reply_readdir {
 
 /* Request: nx_vfs_mkdir() — Create a directory (slice 7.7b.1).  See `nx_fs_ops.mkdir`. */
 struct nx_vfs_msg_mkdir {
-    char path[4096];
+    char path[128];
 };
 
 struct nx_vfs_reply_mkdir {
@@ -114,7 +114,7 @@ struct nx_vfs_reply_mkdir {
 
 /* Request: nx_vfs_stat() — Report metadata for `path` (slice 7.7b.1).  See `nx_fs_ops.stat`. */
 struct nx_vfs_msg_stat {
-    char path[4096];
+    char path[128];
     struct nx_fs_stat out;
 };
 

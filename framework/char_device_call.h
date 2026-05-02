@@ -14,12 +14,7 @@
 #include "interfaces/char_device_msg.h"
 #include "framework/registry.h"
 #include "framework/ipc.h"
-
-/* Slice 8.0a defines `nx_slot_call_blocking` in
- * framework/slot_call.{h,c}; until that lands these wrappers
- * reference it as extern. */
-extern int nx_slot_call_blocking(struct nx_slot *slot,
-                                 struct nx_ipc_message *msg);
+#include "framework/slot_call.h"
 
 int64_t nx_char_device_write(struct nx_slot *slot, const void *buf,
                              size_t len);

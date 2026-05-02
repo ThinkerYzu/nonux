@@ -14,12 +14,7 @@
 #include "interfaces/vfs_msg.h"
 #include "framework/registry.h"
 #include "framework/ipc.h"
-
-/* Slice 8.0a defines `nx_slot_call_blocking` in
- * framework/slot_call.{h,c}; until that lands these wrappers
- * reference it as extern. */
-extern int nx_slot_call_blocking(struct nx_slot *slot,
-                                 struct nx_ipc_message *msg);
+#include "framework/slot_call.h"
 
 int nx_vfs_open(struct nx_slot *slot, const char *path, uint32_t flags,
                 void **out_file);

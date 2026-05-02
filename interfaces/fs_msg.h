@@ -27,7 +27,7 @@ enum nx_fs_op_id {
 
 /* Request: nx_fs_open() — Open `path` on the driver instance `self`.  `flags` is a bitmask */
 struct nx_fs_msg_open {
-    char path[4096];
+    char path[128];
     uint32_t flags;
     uint64_t out_file;
 };
@@ -93,7 +93,7 @@ struct nx_fs_reply_seek {
 
 /* Request: nx_fs_readdir() — Read the next entry under `dir_path` (slice 7.7b.1). */
 struct nx_fs_msg_readdir {
-    char dir_path[4096];
+    char dir_path[128];
     uint32_t cookie;
     struct nx_fs_dirent out;
 };
@@ -106,7 +106,7 @@ struct nx_fs_reply_readdir {
 
 /* Request: nx_fs_mkdir() — Create a directory at `path` (slice 7.7b.1).  `path` is absolute. */
 struct nx_fs_msg_mkdir {
-    char path[4096];
+    char path[128];
 };
 
 struct nx_fs_reply_mkdir {
@@ -115,7 +115,7 @@ struct nx_fs_reply_mkdir {
 
 /* Request: nx_fs_stat() — Report metadata for `path` (slice 7.7b.1).  Used by the syscall */
 struct nx_fs_msg_stat {
-    char path[4096];
+    char path[128];
     struct nx_fs_stat out;
 };
 
