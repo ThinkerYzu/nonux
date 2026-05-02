@@ -6,6 +6,7 @@
 #include "framework/process.h"
 #include "framework/registry.h"
 #include "framework/component.h"
+#include "framework/vfs_call.h"
 #include "interfaces/fs.h"
 #include "interfaces/vfs.h"
 
@@ -183,25 +184,6 @@ static nx_status_t sys_debug_write(uint64_t a0, uint64_t a1,
     return (nx_status_t)len;
 }
 
-/* ---------- VFS slot resolution (slice 6.3) -------------------------- *
- *
- * File syscalls look up the `vfs` slot fresh on every call — matches
- * vfs_simple's own internal discipline (DESIGN §Slot-Based Indirection)
- * and keeps future hot-swap transparent to the syscall layer.
- * Returns NX_OK on success (with `*out_ops` / `*out_self` populated),
- * NX_ENOENT if the slot is unregistered or has no active binding,
- * NX_EINVAL if the bound component doesn't export iface_ops.
- */
-static int resolve_vfs(const struct nx_vfs_ops **out_ops, void **out_self)
-{
-    struct nx_slot *slot = nx_slot_lookup("vfs");
-    if (!slot || !slot->active) return NX_ENOENT;
-    if (!slot->active->descriptor || !slot->active->descriptor->iface_ops)
-        return NX_EINVAL;
-    *out_ops  = (const struct nx_vfs_ops *)slot->active->descriptor->iface_ops;
-    *out_self = slot->active->impl;
-    return NX_OK;
-}
 
 /* ---------- Path copy (slice 6.3) ------------------------------------ *
  *
@@ -269,9 +251,9 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
             /* Dispatch through the vfs slot.  If the slot has been
              * unmounted mid-flight the object leaks — unavoidable, but
              * the handle slot still gets freed.  Not a normal path. */
-            const struct nx_vfs_ops *vops; void *vself;
-            if (resolve_vfs(&vops, &vself) == NX_OK)
-                vops->close(vself, object);
+            struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+            if (vfs_slot)
+                nx_vfs_close(vfs_slot, object);
         } else if (type == NX_HANDLE_DIR) {
             /* Slice 7.6d.N.5 — free the directory cursor.  No vfs
              * dispatch: the cursor is a kheap-allocated state struct
@@ -446,23 +428,20 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return rc;
 
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
-    /* Wire the vfs backing slot so handles can be bulk-invalidated on
-     * dep swap (slice 8.0a.7 / nx_handle_table_invalidate_for_slot). */
+    /* Slice 8.0c: use the slot directly (blocking-call path in kernel). */
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_ENOENT;
 
 #if !__STDC_HOSTED__
     /* Slice 7.7b.1: any directory path — not just "/" — gets a
      * HANDLE_DIR with a fresh cursor when the caller didn't request
-     * O_CREATE for a missing path.  vops->stat tells us up-front
+     * O_CREATE for a missing path.  nx_vfs_stat tells us up-front
      * whether `kpath` is a directory; if so, allocate the cursor
      * and skip the file-style open.  Host build has no kheap so
      * this branch is gated under !__STDC_HOSTED__; the host fake_fs
      * paths return NX_ENOENT from stat, which falls through. */
     struct nx_fs_stat st;
-    int srcc = vops->stat ? vops->stat(vself, kpath, &st) : NX_ENOENT;
+    int srcc = nx_vfs_stat(vfs_slot, kpath, &st);
     if (srcc == NX_OK && st.kind == NX_FS_KIND_DIR) {
         struct nx_dir_cursor *cur = malloc(sizeof *cur);
         if (!cur) return NX_ENOMEM;
@@ -483,7 +462,7 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
 #endif
 
     void *file = 0;
-    rc = vops->open(vself, kpath, flags, &file);
+    rc = nx_vfs_open(vfs_slot, kpath, flags, &file);
     if (rc != NX_OK) return rc;
 
     uint32_t rights = 0;
@@ -501,7 +480,7 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     if (rc != NX_OK) {
         /* Handle-table full or other alloc failure — roll back the
          * driver-side open so the per-open slot isn't leaked. */
-        vops->close(vself, file);
+        nx_vfs_close(vfs_slot, file);
         return rc;
     }
     return (nx_status_t)h;
@@ -655,12 +634,11 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     if (type != NX_HANDLE_FILE) return NX_EINVAL;
 
     if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_ENOENT;
 
     uint8_t staging[NX_FILE_IO_MAX];
-    int64_t got = vops->read(vself, obj, staging, cap);
+    int64_t got = nx_vfs_read(vfs_slot, obj, staging, cap);
     if (got < 0) return (nx_status_t)got;
 
     rc = copy_to_user(buf, staging, (size_t)got);
@@ -713,11 +691,10 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     rc = copy_from_user(staging, buf, len);
     if (rc != NX_OK) return rc;
 
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_ENOENT;
 
-    return (nx_status_t)vops->write(vself, obj, staging, len);
+    return (nx_status_t)nx_vfs_write(vfs_slot, obj, staging, len);
 }
 
 /*
@@ -740,11 +717,10 @@ static nx_status_t sys_seek(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = lookup_file_object(h, NX_RIGHT_SEEK, &object);
     if (rc != NX_OK) return rc;
 
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_ENOENT;
 
-    return (nx_status_t)vops->seek(vself, object, offset, whence);
+    return (nx_status_t)nx_vfs_seek(vfs_slot, object, offset, whence);
 }
 
 /*
@@ -772,12 +748,11 @@ static nx_status_t sys_readdir(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = copy_from_user(&kcookie, user_cookie, sizeof kcookie);
     if (rc != NX_OK) return rc;
 
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_ENOENT;
 
     struct nx_fs_dirent kent;
-    rc = vops->readdir(vself, "/", &kcookie, &kent);
+    rc = nx_vfs_readdir(vfs_slot, "/", &kcookie, &kent);
     if (rc != NX_OK) return rc;
 
     rc = copy_to_user(user_out, &kent, sizeof kent);
@@ -896,9 +871,8 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
      * before slot bind) — we treat that as "no FILE handles to
      * inherit" and skip the FILE branch.  CHANNEL inheritance never
      * needs the vfs. */
-    const struct nx_vfs_ops *vops = NULL;
-    void                    *vself = NULL;
-    (void)resolve_vfs(&vops, &vself);
+    /* Resolve the vfs slot once for FILE handle inheritance. */
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
 
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         const struct nx_handle_entry *src = &parent_tbl->entries[i];
@@ -912,13 +886,10 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
              * with the same per-open retain mechanism slice 7.6d.N.8
              * added for `dup3` / `fcntl(F_DUPFD)`.  POSIX semantic:
              * parent and child share the underlying open file
-             * description (cursor + flags).  If a vfs without a
-             * `retain` op is bound, FILE handles can't safely be
-             * shared — skip this entry; the child gets no fd 3+
-             * inherited from FILE handles, matching the v1 pre-N.15
-             * behaviour. */
-            if (vops && vops->retain) {
-                vops->retain(vself, src->object);
+             * description (cursor + flags).  If vfs slot is absent,
+             * FILE handles can't safely be shared — skip. */
+            if (vfs_slot) {
+                nx_vfs_retain(vfs_slot, src->object);
                 retain_ok = true;
             }
         }
@@ -1213,28 +1184,27 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
         argc = 1;
     }
 
-    /* 2. Resolve vfs + open. */
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return rc;
+    /* 2. Resolve vfs slot + open (slice 8.0c: blocking-call path). */
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_ENOENT;
 
     void *file = NULL;
-    rc = vops->open(vself, kpath, NX_VFS_OPEN_READ, &file);
+    rc = nx_vfs_open(vfs_slot, kpath, NX_VFS_OPEN_READ, &file);
     if (rc != NX_OK) return rc;
 
     /* 3. Slurp file contents. */
     uint8_t *kbuf = malloc(SYS_EXEC_MAX_FILE);
-    if (!kbuf) { vops->close(vself, file); return NX_ENOMEM; }
+    if (!kbuf) { nx_vfs_close(vfs_slot, file); return NX_ENOMEM; }
 
     size_t total = 0;
     while (total < SYS_EXEC_MAX_FILE) {
-        int64_t n = vops->read(vself, file, kbuf + total,
-                               SYS_EXEC_MAX_FILE - total);
-        if (n < 0)  { vops->close(vself, file); free(kbuf); return (nx_status_t)n; }
+        int64_t n = nx_vfs_read(vfs_slot, file, kbuf + total,
+                                SYS_EXEC_MAX_FILE - total);
+        if (n < 0)  { nx_vfs_close(vfs_slot, file); free(kbuf); return (nx_status_t)n; }
         if (n == 0) break;
         total += (size_t)n;
     }
-    vops->close(vself, file);
+    nx_vfs_close(vfs_slot, file);
 
     /* 4. Validate ELF. */
     struct nx_elf_info info;
@@ -1873,18 +1843,12 @@ static nx_status_t sys_fstatat(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return NX_LINUX_EINVAL;
 
-    /* Slice 7.7b.1: ask the vfs layer for kind+size in one call.
-     * Replaces the old "/"-only directory shortcut + open-and-seek
-     * dance for files; both shapes now flow through the single
-     * stat op.  `vops->stat` returns NX_OK with kind = FILE/DIR,
-     * NX_ENOENT for missing paths, NX_EINVAL for bad input. */
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return NX_LINUX_EINVAL;
+    /* Slice 7.7b.1: ask the vfs layer for kind+size in one call. */
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_LINUX_EINVAL;
 
     struct nx_fs_stat st;
-    if (!vops->stat) return NX_LINUX_EINVAL;
-    rc = vops->stat(vself, kpath, &st);
+    rc = nx_vfs_stat(vfs_slot, kpath, &st);
     if (rc == NX_ENOENT) return NX_LINUX_ENOENT;
     if (rc != NX_OK) return NX_LINUX_EINVAL;
 
@@ -1961,24 +1925,24 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
 
     struct nx_dir_cursor *cur = (struct nx_dir_cursor *)obj;
 
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return NX_LINUX_EINVAL;
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_LINUX_EINVAL;
 
-    /* Pack entries into a kernel staging buffer first.  Cap to a
-     * single page so the staging stays bounded; ls calls
-     * getdents64 in a loop until it returns 0, so a partial
-     * fill is fine. */
+    /* Pack entries into a heap-allocated staging buffer first.
+     * The 4 KiB staging array would overflow the 4 KiB kernel
+     * stack on the init kthread's SVC path, especially with the
+     * blocking-call frames added by the slice-8.0c migration. */
     enum { STAGING_MAX = 4096 };
-    uint8_t staging[STAGING_MAX];
+    uint8_t *staging = malloc(STAGING_MAX);
+    if (!staging) return NX_LINUX_EINVAL;
     size_t  out_off = 0;
     if (cap > STAGING_MAX) cap = STAGING_MAX;
 
     for (;;) {
         struct nx_fs_dirent kent;
-        rc = vops->readdir(vself, cur->path, &cur->cookie, &kent);
+        rc = nx_vfs_readdir(vfs_slot, cur->path, &cur->cookie, &kent);
         if (rc == NX_ENOENT) break;          /* end of dir */
-        if (rc != NX_OK) return NX_LINUX_EINVAL;
+        if (rc != NX_OK) { free(staging); return NX_LINUX_EINVAL; }
 
         /* Compute name length from the fixed-size 64-byte field. */
         size_t name_len = 0;
@@ -2024,9 +1988,11 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
 
     if (out_off > 0) {
         rc = copy_to_user(user_buf, staging, out_off);
-        if (rc != NX_OK) return NX_LINUX_EINVAL;
+        if (rc != NX_OK) { free(staging); return NX_LINUX_EINVAL; }
     }
-    return (nx_status_t)out_off;
+    nx_status_t result = (nx_status_t)out_off;
+    free(staging);
+    return result;
 #endif
 }
 
@@ -2102,12 +2068,10 @@ static nx_status_t sys_mkdirat(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return NX_LINUX_EINVAL;
 
-    const struct nx_vfs_ops *vops; void *vself;
-    rc = resolve_vfs(&vops, &vself);
-    if (rc != NX_OK) return NX_LINUX_EINVAL;
-    if (!vops->mkdir) return NX_LINUX_EINVAL;
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_LINUX_EINVAL;
 
-    rc = vops->mkdir(vself, kpath);
+    rc = nx_vfs_mkdir(vfs_slot, kpath);
     switch (rc) {
     case NX_OK:      return 0;
     case NX_EEXIST:  return NX_LINUX_EEXIST;
@@ -2423,9 +2387,9 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
         if (e->type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_close(e->object);
         } else if (e->type == NX_HANDLE_FILE) {
-            const struct nx_vfs_ops *vops; void *vself;
-            if (resolve_vfs(&vops, &vself) == NX_OK)
-                vops->close(vself, e->object);
+            struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+            if (vfs_slot)
+                nx_vfs_close(vfs_slot, e->object);
         } else if (e->type == NX_HANDLE_DIR) {
 #if !__STDC_HOSTED__
             free(e->object);
@@ -2443,9 +2407,9 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     if (src_type == NX_HANDLE_CHANNEL) {
         nx_channel_endpoint_retain(src_object);
     } else if (src_type == NX_HANDLE_FILE) {
-        const struct nx_vfs_ops *vops; void *vself;
-        if (resolve_vfs(&vops, &vself) == NX_OK && vops->retain)
-            vops->retain(vself, src_object);
+        struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+        if (vfs_slot)
+            nx_vfs_retain(vfs_slot, src_object);
     }
 
     /* 5. Install the source's (type, rights, object) at the destination
@@ -2563,9 +2527,9 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
         if (src_type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_retain(src_object);
         } else if (src_type == NX_HANDLE_FILE) {
-            const struct nx_vfs_ops *vops; void *vself;
-            if (resolve_vfs(&vops, &vself) == NX_OK && vops->retain)
-                vops->retain(vself, src_object);
+            struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+            if (vfs_slot)
+                nx_vfs_retain(vfs_slot, src_object);
         }
 
         e->type       = src_type;
