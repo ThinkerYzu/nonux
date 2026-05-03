@@ -141,12 +141,10 @@ deps: kernel.json $(VENV_STAMP)
 deps-dot: kernel.json $(VENV_STAMP)
 	$(PYTHON) $(VALIDATE) kernel.json components/ --deps-dot
 
-# Static-checker build gate (DESIGN.md §AI Verification, R1-R8).
-# verify-registry.py is stdlib-only today — R1/R3/R5/R6/R8 are marked
-# `deferred` in the output; R2 and R4 are the currently-enforced
-# regex-level checks. components/ is empty until Phase 4+, so this
-# target is a no-op right now; wiring it as a prereq of kernel.bin
-# and test now means it auto-kicks in when real components land.
+# Static-checker build gate (DESIGN.md §AI Verification, R1-R9).
+# verify-registry.py is stdlib-only — R1/R3/R5/R6/R7/R8 are ai-verified;
+# R2, R4, R9 are machine-enforced regex checks.  R9 (slice 8.0e) bans
+# ->iface_ops reads outside framework/dispatcher.c and bootstrap.c.
 verify-registry:
 	$(PYTHON) $(VERIFY) components/
 .PHONY: verify-registry

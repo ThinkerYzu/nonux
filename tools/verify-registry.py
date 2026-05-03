@@ -100,6 +100,7 @@ RULES: list[Rule] = [
          "ISR/kthread call-graph needs an entry-point tagging "
          "convention (slice 3.8+/3.9); runtime harness also asserts "
          "dispatcher-context at each slot-resolve"),
+    Rule("R9", "No iface_ops outside dispatcher",  "machine"),
 ]
 
 
@@ -270,6 +271,83 @@ def check_r4(comp_dir: pathlib.Path, manifest: dict) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# R9 — No iface_ops access outside framework/dispatcher.c
+# ---------------------------------------------------------------------------
+# Scans framework/*.c and components/**/*.c (not test/) for ->iface_ops
+# reads.  Three exemption categories:
+#   1. framework/dispatcher.c and framework/bootstrap.c — by filename.
+#   2. Lines inside #if __STDC_HOSTED__ guards — host-build fast paths only.
+#   3. Lines that are C comment lines (block-comment or //-comment context).
+
+IFACE_OPS_ACCESS_RE = re.compile(r"->iface_ops\b")
+
+_HOSTED_IF_RE = re.compile(r"^\s*#\s*if\s+__STDC_HOSTED__\b")
+_ANY_IF_RE    = re.compile(r"^\s*#\s*if")
+_ENDIF_RE     = re.compile(r"^\s*#\s*endif\b")
+_ELSE_ELIF_RE = re.compile(r"^\s*#\s*(?:else|elif)\b")
+
+_R9_EXEMPT_NAMES = frozenset({"dispatcher.c", "bootstrap.c"})
+
+
+def _hosted_line_set(src: str) -> set[int]:
+    """Return 1-based line numbers inside #if __STDC_HOSTED__ guards."""
+    result: set[int] = set()
+    stack: list[bool] = []  # True = current #if level is a 'hosted' branch
+    for lineno, line in enumerate(src.splitlines(), 1):
+        if _HOSTED_IF_RE.match(line):
+            stack.append(True)
+        elif _ANY_IF_RE.match(line):
+            stack.append(False)
+        elif _ELSE_ELIF_RE.match(line) and stack:
+            stack[-1] = not stack[-1]
+        elif _ENDIF_RE.match(line) and stack:
+            stack.pop()
+        if any(stack):
+            result.add(lineno)
+    return result
+
+
+def _iface_ops_in_comment(line: str) -> bool:
+    """True when ->iface_ops on this line appears only inside a comment."""
+    col = line.find("->iface_ops")
+    if col < 0:
+        return False
+    before = line[:col]
+    before_s = before.strip()
+    if before_s.startswith("*") or before_s.startswith("/*"):
+        return True
+    if "//" in before:
+        return True
+    return False
+
+
+def check_r9(repo_root: pathlib.Path) -> list[Finding]:
+    """R9: ->iface_ops must not appear outside framework/dispatcher.c."""
+    findings: list[Finding] = []
+    scan_dirs = [repo_root / "framework", repo_root / "components"]
+    for scan_dir in scan_dirs:
+        if not scan_dir.exists():
+            continue
+        for c_file in sorted(scan_dir.rglob("*.c")):
+            if c_file.name in _R9_EXEMPT_NAMES:
+                continue
+            src = c_file.read_text()
+            hosted = _hosted_line_set(src)
+            lines = src.splitlines()
+            for m in IFACE_OPS_ACCESS_RE.finditer(src):
+                lineno = src.count("\n", 0, m.start()) + 1
+                if lineno in hosted:
+                    continue
+                if lineno <= len(lines) and _iface_ops_in_comment(lines[lineno - 1]):
+                    continue
+                findings.append(Finding(
+                    "R9", c_file, lineno,
+                    "->iface_ops accessed outside framework/dispatcher.c "
+                    "(use nx_*_call() wrappers instead)"))
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -278,18 +356,25 @@ CHECK_FNS = {
     "R4": check_r4,
 }
 
+REPO_CHECK_FNS = {
+    "R9": check_r9,
+}
+
 
 def run_checks(components_dir: pathlib.Path,
                rules: list[str]) -> tuple[list[Finding], list[Rule]]:
     findings: list[Finding] = []
     ai_verified: list[Rule] = []
     machine_tags: set[str] = set()
+    machine_repo_tags: set[str] = set()
 
     for r in RULES:
         if r.tag not in rules:
             continue
         if r.status == "ai-verified":
             ai_verified.append(r)
+        elif r.tag in REPO_CHECK_FNS:
+            machine_repo_tags.add(r.tag)
         else:
             machine_tags.add(r.tag)
 
@@ -302,6 +387,10 @@ def run_checks(components_dir: pathlib.Path,
             continue
         for tag in sorted(machine_tags):
             findings.extend(CHECK_FNS[tag](comp_dir, manifest))
+
+    repo_root = components_dir.parent
+    for tag in sorted(machine_repo_tags):
+        findings.extend(REPO_CHECK_FNS[tag](repo_root))
 
     return findings, ai_verified
 

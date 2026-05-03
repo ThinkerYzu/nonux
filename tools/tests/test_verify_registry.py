@@ -33,7 +33,7 @@ class TestListCommand(unittest.TestCase):
     def test_list_shows_every_rule_with_status(self):
         rc, out, _ = _run("--list")
         self.assertEqual(rc, 0)
-        for tag in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"):
+        for tag in ("R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"):
             self.assertIn(tag, out)
         self.assertIn("[machine]", out)
         self.assertIn("[ai-verified:", out)
@@ -221,8 +221,8 @@ class TestSummaryOutput(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             rc, out, _ = _run(str(pathlib.Path(d) / "components"))
             self.assertEqual(rc, 0)
-            # R2+R4 ran as machine checks; others go to Layer-2 AI rubric.
-            self.assertIn("ran R2,R4", out)
+            # R2+R4+R9 ran as machine checks; others go to Layer-2 AI rubric.
+            self.assertIn("ran R2,R4,R9", out)
             self.assertIn("ai-verified R1,R3,R5,R6,R7,R8", out)
 
     def test_filter_to_single_rule_changes_summary(self):
@@ -233,6 +233,98 @@ class TestSummaryOutput(unittest.TestCase):
             # — they just weren't requested. Summary should reflect that.
             self.assertIn("ran R2;", out)
             self.assertIn("ai-verified none", out)
+
+
+class TestR9(unittest.TestCase):
+    """->iface_ops must not appear outside framework/dispatcher.c."""
+
+    def _mk_repo(self, framework_files=None, component_files=None):
+        """Return components_dir inside a temp repo with framework/ sibling."""
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        comp_dir = tmp / "components"
+        comp_dir.mkdir()
+        if framework_files:
+            fw_dir = tmp / "framework"
+            fw_dir.mkdir()
+            for name, src in framework_files.items():
+                (fw_dir / name).write_text(src)
+        if component_files:
+            for comp_name, src in component_files.items():
+                d = comp_dir / comp_name
+                d.mkdir()
+                (d / "manifest.json").write_text(
+                    json.dumps({"name": comp_name, "version": "0.1.0"}))
+                (d / f"{comp_name}.c").write_text(src)
+        return comp_dir
+
+    def test_no_iface_ops_passes(self):
+        comp_dir = self._mk_repo(
+            framework_files={"other.c": "/* nothing here */\n"})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 0, f"stderr: {err}")
+
+    def test_iface_ops_in_dispatcher_passes(self):
+        src = "const void *x = slot->active->descriptor->iface_ops;\n"
+        comp_dir = self._mk_repo(framework_files={"dispatcher.c": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 0, f"dispatcher.c should be exempt: {err}")
+
+    def test_iface_ops_in_bootstrap_passes(self):
+        src = "const void *x = slot->active->descriptor->iface_ops;\n"
+        comp_dir = self._mk_repo(framework_files={"bootstrap.c": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 0, f"bootstrap.c should be exempt: {err}")
+
+    def test_iface_ops_in_hosted_guard_passes(self):
+        src = textwrap.dedent("""\
+            #if __STDC_HOSTED__
+            const void *x = slot->active->descriptor->iface_ops;
+            #endif
+        """)
+        comp_dir = self._mk_repo(framework_files={"vfs_call.c": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 0, f"#if __STDC_HOSTED__ should be exempt: {err}")
+
+    def test_iface_ops_in_hosted_guard_else_fails(self):
+        src = textwrap.dedent("""\
+            #if __STDC_HOSTED__
+            /* host fast path */
+            #else
+            const void *x = slot->active->descriptor->iface_ops;
+            #endif
+        """)
+        comp_dir = self._mk_repo(framework_files={"syscall.c": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 2)
+        self.assertIn("R9", err)
+
+    def test_iface_ops_in_block_comment_passes(self):
+        src = " * e.g. slot->active->descriptor->iface_ops directly.\n"
+        comp_dir = self._mk_repo(framework_files={"syscall.c": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 0, f"block comment line should be exempt: {err}")
+
+    def test_iface_ops_bare_in_framework_fails(self):
+        src = "const void *x = slot->active->descriptor->iface_ops;\n"
+        comp_dir = self._mk_repo(framework_files={"syscall.c": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 2)
+        self.assertIn("R9", err)
+        self.assertIn("iface_ops", err)
+
+    def test_iface_ops_bare_in_component_fails(self):
+        src = "const void *x = slot->active->descriptor->iface_ops;\n"
+        comp_dir = self._mk_repo(component_files={"mycomp": src})
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 2)
+        self.assertIn("R9", err)
+
+    def test_no_framework_dir_passes(self):
+        comp_dir = self._mk_repo()
+        rc, _, err = _run(str(comp_dir), "--rule", "R9")
+        self.assertEqual(rc, 0, f"missing framework/ should not fail: {err}")
 
 
 if __name__ == "__main__":
