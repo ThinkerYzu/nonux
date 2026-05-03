@@ -43,6 +43,7 @@ FW_C     := framework/registry.c \
             framework/slot_call.c \
             framework/vfs_call.c \
             framework/fs_call.c \
+            framework/recompose.c \
             framework/dispatcher.c \
             framework/bootstrap.c \
             framework/handle.c \
@@ -242,7 +243,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_procfs.c \
                  test/kernel/ktest_waitq.c \
                  test/kernel/ktest_posix_ppoll.c \
-                 test/kernel/ktest_pause.c
+                 test/kernel/ktest_pause.c \
+                 test/kernel/ktest_recompose.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
