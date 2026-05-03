@@ -244,6 +244,15 @@ int nx_dispatcher_enqueue(struct nx_ipc_message *msg)
 {
     if (!msg || !msg->dst_slot) return NX_EINVAL;
     ensure_queue_init();
+#if !__STDC_HOSTED__
+    /* Track message lifetime for the pause drain step: in_flight_calls
+     * spans from enqueue through handler completion, so a zero count
+     * on a DRAINING slot guarantees the MPSC has no pending messages
+     * and no handler is running.  Slice 8.1 makes this the canonical
+     * drain signal; the host build keeps the old pump-side semantics. */
+    atomic_fetch_add_explicit(&msg->dst_slot->in_flight_calls, 1u,
+                              memory_order_acq_rel);
+#endif
     nx_mpsc_push(&g_disp_mpsc, &msg->disp_node);
     return NX_OK;
 }
@@ -300,6 +309,11 @@ int nx_dispatcher_pump_once(void)
          * and would hang forever without a synthetic reply.  Build
          * an EABORT reply and enqueue it; the next pump iteration
          * delivers it to the caller via posix_shim. */
+#if !__STDC_HOSTED__
+        /* Balance the enqueue-side increment from nx_dispatcher_enqueue. */
+        atomic_fetch_sub_explicit(&dst->in_flight_calls, 1u,
+                                  memory_order_acq_rel);
+#endif
         if (reply_requested && msg->src_slot) {
             struct nx_ipc_message *abort_reply = build_reply(msg, NX_EABORT);
             (void)nx_dispatcher_enqueue(abort_reply);
@@ -309,11 +323,15 @@ int nx_dispatcher_pump_once(void)
         return 1;
     }
 
-    /* In-flight tracking — the pause protocol's drain step waits on
-     * this counter reaching zero before transitioning DRAINING → DONE
-     * (DESIGN.md §"Slot-side pause + blocking-call metadata"). */
+    /* In-flight tracking.  On the host build the add/sub pair brackets
+     * handler execution (handler-side semantics).  On the kernel build
+     * the add moved to nx_dispatcher_enqueue (enqueue-side semantics),
+     * so only the sub remains here — it completes the lifetime tracking
+     * started at enqueue, satisfying the pause drain step. */
+#if __STDC_HOSTED__
     atomic_fetch_add_explicit(&dst->in_flight_calls, 1u,
                               memory_order_acq_rel);
+#endif
     int rc = invoke_handler(dst, msg);
     atomic_fetch_sub_explicit(&dst->in_flight_calls, 1u,
                               memory_order_acq_rel);

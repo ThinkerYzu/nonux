@@ -241,7 +241,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_console_rx.c \
                  test/kernel/ktest_procfs.c \
                  test/kernel/ktest_waitq.c \
-                 test/kernel/ktest_posix_ppoll.c
+                 test/kernel/ktest_posix_ppoll.c \
+                 test/kernel/ktest_pause.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
@@ -1111,7 +1112,7 @@ KTEST_LOG := test/kernel-output.log
 
 test-kernel: kernel-test.bin
 	@rm -f $(KTEST_LOG)
-	@-timeout --preserve-status 300 \
+	@-timeout --preserve-status 360 \
 	    $(QEMU) -M virt,gic-version=2 -cpu cortex-a53 \
 	    -display none -serial file:$(KTEST_LOG) -monitor none \
 	    -m $(QEMU_MEM) -semihosting -kernel kernel-test.bin; \

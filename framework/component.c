@@ -4,6 +4,11 @@
 
 #include "core/cpu/monotonic.h"
 
+#if !__STDC_HOSTED__
+#include "core/sched/sched.h"  /* nx_task_yield */
+#endif
+
+#include <stdatomic.h>
 #include <stddef.h>
 
 /*
@@ -129,10 +134,21 @@ static void slot_drain_cb(struct nx_slot *s, void *ctx)
 {
     (void)ctx;
     nx_slot_set_pause_state(s, NX_SLOT_PAUSE_DRAINING);
-    /* Drain every queued message synchronously.  Host-side v1: dispatch
-     * runs on the caller's thread.  Slice 3.9 replaces this with a wait
-     * on the dispatcher-thread's drain-complete signal. */
+#if __STDC_HOSTED__
+    /* Host: drain the inbox synchronously on the caller's thread.
+     * The per-slot inbox holds every async message; pump until empty. */
     nx_ipc_dispatch(s, (size_t)-1);
+#else
+    /* Kernel: yield until the dispatcher kthread has processed every
+     * message that was enqueued for this slot before CUTTING was set.
+     * nx_dispatcher_enqueue bumps in_flight_calls at enqueue time and
+     * nx_dispatcher_pump_once decrements it after the handler returns,
+     * so a zero count guarantees no messages remain in the MPSC and no
+     * handler is currently running for this slot. */
+    while (atomic_load_explicit(&s->in_flight_calls,
+                                memory_order_acquire) > 0)
+        nx_task_yield();
+#endif
 }
 
 static void slot_done_cb(struct nx_slot *s, void *ctx)
