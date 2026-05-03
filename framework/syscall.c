@@ -1,5 +1,6 @@
 #include "framework/syscall.h"
 #include "framework/channel.h"
+#include "framework/config.h"
 #include "framework/console.h"
 #include "framework/handle.h"
 #include "framework/pollset.h"
@@ -2780,6 +2781,69 @@ static nx_status_t sys_ioctl(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 }
 
+/* ---------- Slice 8.3 — runtime config manager ----------------------- */
+
+static nx_status_t sys_config_open(uint64_t a0, uint64_t a1, uint64_t a2,
+                                    uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    nx_handle_t h = NX_HANDLE_INVALID;
+    int rc = nx_config_open(nx_syscall_current_table(), &h);
+    return rc < 0 ? (nx_status_t)rc : (nx_status_t)h;
+}
+
+static nx_status_t sys_config_query(uint64_t a0, uint64_t a1, uint64_t a2,
+                                     uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    nx_handle_t h = (nx_handle_t)a0;
+    void *user_buf = (void *)a1;
+
+    /* Validate handle — must be a config handle. */
+    enum nx_handle_type type;
+    int rc = nx_handle_lookup(nx_syscall_current_table(), h, &type, NULL, NULL);
+    if (rc != NX_OK)
+        return rc;
+    if (type != NX_HANDLE_CONFIG)
+        return NX_EINVAL;
+
+    if (!user_buf)
+        return NX_EINVAL;
+
+    struct nx_config_snapshot snap;
+    rc = nx_config_query_snapshot(&snap);
+    if (rc != NX_OK)
+        return rc;
+
+    return copy_to_user(user_buf, &snap, sizeof snap);
+}
+
+static nx_status_t sys_config_swap(uint64_t a0, uint64_t a1, uint64_t a2,
+                                    uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a3; (void)a4; (void)a5;
+    nx_handle_t   h          = (nx_handle_t)a0;
+    const char   *user_slot  = (const char *)a1;
+    const char   *user_impl  = (const char *)a2;
+
+    /* Validate handle. */
+    enum nx_handle_type type;
+    int rc = nx_handle_lookup(nx_syscall_current_table(), h, &type, NULL, NULL);
+    if (rc != NX_OK)
+        return rc;
+    if (type != NX_HANDLE_CONFIG)
+        return NX_EINVAL;
+
+    char slot_name[32];
+    char impl_name[32];
+    if (copy_path_from_user(slot_name, sizeof slot_name, user_slot) != NX_OK)
+        return NX_EINVAL;
+    if (copy_path_from_user(impl_name, sizeof impl_name, user_impl) != NX_OK)
+        return NX_EINVAL;
+
+    return (nx_status_t)nx_config_swap_component(slot_name, impl_name);
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -2825,6 +2889,9 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_IOCTL]          = sys_ioctl,
     [NX_SYS_MKDIRAT]        = sys_mkdirat,
     [NX_SYS_PPOLL]          = sys_ppoll,
+    [NX_SYS_CONFIG_OPEN]    = sys_config_open,
+    [NX_SYS_CONFIG_QUERY]   = sys_config_query,
+    [NX_SYS_CONFIG_SWAP]    = sys_config_swap,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

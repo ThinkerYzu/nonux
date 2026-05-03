@@ -420,6 +420,34 @@ enum nx_syscall_number {
                                   *  signal stubs).  Mapped from Linux
                                   *  `__NR_ppoll = 73`. */
 
+    /*
+     * Slice 8.3 — runtime config manager.
+     */
+    NX_SYS_CONFIG_OPEN    = 42,  /* () → nx_handle_t config handle / NX_E*
+                                  *  Allocates a NX_HANDLE_CONFIG in the
+                                  *  current process's handle table.
+                                  *  The handle is the capability token
+                                  *  for the two config ops below. */
+    NX_SYS_CONFIG_QUERY   = 43,  /* (nx_handle_t h,
+                                  *   struct nx_config_snapshot *buf)
+                                  *  → NX_OK / NX_E*.
+                                  *  Populates *buf with the live
+                                  *  composition: generation counter,
+                                  *  slot count, and per-slot
+                                  *  (name, impl, lifecycle-state).
+                                  *  Capped at NX_CONFIG_SNAPSHOT_MAX_SLOTS
+                                  *  (32) entries. */
+    NX_SYS_CONFIG_SWAP    = 44,  /* (nx_handle_t h,
+                                  *   const char *slot_name,
+                                  *   const char *new_impl)
+                                  *  → NX_OK / NX_E*.
+                                  *  Swaps the component in `slot_name`
+                                  *  to the first registered NX_LC_READY
+                                  *  component whose manifest_id matches
+                                  *  `new_impl`.  Drives the full
+                                  *  pause/drain/swap/resume protocol
+                                  *  via nx_recompose(). */
+
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
 

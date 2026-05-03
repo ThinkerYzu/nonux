@@ -37,6 +37,7 @@ SRCS := main.c \
         slice_8_0c_test.c \
         slice_8_0d_test.c \
         recompose_test.c \
+        slice_8_3_test.c \
         syscall_test.c \
         channel_test.c \
         file_syscall_test.c \
@@ -62,6 +63,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/handle.c \
         ../../framework/syscall.c \
         ../../framework/recompose.c \
+        ../../framework/config.c \
         ../../framework/channel.c \
         ../../framework/console.c \
         ../../framework/process.c \

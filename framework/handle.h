@@ -58,6 +58,7 @@ enum nx_handle_type {
     NX_HANDLE_CONSOLE,        /* stdin/stdout/stderr backed by UART
                                  (slice 7.6d.N.6b — pre-installed at
                                  process slots 0/1/2) */
+    NX_HANDLE_CONFIG,         /* runtime config manager (slice 8.3) */
 
     NX_HANDLE_TYPE_COUNT,     /* sentinel — keep last */
 };
