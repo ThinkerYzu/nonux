@@ -206,7 +206,23 @@ static void emit_event(struct nx_graph_event *ev)
 static struct slot_node *slot_node_find(const char *name)
 {
     for (struct slot_node *n = g_slots; n; n = n->next) {
-        if (n->slot->name && name && strcmp(n->slot->name, name) == 0)
+        /* Skip entries with a NULL or obviously-garbage name pointer.
+         * Dangling slot_nodes arise when nx_slot_unregister returns NX_EBUSY
+         * (a connection edge is still attached) and the caller ignores the
+         * error; the slot struct on the stack then goes out of scope and gets
+         * overwritten, filling the name field with garbage.  This guard
+         * prevents strcmp from faulting on such stale entries; the real fix
+         * is always to unregister edges before slots. */
+        if (!n->slot->name) continue;
+#if !__STDC_HOSTED__
+        /* On the kernel build, valid pointers are in the 1-GiB QEMU RAM
+         * window starting at 0x40000000.  Values outside this range are
+         * garbage from a freed/reused task stack. */
+        if ((uintptr_t)n->slot->name < 0x40000000ul ||
+            (uintptr_t)n->slot->name > 0x80000000ul)
+            continue;
+#endif
+        if (name && strcmp(n->slot->name, name) == 0)
             return n;
     }
     return NULL;
@@ -229,6 +245,13 @@ static struct component_node *component_node_find(const char *manifest_id,
     if (!manifest_id || !instance_id) return NULL;
     for (struct component_node *n = g_components; n; n = n->next) {
         struct nx_component *c = n->comp;
+        /* DESTROYED components are logically absent from the name index.
+         * nx_component_destroy does NOT auto-unregister; callers must
+         * explicitly call nx_component_unregister after destroy.  This guard
+         * prevents stale DESTROYED entries from appearing as false duplicates
+         * and from exposing caller-owned structs that may have gone out of
+         * scope. */
+        if (c->state == NX_LC_DESTROYED) continue;
         if (c->manifest_id && c->instance_id &&
             strcmp(c->manifest_id, manifest_id) == 0 &&
             strcmp(c->instance_id, instance_id) == 0)

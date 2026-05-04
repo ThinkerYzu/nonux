@@ -448,6 +448,20 @@ enum nx_syscall_number {
                                   *  pause/drain/swap/resume protocol
                                   *  via nx_recompose(). */
 
+    /*
+     * Slice 8.6 — runtime async↔sync mode switching.
+     */
+    NX_SYS_CONFIG_REWIRE  = 45,  /* (nx_handle_t h,
+                                  *   const char *from_slot,
+                                  *   const char *to_slot,
+                                  *   int mode)          [NX_CONN_ASYNC=0 / NX_CONN_SYNC=1]
+                                  *  → NX_OK / NX_E*.
+                                  *  Retunes the IPC mode on the connection
+                                  *  from `from_slot` to `to_slot`.
+                                  *  Pauses and drains `to_slot` before
+                                  *  changing the mode, then resumes it and
+                                  *  flushes the hold queue via the new mode. */
+
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
 

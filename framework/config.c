@@ -150,3 +150,31 @@ int nx_config_swap_component(const char *slot_name, const char *new_impl)
     };
     return nx_recompose(&plan);
 }
+
+int nx_config_set_conn_mode(const char *from_slot_name,
+                             const char *to_slot_name,
+                             enum nx_conn_mode mode)
+{
+    if (!from_slot_name || !to_slot_name) return NX_EINVAL;
+
+    struct nx_slot *from_slot = nx_slot_lookup(from_slot_name);
+    if (!from_slot) return NX_ENOENT;
+
+    struct nx_slot *to_slot = nx_slot_lookup(to_slot_name);
+    if (!to_slot) return NX_ENOENT;
+
+    struct nx_conn_change cc = {
+        .from_slot = from_slot,
+        .to_slot   = to_slot,
+        .action    = NX_CONN_REWIRE,
+        .mode      = mode,
+    };
+    struct recomp_plan plan = {
+        .changes         = NULL,
+        .num_changes     = 0,
+        .connections     = &cc,
+        .num_connections = 1,
+        .timeout_ms      = 0,
+    };
+    return nx_recompose(&plan);
+}

@@ -53,11 +53,24 @@ static const struct nx_component_descriptor sink_desc = {
     .state_size  = 0,
 };
 
-/* ---------- Per-test fixture ------------------------------------------- */
+/* ---------- Per-test fixture ------------------------------------------- *
+ *
+ * Slots are module-level static so the slot-nodes in g_slots always point
+ * to valid memory (never dangling).  Components are per-test (stack-allocated
+ * inside each KTEST body via the fixture struct) and are unregistered in
+ * fixture_down while the KTEST frame is still live.
+ *
+ * Teardown: unregister edge → swap slots to NULL → unregister components.
+ * nx_slot_unregister is NOT called — static slots stay in g_slots permanently.
+ * nx_dispatcher_reset is NOT called — dropping MPSC messages without
+ * decrementing in_flight_calls would leave scheduler.in_flight_calls > 0
+ * and cause the live_swap test's drain loop to hang.
+ */
+
+static struct nx_slot s_kp_sender;
+static struct nx_slot s_kp_receiver;
 
 struct pause_fixture {
-    struct nx_slot       sender;
-    struct nx_slot       receiver;
     struct nx_component  sender_comp;
     struct nx_component  receiver_comp;
     struct nx_connection *edge;
@@ -70,40 +83,42 @@ static void fixture_up(struct pause_fixture *f,
 {
     g_sink_handle_count = g_sink_pause_hook_count = 0;
     g_sink_pause_count  = g_sink_resume_count     = 0;
-    nx_dispatcher_reset();
 
-    f->sender   = (struct nx_slot){ .name = sender_name,   .iface = "kpause_test",
-                                    .mutability  = NX_MUT_HOT,
-                                    .concurrency = NX_CONC_SHARED };
-    f->receiver = (struct nx_slot){ .name = receiver_name, .iface = "kpause_test",
-                                    .mutability  = NX_MUT_HOT,
-                                    .concurrency = NX_CONC_SHARED };
+    s_kp_sender   = (struct nx_slot){ .name = sender_name,   .iface = "kpause_test",
+                                      .mutability  = NX_MUT_HOT,
+                                      .concurrency = NX_CONC_SHARED };
+    s_kp_receiver = (struct nx_slot){ .name = receiver_name, .iface = "kpause_test",
+                                      .mutability  = NX_MUT_HOT,
+                                      .concurrency = NX_CONC_SHARED };
     f->sender_comp   = (struct nx_component){ .manifest_id = "kpause_s", .instance_id = "0" };
     f->receiver_comp = (struct nx_component){ .manifest_id = "kpause_r", .instance_id = "0",
                                               .descriptor  = &sink_desc };
 
-    (void)nx_slot_register(&f->sender);
-    (void)nx_slot_register(&f->receiver);
+    /* NX_EEXIST on second+ run: static slot already registered, ignored. */
+    (void)nx_slot_register(&s_kp_sender);
+    (void)nx_slot_register(&s_kp_receiver);
     (void)nx_component_register(&f->sender_comp);
     (void)nx_component_register(&f->receiver_comp);
-    (void)nx_slot_swap(&f->sender,   &f->sender_comp);
-    (void)nx_slot_swap(&f->receiver, &f->receiver_comp);
+    (void)nx_slot_swap(&s_kp_sender,   &f->sender_comp);
+    (void)nx_slot_swap(&s_kp_receiver, &f->receiver_comp);
     (void)nx_component_init(&f->receiver_comp);
     (void)nx_component_enable(&f->receiver_comp);
 
     int err = NX_OK;
-    f->edge = nx_connection_register(&f->sender, &f->receiver,
+    f->edge = nx_connection_register(&s_kp_sender, &s_kp_receiver,
                                      NX_CONN_ASYNC, false, policy, &err);
 }
 
 static void fixture_down(struct pause_fixture *f)
 {
-    (void)nx_slot_swap(&f->sender,   NULL);
-    (void)nx_slot_swap(&f->receiver, NULL);
+    if (f->edge) {
+        (void)nx_connection_unregister(f->edge);
+        f->edge = NULL;
+    }
+    (void)nx_slot_swap(&s_kp_sender,   NULL);
+    (void)nx_slot_swap(&s_kp_receiver, NULL);
     (void)nx_component_unregister(&f->sender_comp);
     (void)nx_component_unregister(&f->receiver_comp);
-    (void)nx_slot_unregister(&f->sender);
-    (void)nx_slot_unregister(&f->receiver);
     nx_dispatcher_reset();
 }
 
@@ -114,16 +129,16 @@ KTEST(pause_kernel_slot_transitions_to_done)
     struct pause_fixture f;
     fixture_up(&f, "kp_sender1", "kp_receiver1", NX_PAUSE_QUEUE);
 
-    KASSERT_EQ_U(nx_slot_pause_state(&f.receiver), NX_SLOT_PAUSE_NONE);
+    KASSERT_EQ_U(nx_slot_pause_state(&s_kp_receiver), NX_SLOT_PAUSE_NONE);
     KASSERT_EQ_U(nx_component_pause(&f.receiver_comp), NX_OK);
-    KASSERT_EQ_U(nx_slot_pause_state(&f.receiver), NX_SLOT_PAUSE_DONE);
+    KASSERT_EQ_U(nx_slot_pause_state(&s_kp_receiver), NX_SLOT_PAUSE_DONE);
     KASSERT_EQ_U(g_sink_pause_hook_count, 1);
     KASSERT_EQ_U(g_sink_pause_count,      1);
     KASSERT_EQ_U(f.receiver_comp.state,   NX_LC_PAUSED);
 
     KASSERT_EQ_U(nx_component_resume(&f.receiver_comp), NX_OK);
     KASSERT_EQ_U(g_sink_resume_count, 1);
-    KASSERT_EQ_U(nx_slot_pause_state(&f.receiver), NX_SLOT_PAUSE_NONE);
+    KASSERT_EQ_U(nx_slot_pause_state(&s_kp_receiver), NX_SLOT_PAUSE_NONE);
     KASSERT_EQ_U(f.receiver_comp.state, NX_LC_ACTIVE);
 
     fixture_down(&f);
@@ -141,7 +156,7 @@ KTEST(pause_kernel_drains_inflight_mpsc_messages)
     fixture_up(&f, "kp_sender2", "kp_receiver2", NX_PAUSE_QUEUE);
 
     struct nx_ipc_message msg = {
-        .src_slot = &f.sender, .dst_slot = &f.receiver, .msg_type = 77,
+        .src_slot = &s_kp_sender, .dst_slot = &s_kp_receiver, .msg_type = 77,
     };
     KASSERT_EQ_U(nx_ipc_send(&msg), NX_OK);
     /* Message is in the MPSC; not yet dispatched. */
@@ -150,7 +165,7 @@ KTEST(pause_kernel_drains_inflight_mpsc_messages)
     /* Pause — the drain step must yield until the dispatcher delivers
      * the in-flight message before proceeding to DONE. */
     KASSERT_EQ_U(nx_component_pause(&f.receiver_comp), NX_OK);
-    KASSERT_EQ_U(nx_slot_pause_state(&f.receiver), NX_SLOT_PAUSE_DONE);
+    KASSERT_EQ_U(nx_slot_pause_state(&s_kp_receiver), NX_SLOT_PAUSE_DONE);
 
     /* The message was delivered during the drain. */
     KASSERT_EQ_U(g_sink_handle_count, 1);
@@ -170,23 +185,23 @@ KTEST(pause_kernel_hold_queue_drains_on_resume)
     fixture_up(&f, "kp_sender3", "kp_receiver3", NX_PAUSE_QUEUE);
 
     KASSERT_EQ_U(nx_component_pause(&f.receiver_comp), NX_OK);
-    KASSERT_EQ_U(nx_slot_pause_state(&f.receiver), NX_SLOT_PAUSE_DONE);
+    KASSERT_EQ_U(nx_slot_pause_state(&s_kp_receiver), NX_SLOT_PAUSE_DONE);
 
     /* Send while paused — QUEUE policy holds them. */
     struct nx_ipc_message m1 = {
-        .src_slot = &f.sender, .dst_slot = &f.receiver, .msg_type = 1 };
+        .src_slot = &s_kp_sender, .dst_slot = &s_kp_receiver, .msg_type = 1 };
     struct nx_ipc_message m2 = {
-        .src_slot = &f.sender, .dst_slot = &f.receiver, .msg_type = 2 };
+        .src_slot = &s_kp_sender, .dst_slot = &s_kp_receiver, .msg_type = 2 };
     KASSERT_EQ_U(nx_ipc_send(&m1), NX_OK);
     KASSERT_EQ_U(nx_ipc_send(&m2), NX_OK);
-    KASSERT_EQ_U(nx_ipc_hold_queue_depth(&f.sender, &f.receiver), 2);
+    KASSERT_EQ_U(nx_ipc_hold_queue_depth(&s_kp_sender, &s_kp_receiver), 2);
     KASSERT_EQ_U(g_sink_handle_count, 0);
 
     /* Resume: hold queue flushes back through the IPC router into the
      * dispatcher MPSC; the kthread delivers them asynchronously. */
     KASSERT_EQ_U(nx_component_resume(&f.receiver_comp), NX_OK);
     KASSERT_EQ_U(g_sink_resume_count, 1);
-    KASSERT_EQ_U(nx_ipc_hold_queue_depth(&f.sender, &f.receiver), 0);
+    KASSERT_EQ_U(nx_ipc_hold_queue_depth(&s_kp_sender, &s_kp_receiver), 0);
 
     for (int i = 0; i < 64 && g_sink_handle_count < 2; i++)
         nx_task_yield();

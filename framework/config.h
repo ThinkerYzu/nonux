@@ -24,6 +24,11 @@
  * nx_recompose().  The caller names the new component by manifest_id;
  * the config manager finds the first registered NX_LC_READY component
  * with that id.
+ *
+ * nx_config_set_conn_mode() retunes a registered connection's IPC mode
+ * (NX_CONN_ASYNC ↔ NX_CONN_SYNC) via a conn-only recomp_plan.  The
+ * receiver slot is paused and resumed around the retune so all in-flight
+ * handlers complete before the mode changes.
  */
 
 /* ---------- Snapshot --------------------------------------------------- */
@@ -75,5 +80,19 @@ int nx_config_query_snapshot(struct nx_config_snapshot *snap);
  *   other     — propagated from nx_recompose() (pause/drain failure)
  */
 int nx_config_swap_component(const char *slot_name, const char *new_impl);
+
+/*
+ * Retune the IPC mode of the connection from `from_slot_name` to
+ * `to_slot_name`.  `mode` must be NX_CONN_ASYNC or NX_CONN_SYNC.
+ *
+ * Returns:
+ *   NX_OK     — mode changed; receiver was paused, drained, and resumed
+ *   NX_ENOENT — either slot not registered, or no matching edge
+ *   NX_EINVAL — NULL args
+ *   other     — propagated from nx_recompose()
+ */
+int nx_config_set_conn_mode(const char *from_slot_name,
+                             const char *to_slot_name,
+                             enum nx_conn_mode mode);
 
 #endif /* NX_FRAMEWORK_CONFIG_H */

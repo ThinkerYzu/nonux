@@ -239,6 +239,16 @@ static int sched_rr_enable(void *self)
     /* Update the global scheduler driver so pick_next/tick/yield route
      * through this implementation immediately — required for live swap. */
     sched_init(&sched_rr_scheduler_ops, self);
+    /* Ensure the idle task is in the runqueue as the permanent fallback.
+     * sched_start() enqueued idle into whichever scheduler was active at
+     * boot (sched_priority); on a live swap to sched_rr the idle task must
+     * also be present here so that pick_next can return it when no other
+     * task is ready, allowing the ktest (idle) task to regain the CPU. */
+    {
+        extern struct nx_task g_idle_task;
+        if (!on_queue(s, &g_idle_task))
+            (void)sched_rr_enqueue(s, &g_idle_task);
+    }
 #endif
     return NX_OK;
 }

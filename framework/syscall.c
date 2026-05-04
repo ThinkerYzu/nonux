@@ -2844,6 +2844,38 @@ static nx_status_t sys_config_swap(uint64_t a0, uint64_t a1, uint64_t a2,
     return (nx_status_t)nx_config_swap_component(slot_name, impl_name);
 }
 
+/* ---------- Slice 8.6 — runtime conn mode switching ------------------ */
+
+static nx_status_t sys_config_rewire(uint64_t a0, uint64_t a1, uint64_t a2,
+                                      uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a4; (void)a5;
+    nx_handle_t   h          = (nx_handle_t)a0;
+    const char   *user_from  = (const char *)a1;
+    const char   *user_to    = (const char *)a2;
+    int           mode       = (int)(int64_t)a3;
+
+    enum nx_handle_type type;
+    int rc = nx_handle_lookup(nx_syscall_current_table(), h, &type, NULL, NULL);
+    if (rc != NX_OK)
+        return rc;
+    if (type != NX_HANDLE_CONFIG)
+        return NX_EINVAL;
+
+    if (!user_from || !user_to) return NX_EINVAL;
+    if (mode != NX_CONN_ASYNC && mode != NX_CONN_SYNC) return NX_EINVAL;
+
+    char from_name[32];
+    char to_name[32];
+    if (copy_path_from_user(from_name, sizeof from_name, user_from) != NX_OK)
+        return NX_EINVAL;
+    if (copy_path_from_user(to_name, sizeof to_name, user_to) != NX_OK)
+        return NX_EINVAL;
+
+    return (nx_status_t)nx_config_set_conn_mode(from_name, to_name,
+                                                 (enum nx_conn_mode)mode);
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -2892,6 +2924,7 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_CONFIG_OPEN]    = sys_config_open,
     [NX_SYS_CONFIG_QUERY]   = sys_config_query,
     [NX_SYS_CONFIG_SWAP]    = sys_config_swap,
+    [NX_SYS_CONFIG_REWIRE]  = sys_config_rewire,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

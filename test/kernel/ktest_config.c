@@ -207,9 +207,16 @@ KTEST(config_swap_api_replaces_active_component)
     KASSERT_EQ_U((uint64_t)comp_a.state, (uint64_t)NX_LC_DESTROYED);
 
     /* Clean up: unregister everything so this test doesn't pollute later
-     * tests that walk the registry (e.g. snapshot tests). */
+     * tests that walk the registry.
+     *
+     * nx_recompose only calls nx_component_destroy (ACTIVE→DESTROYED), not
+     * nx_component_unregister; comp_a's registry node is still present and
+     * must be explicitly removed to avoid a dangling comp pointer.
+     * We call nx_component_unregister unconditionally (not guarded by a
+     * state check) to avoid -O2 register-spill mis-compilation where the
+     * conditional branch causes the compiler to pass the wrong argument. */
     nx_slot_swap(&slot, NULL);
-    /* comp_a is DESTROYED — already removed from registry by nx_recompose */
+    (void)nx_component_unregister(&comp_a);   /* DESTROYED, still in registry */
     if (comp_b.state == NX_LC_ACTIVE || comp_b.state == NX_LC_READY ||
         comp_b.state == NX_LC_PAUSED)
         nx_component_unregister(&comp_b);

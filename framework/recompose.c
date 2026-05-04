@@ -74,6 +74,20 @@ static int build_pause_order(const struct recomp_plan *plan,
         if (n >= RECOMP_MAX_SLOTS) return NX_ENOMEM;
         set[n++] = plan->changes[i].slot;
     }
+    /* Pause the receiver of each REWIRE so in-flight handlers drain before
+     * the edge mode is changed.  Skip slots already collected above. */
+    for (int i = 0; i < plan->num_connections; i++) {
+        const struct nx_conn_change *cc = &plan->connections[i];
+        if (cc->action != NX_CONN_REWIRE || !cc->to_slot) continue;
+        bool already = false;
+        for (int j = 0; j < n; j++) {
+            if (set[j] == cc->to_slot) { already = true; break; }
+        }
+        if (!already) {
+            if (n >= RECOMP_MAX_SLOTS) return NX_ENOMEM;
+            set[n++] = cc->to_slot;
+        }
+    }
     for (int i = 0; i < n; i++) { deg[i] = 0; done[i] = false; }
 
     struct scan_dep_ctx sc = {
