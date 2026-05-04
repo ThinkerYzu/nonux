@@ -26,6 +26,7 @@ SRCS := main.c \
         conformance_scheduler_test.c \
         conformance_fs_test.c \
         component_sched_rr_test.c \
+        component_sched_priority_test.c \
         component_mm_buddy_test.c \
         component_ramfs_test.c \
         component_vfs_simple_test.c \
@@ -44,6 +45,7 @@ SRCS := main.c \
         process_test.c \
         elf_test.c \
         ../../components/sched_rr/sched_rr.c \
+        ../../components/sched_priority/sched_priority.c \
         ../../components/mm_buddy/mm_buddy.c \
         ../../components/ramfs/ramfs.c \
         ../../components/vfs_simple/vfs_simple.c \
@@ -74,7 +76,7 @@ SRCS += ../../core/pmm/pmm.c \
 
 # Look up .c sources only (not .o) in the kernel source tree, so stale
 # cross-compiled object files from `make` at the top don't get pulled in.
-vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/mm_buddy ../../components/ramfs ../../components/vfs_simple ../../components/procfs
+vpath %.c ../../core/pmm ../../core/lib ../../framework ../../core/sched conformance ../../components/sched_rr ../../components/sched_priority ../../components/mm_buddy ../../components/ramfs ../../components/vfs_simple ../../components/procfs
 
 OBJS := $(notdir $(SRCS:.c=.o))
 

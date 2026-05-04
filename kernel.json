@@ -9,7 +9,7 @@
       }
     },
     "scheduler": {
-      "impl": "sched_rr",
+      "impl": "sched_priority",
       "config": {}
     },
     "memory.page_alloc": {

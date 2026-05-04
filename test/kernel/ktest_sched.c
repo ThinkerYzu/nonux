@@ -3,7 +3,7 @@
  *
  * These tests run AFTER `boot_main`'s sched_start() has turned the
  * boot CPU's context into the idle task and sched_init has stashed
- * sched_rr's scheduler_ops.  ktest_main runs in the idle-task
+ * sched_priority's scheduler_ops.  ktest_main runs in the idle-task
  * context; when a test spawns a kthread and yields, the scheduler
  * picks it up, runs it, and the kthread's entry executes on its
  * own kernel stack.
@@ -19,18 +19,18 @@
 #include "framework/registry.h"
 #include "interfaces/scheduler.h"
 
-/* Exported by components/sched_rr/sched_rr.c. */
-extern const struct nx_scheduler_ops sched_rr_scheduler_ops;
+/* Exported by components/sched_priority/sched_priority.c. */
+extern const struct nx_scheduler_ops sched_priority_scheduler_ops;
 
 /* --- 1. sched_init plumbing --- */
 
 KTEST(sched_init_stashed_scheduler_ops_are_populated)
 {
     KASSERT(sched_is_initialized());
-    /* Bootstrap picks sched_rr from kernel.json — its scheduler_ops
+    /* Bootstrap picks sched_priority from kernel.json — its scheduler_ops
      * table must be the one stashed. */
     KASSERT_EQ_U((uint64_t)(uintptr_t)sched_ops_for_test(),
-                 (uint64_t)(uintptr_t)&sched_rr_scheduler_ops);
+                 (uint64_t)(uintptr_t)&sched_priority_scheduler_ops);
     /* `self` must be the bound component's state buffer, not NULL. */
     KASSERT_NOT_NULL(sched_self_for_test());
 }
