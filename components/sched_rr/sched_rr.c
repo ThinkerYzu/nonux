@@ -28,6 +28,7 @@
 #include "framework/registry.h"
 #include "framework/scheduler_dispatch.h"
 #include "interfaces/scheduler.h"
+#include "core/sched/sched.h"
 #include "core/sched/task.h"
 #include "core/lib/list.h"
 
@@ -132,6 +133,23 @@ static int sched_rr_dequeue(void *self, struct nx_task *task)
  */
 void sched_rr_purge_user_tasks(void *self, struct nx_task *keep)
 {
+#if !__STDC_HOSTED__
+    /*
+     * Dispatch: when sched_rr and an alternative scheduler are both compiled
+     * into the kernel (e.g. sched_rr as an alternative for live swap), the
+     * ktest teardown calls this function with sched_self_for_test() as `self`,
+     * which points to whichever scheduler is currently active.  Route to the
+     * correct per-scheduler purge rather than blindly casting to sched_rr_state.
+     * Only needed in the kernel build — host tests invoke each scheduler's
+     * purge with the correct self pointer directly.
+     */
+    extern const struct nx_scheduler_ops sched_rr_scheduler_ops;
+    if (sched_ops_for_test() != &sched_rr_scheduler_ops) {
+        extern void sched_priority_purge_user_tasks(void *, struct nx_task *);
+        sched_priority_purge_user_tasks(self, keep);
+        return;
+    }
+#endif
     struct sched_rr_state *s = self;
     struct nx_list_node *node = s->runqueue.n.next;
     while (node != &s->runqueue.n) {
@@ -217,6 +235,11 @@ static int sched_rr_enable(void *self)
 {
     struct sched_rr_state *s = self;
     s->enable_called++;
+#if !__STDC_HOSTED__
+    /* Update the global scheduler driver so pick_next/tick/yield route
+     * through this implementation immediately — required for live swap. */
+    sched_init(&sched_rr_scheduler_ops, self);
+#endif
     return NX_OK;
 }
 

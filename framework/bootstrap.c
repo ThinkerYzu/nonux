@@ -170,8 +170,14 @@ int nx_framework_bootstrap(void)
             rc = nx_component_init(comps[i]);
             if (rc != NX_OK) return rc;
 
-            rc = nx_component_enable(comps[i]);
-            if (rc != NX_OK) return rc;
+            /* Only enable components that are bound to a slot.  Unbound
+             * alternatives (e.g. sched_rr when sched_priority is active)
+             * stay in NX_LC_READY so nx_config_swap_component can find
+             * them for a live swap later. */
+            if (self_slot) {
+                rc = nx_component_enable(comps[i]);
+                if (rc != NX_OK) return rc;
+            }
 
             visited[i] = true;
             done++;

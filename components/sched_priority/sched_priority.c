@@ -22,6 +22,7 @@
 #include "framework/registry.h"
 #include "framework/scheduler_dispatch.h"
 #include "interfaces/scheduler.h"
+#include "core/sched/sched.h"
 #include "core/sched/task.h"
 #include "core/lib/list.h"
 
@@ -181,6 +182,11 @@ static int sched_priority_enable(void *self)
 {
     struct sched_priority_state *s = self;
     s->enable_called++;
+#if !__STDC_HOSTED__
+    /* Update the global scheduler driver so pick_next/tick/yield route
+     * through this implementation immediately — required for live swap. */
+    sched_init(&sched_priority_scheduler_ops, self);
+#endif
     return NX_OK;
 }
 
