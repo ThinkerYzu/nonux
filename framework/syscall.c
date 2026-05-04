@@ -1,4 +1,5 @@
 #include "framework/syscall.h"
+#include "framework/hook.h"
 #include "framework/channel.h"
 #include "framework/config.h"
 #include "framework/console.h"
@@ -2951,15 +2952,30 @@ void nx_syscall_dispatch(struct trap_frame *tf)
     if (!tf) return;
 
     uint64_t num = tf->x[8];
-    nx_status_t rc;
+    nx_status_t rc = NX_OK;
 
     g_current_tf = tf;
-    if (num >= NX_SYSCALL_COUNT || g_syscall_table[num] == NULL) {
-        rc = NX_ENOSYS;
-    } else {
-        rc = g_syscall_table[num](tf->x[0], tf->x[1], tf->x[2],
-                                  tf->x[3], tf->x[4], tf->x[5]);
+
+    struct nx_hook_context ctx = {
+        .point = NX_HOOK_SYSCALL_ENTER,
+        .u.sc  = { .num = num,
+                   .a   = { tf->x[0], tf->x[1], tf->x[2],
+                             tf->x[3], tf->x[4], tf->x[5] },
+                   .rc  = (int64_t *)&rc,
+                   .tf  = tf },
+    };
+    if (nx_hook_dispatch(&ctx) != NX_HOOK_ABORT) {
+        if (num >= NX_SYSCALL_COUNT || g_syscall_table[num] == NULL) {
+            rc = NX_ENOSYS;
+        } else {
+            rc = g_syscall_table[num](tf->x[0], tf->x[1], tf->x[2],
+                                      tf->x[3], tf->x[4], tf->x[5]);
+        }
     }
+
+    ctx.point = NX_HOOK_SYSCALL_EXIT;
+    nx_hook_dispatch(&ctx);
+
     g_current_tf = NULL;
     tf->x[0] = (uint64_t)rc;
 }

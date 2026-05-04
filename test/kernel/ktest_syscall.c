@@ -1,5 +1,6 @@
 #include "ktest.h"
 #include "framework/handle.h"
+#include "framework/hook.h"
 #include "framework/syscall.h"
 
 /*
@@ -157,4 +158,152 @@ KTEST(syscall_resumes_at_instruction_after_svc)
     volatile int sentinel = 0xA5;
     svc2(NX_SYS_DEBUG_WRITE, 0, 0);   /* round-trip, no bytes */
     KASSERT_EQ_U(sentinel, 0xA5);
+}
+
+/* ---- Slice 8.7: NX_HOOK_SYSCALL_ENTER / _EXIT hook points ----------- */
+
+static volatile uint64_t g_hook_num;
+static volatile uint64_t g_hook_a0;
+static volatile int64_t  g_hook_rc_on_exit;
+static volatile int      g_enter_fires;
+static volatile int      g_exit_fires;
+
+static enum nx_hook_action sh_enter_observe(struct nx_hook_context *ctx,
+                                             void *user)
+{
+    (void)user;
+    g_hook_num     = ctx->u.sc.num;
+    g_hook_a0      = ctx->u.sc.a[0];
+    g_enter_fires++;
+    return NX_HOOK_CONTINUE;
+}
+
+static enum nx_hook_action sh_exit_observe(struct nx_hook_context *ctx,
+                                            void *user)
+{
+    (void)user;
+    g_hook_rc_on_exit = *ctx->u.sc.rc;
+    g_exit_fires++;
+    return NX_HOOK_CONTINUE;
+}
+
+static enum nx_hook_action sh_enter_abort(struct nx_hook_context *ctx,
+                                           void *user)
+{
+    (void)user;
+    *ctx->u.sc.rc = (int64_t)(intptr_t)user;
+    return NX_HOOK_ABORT;
+}
+
+static enum nx_hook_action sh_exit_override(struct nx_hook_context *ctx,
+                                             void *user)
+{
+    (void)user;
+    *ctx->u.sc.rc = 0x7EEF;
+    return NX_HOOK_CONTINUE;
+}
+
+KTEST(syscall_hook_enter_fires)
+{
+    nx_syscall_reset_for_test();
+    g_enter_fires = 0;
+    g_hook_num = 0;
+    g_hook_a0  = 0;
+
+    static struct nx_hook h = { .point = NX_HOOK_SYSCALL_ENTER,
+                                 .fn    = sh_enter_observe };
+    nx_hook_register(&h);
+
+    static const char msg[] = "hook-enter\n";
+    svc2(NX_SYS_DEBUG_WRITE, (uint64_t)(uintptr_t)msg, sizeof msg - 1);
+
+    KASSERT_EQ_U(g_enter_fires, 1);
+    KASSERT_EQ_U(g_hook_num,    NX_SYS_DEBUG_WRITE);
+    KASSERT_EQ_U(g_hook_a0,     (uint64_t)(uintptr_t)msg);
+
+    nx_hook_unregister(&h);
+}
+
+KTEST(syscall_hook_exit_fires)
+{
+    nx_syscall_reset_for_test();
+    g_exit_fires      = 0;
+    g_hook_rc_on_exit = 0;
+
+    static struct nx_hook h = { .point = NX_HOOK_SYSCALL_EXIT,
+                                 .fn    = sh_exit_observe };
+    nx_hook_register(&h);
+
+    static const char msg[] = "hook-exit\n";
+    int64_t svc_rc = svc2(NX_SYS_DEBUG_WRITE,
+                          (uint64_t)(uintptr_t)msg, sizeof msg - 1);
+
+    KASSERT_EQ_U(g_exit_fires, 1);
+    /* EXIT hook saw the body's return value (bytes written). */
+    KASSERT_EQ_U((uint64_t)g_hook_rc_on_exit, (uint64_t)svc_rc);
+
+    nx_hook_unregister(&h);
+}
+
+KTEST(syscall_hook_enter_abort_skips_body)
+{
+    nx_syscall_reset_for_test();
+    uint64_t calls_before = nx_syscall_debug_write_calls();
+
+    /* ENTER hook sets *rc = NX_ENOENT and aborts — body must not run. */
+    static struct nx_hook h = { .point = NX_HOOK_SYSCALL_ENTER,
+                                 .fn    = sh_enter_abort,
+                                 .user  = (void *)(intptr_t)NX_ENOENT };
+    nx_hook_register(&h);
+
+    static const char msg[] = "should-not-print\n";
+    int64_t rc = svc2(NX_SYS_DEBUG_WRITE,
+                      (uint64_t)(uintptr_t)msg, sizeof msg - 1);
+
+    /* Syscall body skipped — debug_write call counter must not move. */
+    KASSERT_EQ_U(nx_syscall_debug_write_calls(), calls_before);
+    /* Return value is what the hook placed in *rc. */
+    KASSERT_EQ_U((uint64_t)rc, (uint64_t)(int64_t)NX_ENOENT);
+
+    nx_hook_unregister(&h);
+}
+
+KTEST(syscall_hook_exit_can_override_result)
+{
+    nx_syscall_reset_for_test();
+
+    static struct nx_hook h = { .point = NX_HOOK_SYSCALL_EXIT,
+                                 .fn    = sh_exit_override };
+    nx_hook_register(&h);
+
+    /* DEBUG_WRITE normally returns bytes written; hook overrides to 0x7EEF. */
+    static const char msg[] = "override\n";
+    int64_t rc = svc2(NX_SYS_DEBUG_WRITE,
+                      (uint64_t)(uintptr_t)msg, sizeof msg - 1);
+
+    KASSERT_EQ_U((uint64_t)rc, 0x7EEF);
+
+    nx_hook_unregister(&h);
+}
+
+KTEST(syscall_hook_enter_and_exit_both_fire)
+{
+    nx_syscall_reset_for_test();
+    g_enter_fires = 0;
+    g_exit_fires  = 0;
+
+    static struct nx_hook he = { .point = NX_HOOK_SYSCALL_ENTER,
+                                  .fn    = sh_enter_observe };
+    static struct nx_hook hx = { .point = NX_HOOK_SYSCALL_EXIT,
+                                  .fn    = sh_exit_observe };
+    nx_hook_register(&he);
+    nx_hook_register(&hx);
+
+    svc2(NX_SYS_DEBUG_WRITE, 0, 0);
+
+    KASSERT_EQ_U(g_enter_fires, 1);
+    KASSERT_EQ_U(g_exit_fires,  1);
+
+    nx_hook_unregister(&he);
+    nx_hook_unregister(&hx);
 }

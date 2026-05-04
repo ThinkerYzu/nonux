@@ -39,6 +39,9 @@ enum nx_hook_point {
     NX_HOOK_CONTEXT_SWITCH,         /* reschedule shim, post-pick_next pre-cpu_switch_to
                                      * — enum added in slice 4.3; dispatched live in 4.4 */
 
+    NX_HOOK_SYSCALL_ENTER,          /* just before syscall body in nx_syscall_dispatch */
+    NX_HOOK_SYSCALL_EXIT,           /* just after syscall body; *rc is writable */
+
     NX_HOOK_POINT_COUNT,            /* sentinel — keep last */
 };
 
@@ -89,6 +92,18 @@ struct nx_hook_context {
             struct nx_task *prev;
             struct nx_task *next;
         } csw;
+
+        /* SYSCALL_ENTER / SYSCALL_EXIT — fired from nx_syscall_dispatch.
+         * `a` is a snapshot of x0..x5 at SVC entry.  `rc` points at the
+         * dispatch-local return-value accumulator (aliases nx_status_t):
+         * ENTER hooks may set *rc then return ABORT to skip the body;
+         * EXIT hooks may overwrite *rc to change what EL0 sees in x0. */
+        struct {
+            uint64_t          num;   /* x8 — syscall number */
+            uint64_t          a[6];  /* snapshot of x0..x5 */
+            int64_t          *rc;    /* &local rc — aliases nx_status_t */
+            struct trap_frame *tf;
+        } sc;
     } u;
 };
 
@@ -96,6 +111,8 @@ struct nx_hook_context {
 struct nx_ipc_message;
 /* Forward decl — defined in core/sched/task.h. */
 struct nx_task;
+/* Forward decl — defined in core/cpu/exception.h. */
+struct trap_frame;
 
 /* ---------- Hook nodes ---------------------------------------------------- */
 
