@@ -38,6 +38,7 @@ SRCS := main.c \
         slice_8_0c_test.c \
         slice_8_0d_test.c \
         slice_9b_1_test.c \
+        slice_9b_2_test.c \
         recompose_test.c \
         slice_8_3_test.c \
         slice_8_6_test.c \

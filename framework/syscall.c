@@ -246,31 +246,25 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
     enum nx_handle_type type;
     void               *object = 0;
     int rc = nx_handle_lookup(t, h, &type, 0, &object);
-    if (rc == NX_OK && object) {
-        if (type == NX_HANDLE_CHANNEL) {
+    if (rc == NX_OK) {
+        if (type == NX_HANDLE_CHANNEL && object) {
             nx_channel_endpoint_close(object);
-        } else if (type == NX_HANDLE_FILE) {
-            /* Slice 9b.1: object field encodes the vfs open-id as
-             * (void*)(uintptr_t)id — extract and forward to vfs_close. */
-            struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-            if (vfs_slot) {
-                uint32_t vfs_id = (uint32_t)(uintptr_t)object;
-                nx_vfs_close(vfs_slot, vfs_id);
+        } else if (type == NX_HANDLE_RESOURCE) {
+            /* Slice 9b.2: route close to the owning component via target. */
+            const struct nx_handle_entry *res = nx_handle_entry_get(t, h);
+            if (res) {
+                struct nx_slot *char_slot = nx_slot_lookup("char_device");
+                if (res->target && res->target != char_slot)
+                    nx_vfs_close(res->target, res->id);
+                /* console (target==char_slot or NULL): singleton, no close op */
             }
-        } else if (type == NX_HANDLE_DIR) {
-            /* Slice 7.6d.N.5 — free the directory cursor.  No vfs
-             * dispatch: the cursor is a kheap-allocated state struct
-             * owned by the syscall layer.  Host build has no kheap;
-             * the HANDLE_DIR path is unreachable on host because
-             * sys_open's `/` branch is gated under !__STDC_HOSTED__. */
+        } else if (type == NX_HANDLE_DIR && object) {
+            /* Slice 7.6d.N.5 — free the directory cursor. */
 #if !__STDC_HOSTED__
             free(object);
 #endif
         }
-        /* HANDLE_CONSOLE: nothing to free — the underlying object is the
-         * `g_nx_console` sentinel, shared across every slot 0/1/2 in
-         * every process.  The handle slot itself is freed by the
-         * `nx_handle_close` call below. */
+        /* HANDLE_CONSOLE: legacy path — no-op, singleton object. */
     }
     return nx_handle_close(t, h);
 }
@@ -464,11 +458,8 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 #endif
 
-    /* Slice 9b.1: nx_vfs_open returns a uint32_t id (0 = failure).
-     * Store it in the handle entry as (void*)(uintptr_t)id — the
-     * object field is reinterpreted as an id until slice 9b.2
-     * redesigns the handle entry.  id >= 1 so the pointer is never
-     * NULL (nx_handle_alloc rejects NULL objects). */
+    /* Slice 9b.2: nx_vfs_open returns a uint32_t id (0 = failure).
+     * Store it directly in a NX_HANDLE_RESOURCE entry with target=vfs_slot. */
     uint32_t vfs_id = nx_vfs_open(vfs_slot, kpath, flags);
     if (vfs_id == 0) return NX_ENOENT;
 
@@ -479,9 +470,7 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
 
     struct nx_handle_table *t = nx_syscall_current_table();
     nx_handle_t h = NX_HANDLE_INVALID;
-    void *file_obj = (void *)(uintptr_t)vfs_id;
-    rc = nx_handle_alloc_with_slot(t, NX_HANDLE_FILE, rights, file_obj,
-                                   vfs_slot, &h);
+    rc = nx_handle_alloc_resource(t, rights, vfs_id, vfs_slot, &h);
     if (rc != NX_OK) {
         nx_vfs_close(vfs_slot, vfs_id);
         return rc;
@@ -504,7 +493,8 @@ static int lookup_file_object(nx_handle_t h, uint32_t need_rights,
     void                *obj;
     int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
     if (rc != NX_OK) return rc;
-    if (type != NX_HANDLE_FILE) return NX_EINVAL;
+    /* Accept both legacy FILE handles and new RESOURCE handles. */
+    if (type != NX_HANDLE_FILE && type != NX_HANDLE_RESOURCE) return NX_EINVAL;
     if ((rights & need_rights) != need_rights) return NX_EPERM;
     *out = obj;
     return NX_OK;
@@ -551,31 +541,26 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     nx_console_drain_intr();
 
     struct nx_handle_table *t = nx_syscall_current_table();
-    enum nx_handle_type type;
-    uint32_t rights;
-    void *obj;
     int rc;
 
-    /* Slice 7.6d.N.6b — POSIX STDIN_FILENO = 0 routes to slot 2 (the
-     * pre-installed CONSOLE read end) since encoded value 0 is
-     * reserved for NX_HANDLE_INVALID and `nx_handle_lookup` would
-     * reject it as a bad encoding.  Reading slot 2 directly bypasses
-     * the encoded-value generation check; a dup3-redirected stdin
-     * still resolves here because dup3 installs at slot 2 with gen 0
-     * when newfd == 0.  No magic fall-through to EOF — if slot 2 is
-     * empty (which only happens before nx_process_create runs, e.g.
-     * the bare g_kernel_process used in host fixtures that bypass
-     * nx_process_create), a normal-shape NX_ENOENT is returned. */
+    /* Resolve to a live entry.  POSIX STDIN_FILENO = 0 routes to slot 2
+     * since encoded value 0 is reserved for NX_HANDLE_INVALID.  Reading
+     * slot 2 directly bypasses the generation check; a dup3-redirected
+     * stdin still resolves here because dup3 installs at slot 2 with
+     * gen=0 when newfd == 0. */
+    const struct nx_handle_entry *cur_entry;
     if (h == 0) {
         if (!t || t->entries[2].type == NX_HANDLE_INVALID) return NX_ENOENT;
-        type   = t->entries[2].type;
-        rights = t->entries[2].rights;
-        obj    = t->entries[2].object;
-        rc     = NX_OK;
+        cur_entry = &t->entries[2];
     } else {
-        rc = nx_handle_lookup(t, h, &type, &rights, &obj);
-        if (rc != NX_OK) return rc;
+        cur_entry = nx_handle_entry_get(t, h);
+        if (!cur_entry) return NX_ENOENT;
     }
+
+    enum nx_handle_type type   = cur_entry->type;
+    uint32_t            rights = cur_entry->rights;
+    void               *obj    = cur_entry->object;  /* used by CHANNEL arm */
+
     if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
 
     if (type == NX_HANDLE_CONSOLE) {
@@ -634,13 +619,41 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
         return (nx_status_t)got;
     }
 
+    if (type == NX_HANDLE_RESOURCE) {
+        /* Slice 9b.2: dispatch via entry->target.  Console target
+         * (char_device slot or NULL on host): delegate to nx_console_read.
+         * VFS target: delegate to nx_vfs_read. */
+        struct nx_slot *char_slot = nx_slot_lookup("char_device");
+        if (cur_entry->target == char_slot) {
+            /* Console read — same path as HANDLE_CONSOLE above. */
+            if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
+            uint8_t staging[NX_FILE_IO_MAX];
+            int got = nx_console_read(staging, cap);
+            if (got <= 0) return (nx_status_t)got;
+            rc = copy_to_user(buf, staging, (size_t)got);
+            if (rc != NX_OK) return rc;
+            return (nx_status_t)got;
+        } else {
+            /* VFS file read. */
+            if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
+            struct nx_slot *vfs = cur_entry->target
+                                  ? cur_entry->target : nx_slot_lookup("vfs");
+            if (!vfs) return NX_ENOENT;
+            uint8_t staging[NX_FILE_IO_MAX];
+            int64_t got = nx_vfs_read(vfs, cur_entry->id, staging, cap);
+            if (got < 0) return (nx_status_t)got;
+            rc = copy_to_user(buf, staging, (size_t)got);
+            if (rc != NX_OK) return rc;
+            return (nx_status_t)got;
+        }
+    }
+
     if (type != NX_HANDLE_FILE) return NX_EINVAL;
 
     if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
-    /* Slice 9b.1: obj encodes the vfs open-id. */
     uint32_t vfs_id = (uint32_t)(uintptr_t)obj;
     uint8_t staging[NX_FILE_IO_MAX];
     int64_t got = nx_vfs_read(vfs_slot, vfs_id, staging, cap);
@@ -689,6 +702,28 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
         return (nx_status_t)nx_channel_send(obj, staging, len);
     }
 
+    if (type == NX_HANDLE_RESOURCE) {
+        /* Slice 9b.2: dispatch via target (same pattern as sys_read). */
+        const struct nx_handle_entry *res = nx_handle_entry_get(t, h);
+        if (!res) return NX_ENOENT;
+        struct nx_slot *char_slot = nx_slot_lookup("char_device");
+        if (res->target == char_slot) {
+            if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
+            uint8_t staging[NX_FILE_IO_MAX];
+            rc = copy_from_user(staging, buf, len);
+            if (rc != NX_OK) return rc;
+            return (nx_status_t)nx_console_write(staging, len);
+        } else {
+            if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
+            uint8_t staging[NX_FILE_IO_MAX];
+            rc = copy_from_user(staging, buf, len);
+            if (rc != NX_OK) return rc;
+            struct nx_slot *vfs = res->target ? res->target : nx_slot_lookup("vfs");
+            if (!vfs) return NX_ENOENT;
+            return (nx_status_t)nx_vfs_write(vfs, res->id, staging, len);
+        }
+    }
+
     if (type != NX_HANDLE_FILE) return NX_EINVAL;
 
     if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
@@ -699,7 +734,6 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
-    /* Slice 9b.1: obj encodes the vfs open-id. */
     uint32_t vfs_id = (uint32_t)(uintptr_t)obj;
     return (nx_status_t)nx_vfs_write(vfs_slot, vfs_id, staging, len);
 }
@@ -724,10 +758,15 @@ static nx_status_t sys_seek(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = lookup_file_object(h, NX_RIGHT_SEEK, &object);
     if (rc != NX_OK) return rc;
 
-    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    /* For RESOURCE handles, target IS the vfs slot; for legacy FILE handles,
+     * fall back to nx_slot_lookup.  object (via union) encodes the id
+     * in both cases as (uint32_t)(uintptr_t)object. */
+    const struct nx_handle_entry *se = nx_handle_entry_get(
+        nx_syscall_current_table(), h);
+    struct nx_slot *vfs_slot = (se && se->target) ? se->target
+                                                   : nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
-    /* Slice 9b.1: object field encodes the vfs open-id. */
     uint32_t vfs_id = (uint32_t)(uintptr_t)object;
     return (nx_status_t)nx_vfs_seek(vfs_slot, vfs_id, offset, whence);
 }
@@ -883,22 +922,26 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
     /* Resolve the vfs slot once for FILE handle inheritance. */
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
 
+    struct nx_slot *char_slot_fk = nx_slot_lookup("char_device");
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         const struct nx_handle_entry *src = &parent_tbl->entries[i];
-        if (!src->object) continue;
+        if (src->type == NX_HANDLE_INVALID) continue;
         bool retain_ok = false;
         if (src->type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_retain(src->object);
             retain_ok = true;
         } else if (src->type == NX_HANDLE_FILE) {
-            /* Slice 7.6d.N.15: FILE handles inherit through fork
-             * with the same per-open retain mechanism slice 7.6d.N.8
-             * added for `dup3` / `fcntl(F_DUPFD)`.  POSIX semantic:
-             * parent and child share the underlying open file
-             * description (cursor + flags).  If vfs slot is absent,
-             * FILE handles can't safely be shared — skip. */
+            /* Legacy FILE handles — use object-cast-as-id bridge. */
             if (vfs_slot) {
                 nx_vfs_retain(vfs_slot, src->object);
+                retain_ok = true;
+            }
+        } else if (src->type == NX_HANDLE_RESOURCE) {
+            /* Slice 9b.2: RESOURCE handles.  Console (id=0 or target==
+             * char_slot) are re-installed by nx_process_create — skip.
+             * File resources retain their open ID in the VFS component. */
+            if (src->target && src->target != char_slot_fk && src->id > 0) {
+                nx_vfs_retain(src->target, src->id);
                 retain_ok = true;
             }
         }
@@ -907,13 +950,12 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
         if (dst->type == NX_HANDLE_INVALID) {
             child_tbl->count++;
         }
-        /* No type-aware close on overwrite: the only pre-installed
-         * type at any slot in a freshly-created process is
-         * NX_HANDLE_CONSOLE, which is a global singleton with no
-         * destructor (the slot just stops naming it). */
+        /* No type-aware close on overwrite: pre-installed slots 0/1/2
+         * in the child have RESOURCE console entries (no destructor). */
         dst->type       = src->type;
         dst->rights     = src->rights;
-        dst->object     = src->object;
+        dst->object     = src->object;   /* copies union: id for RESOURCE */
+        dst->target     = src->target;
         dst->generation = src->generation;
     }
 
@@ -2243,6 +2285,21 @@ static nx_status_t sys_ppoll(uint64_t a0, uint64_t a1, uint64_t a2,
             states[i].kind = PPOLL_KIND_FILE;
             states[i].obj  = obj;
             break;
+        case NX_HANDLE_RESOURCE: {
+            /* Slice 9b.2: dispatch by target, same logic as sys_read. */
+            const struct nx_handle_entry *re =
+                (h == 0) ? &t->entries[2] : nx_handle_entry_get(t, h);
+            struct nx_slot *char_slot_p = nx_slot_lookup("char_device");
+            if (re && re->target == char_slot_p) {
+                states[i].kind = PPOLL_KIND_CONSOLE;
+                states[i].obj  = obj;
+                nx_console_register_pollset(&listeners[i]);
+            } else {
+                states[i].kind = PPOLL_KIND_FILE;
+                states[i].obj  = obj;
+            }
+            break;
+        }
         case NX_HANDLE_DIR:
             states[i].kind = PPOLL_KIND_DIR;
             states[i].obj  = obj;
@@ -2358,12 +2415,13 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_handle_table *t = nx_syscall_current_table();
     if (!t) return NX_EINVAL;
 
-    /* 1. Look up oldfd. */
+    /* 1. Look up oldfd — also capture entry pointer for RESOURCE target. */
     enum nx_handle_type src_type;
     uint32_t            src_rights;
     void               *src_object = 0;
     int rc = nx_handle_lookup(t, oldfd, &src_type, &src_rights, &src_object);
     if (rc != NX_OK) return rc;
+    const struct nx_handle_entry *src_entry = nx_handle_entry_get(t, oldfd);
 
     /* 2. Decode newfd's slot index + generation.  Layout matches
      * framework/handle.c's encode_handle: low 8 bits = idx + 1, high
@@ -2401,6 +2459,10 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
                 uint32_t fid = (uint32_t)(uintptr_t)e->object;
                 nx_vfs_close(vfs_slot, fid);
             }
+        } else if (e->type == NX_HANDLE_RESOURCE) {
+            struct nx_slot *char_slot_d = nx_slot_lookup("char_device");
+            if (e->target && e->target != char_slot_d)
+                nx_vfs_close(e->target, e->id);
         } else if (e->type == NX_HANDLE_DIR) {
 #if !__STDC_HOSTED__
             free(e->object);
@@ -2412,9 +2474,8 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 
     /* 4. For channel handles, retain the source endpoint — the new
-     * slot now holds an additional reference.  Same for file handles
-     * (slice 7.6d.N.8): the per-open struct now lives in two slots
-     * and must survive the first close. */
+     * slot now holds an additional reference.  Same for file/resource
+     * handles (slice 7.6d.N.8): the per-open lives in two slots. */
     if (src_type == NX_HANDLE_CHANNEL) {
         nx_channel_endpoint_retain(src_object);
     } else if (src_type == NX_HANDLE_FILE) {
@@ -2423,14 +2484,18 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
             uint32_t fid = (uint32_t)(uintptr_t)src_object;
             nx_vfs_retain(vfs_slot, fid);
         }
+    } else if (src_type == NX_HANDLE_RESOURCE && src_entry) {
+        struct nx_slot *char_slot_d = nx_slot_lookup("char_device");
+        if (src_entry->target && src_entry->target != char_slot_d && src_entry->id > 0)
+            nx_vfs_retain(src_entry->target, src_entry->id);
     }
 
-    /* 5. Install the source's (type, rights, object) at the destination
-     * slot, forcing generation to match newfd's encoded gen.  After
-     * this, the encoded handle for `new_idx` equals newfd exactly. */
+    /* 5. Install the source's fields at the destination slot, forcing
+     * generation to match newfd's encoded gen. */
     e->type       = src_type;
     e->rights     = src_rights;
-    e->object     = src_object;
+    e->object     = src_object;   /* union copies id for RESOURCE */
+    e->target     = src_entry ? src_entry->target : NULL;
     e->generation = new_gen;
 
     return (nx_status_t)newfd;
@@ -2511,6 +2576,7 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
     void               *src_object = 0;
     int rc = nx_handle_lookup(t, fd, &src_type, &src_rights, &src_object);
     if (rc != NX_OK) return NX_LINUX_EBADF;
+    const struct nx_handle_entry *fcntl_src = nx_handle_entry_get(t, fd);
 
     /* `arg` is the minimum POSIX fd.  Convert to a min table index:
      * encoded fd N at generation 0 = idx (N - 1), so idx ≥ arg - 1.
@@ -2545,11 +2611,17 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
                 uint32_t fid = (uint32_t)(uintptr_t)src_object;
                 nx_vfs_retain(vfs_slot, fid);
             }
+        } else if (src_type == NX_HANDLE_RESOURCE && fcntl_src) {
+            struct nx_slot *char_slot_f = nx_slot_lookup("char_device");
+            if (fcntl_src->target && fcntl_src->target != char_slot_f
+                && fcntl_src->id > 0)
+                nx_vfs_retain(fcntl_src->target, fcntl_src->id);
         }
 
         e->type       = src_type;
         e->rights     = src_rights;
-        e->object     = src_object;
+        e->object     = src_object;   /* union copies id for RESOURCE */
+        e->target     = fcntl_src ? fcntl_src->target : NULL;
         e->generation = 0;
         t->count++;
 
@@ -2770,7 +2842,15 @@ static nx_status_t sys_ioctl(uint64_t a0, uint64_t a1, uint64_t a2,
         rc = nx_handle_lookup(t, h, &type, &rights, &obj);
         if (rc != NX_OK) return rc;
     }
-    if (type != NX_HANDLE_CONSOLE) return LINUX_ENOTTY;
+    /* Accept legacy CONSOLE handles and new RESOURCE console handles. */
+    if (type == NX_HANDLE_RESOURCE) {
+        const struct nx_handle_entry *ie =
+            (h == 0) ? &t->entries[2] : nx_handle_entry_get(t, h);
+        struct nx_slot *char_slot_i = nx_slot_lookup("char_device");
+        if (!ie || ie->target != char_slot_i) return LINUX_ENOTTY;
+    } else if (type != NX_HANDLE_CONSOLE) {
+        return LINUX_ENOTTY;
+    }
 
     switch (cmd) {
     case LINUX_TCGETS: {

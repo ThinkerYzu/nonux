@@ -307,7 +307,7 @@ TEST(handle_alloc_with_slot_wires_slot_field)
 
     /* The slot must be stored in the raw entry. */
     size_t idx = (h & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[idx].slot, fake_slot);
+    ASSERT_EQ_PTR(t.entries[idx].target, fake_slot);
 }
 
 TEST(handle_alloc_with_null_slot_leaves_entry_immune)
@@ -321,7 +321,7 @@ TEST(handle_alloc_with_null_slot_leaves_entry_immune)
                                           NX_RIGHT_READ, &dummy,
                                           NULL, &h), NX_OK);
     size_t idx = (h & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[idx].slot, NULL);
+    ASSERT_EQ_PTR(t.entries[idx].target, NULL);
 }
 
 TEST(handle_set_slot_wires_on_valid_handle)
@@ -337,7 +337,7 @@ TEST(handle_set_slot_wires_on_valid_handle)
     nx_handle_set_slot(&t, h, fake_slot);
 
     size_t idx = (h & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[idx].slot, fake_slot);
+    ASSERT_EQ_PTR(t.entries[idx].target, fake_slot);
 }
 
 TEST(handle_set_slot_noop_if_already_wired)
@@ -353,7 +353,7 @@ TEST(handle_set_slot_noop_if_already_wired)
     nx_handle_set_slot(&t, h, slot_b);  /* second call must be a no-op */
 
     size_t idx = (h & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[idx].slot, slot_a);  /* unchanged */
+    ASSERT_EQ_PTR(t.entries[idx].target, slot_a);  /* unchanged */
 }
 
 TEST(handle_close_clears_slot_field)
@@ -367,10 +367,10 @@ TEST(handle_close_clears_slot_field)
     nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, fake_slot, &h);
 
     size_t idx = (h & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[idx].slot, fake_slot);
+    ASSERT_EQ_PTR(t.entries[idx].target, fake_slot);
 
     nx_handle_close(&t, h);
-    ASSERT_EQ_PTR(t.entries[idx].slot, NULL);
+    ASSERT_EQ_PTR(t.entries[idx].target, NULL);
 }
 
 TEST(handle_duplicate_propagates_slot)
@@ -389,7 +389,7 @@ TEST(handle_duplicate_propagates_slot)
     ASSERT_EQ_U(nx_handle_duplicate(&t, src, NX_RIGHT_READ, &dup), NX_OK);
 
     size_t dup_idx = (dup & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[dup_idx].slot, fake_slot);
+    ASSERT_EQ_PTR(t.entries[dup_idx].target, fake_slot);
 }
 
 TEST(handle_duplicate_null_slot_stays_null)
@@ -405,7 +405,7 @@ TEST(handle_duplicate_null_slot_stays_null)
     nx_handle_duplicate(&t, src, NX_RIGHT_READ, &dup);
 
     size_t dup_idx = (dup & 0xFFu) - 1u;
-    ASSERT_EQ_PTR(t.entries[dup_idx].slot, NULL);
+    ASSERT_EQ_PTR(t.entries[dup_idx].target, NULL);
 }
 
 TEST(handle_invalidate_for_slot_clears_matching_entries)

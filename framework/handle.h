@@ -7,15 +7,21 @@
 #include <stdint.h>
 
 /*
- * Handle framework — Phase 5 slice 5.3.
+ * Handle framework — Phase 5 slice 5.3; extended in Phase 9b slice 9b.2.
  *
  * Handles are the native userspace API for every kernel object: channels,
  * memory objects, processes, IRQ sources, files.  Each task (later: each
  * process) owns an `nx_handle_table` that maps small opaque IDs onto
- * (type, rights, object*) triples.  Syscalls name objects by handle ID,
+ * (type, rights, id/target) entries.  Syscalls name objects by handle ID,
  * the syscall entry looks the ID up in the caller's table, checks the
  * requested operation against the recorded rights, and only then acts on
  * the kernel-side object pointer.
+ *
+ * Slice 9b.2: NX_HANDLE_RESOURCE entries replace NX_HANDLE_FILE/CONSOLE.
+ * They store a component-local uint32_t `id` (assigned by the owning
+ * component) and a `target` slot pointer for routing.  The old `void
+ * *object` field is kept as a union member so CHANNEL/VMO/CONFIG handles
+ * are undisturbed.  `slot` renamed to `target` throughout.
  *
  * Slice 5.3 scope: the table, the type/rights scaffolding, and the four
  * core ops (alloc / lookup / close / duplicate).  No object types wire up
@@ -53,11 +59,13 @@ enum nx_handle_type {
     NX_HANDLE_PROCESS,        /* process (slice 5.5) */
     NX_HANDLE_THREAD,         /* thread */
     NX_HANDLE_IRQ,            /* interrupt source */
-    NX_HANDLE_FILE,           /* file via VFS (Phase 6) */
+    NX_HANDLE_FILE,           /* file via VFS — superseded by RESOURCE (9b.4) */
     NX_HANDLE_DIR,            /* directory cursor (slice 7.6d.N.5) */
-    NX_HANDLE_CONSOLE,        /* stdin/stdout/stderr backed by UART
-                                 (slice 7.6d.N.6b — pre-installed at
-                                 process slots 0/1/2) */
+    NX_HANDLE_CONSOLE,        /* UART console — superseded by RESOURCE (9b.4) */
+    NX_HANDLE_RESOURCE,       /* slice 9b.2: component-owned resource;
+                                 entry holds { id, target } instead of object.
+                                 Pre-installed at slots 0/1/2 for console
+                                 (id=0, target=char_device slot). */
     NX_HANDLE_CONFIG,         /* runtime config manager (slice 8.3) */
 
     NX_HANDLE_TYPE_COUNT,     /* sentinel — keep last */
@@ -98,9 +106,12 @@ typedef uint32_t nx_handle_t;
 struct nx_handle_entry {
     enum nx_handle_type  type;
     uint32_t             rights;
-    void                *object;
+    union {
+        void        *object;   /* CHANNEL / VMO / PROCESS / DIR / CONFIG */
+        uint32_t     id;       /* RESOURCE: component-local open ID */
+    };
     uint32_t             generation;  /* bumped on close */
-    struct nx_slot      *slot;        /* NULL → immune to slot invalidation */
+    struct nx_slot      *target;      /* routing slot (was: slot) */
 };
 
 struct nx_handle_table {
@@ -176,27 +187,52 @@ int nx_handle_duplicate(struct nx_handle_table *t,
                         nx_handle_t            *out);
 
 /*
- * Allocate a handle and immediately wire its backing slot.  Equivalent to
- * `nx_handle_alloc` followed by `nx_handle_set_slot`; provided as a single
+ * Allocate a NX_HANDLE_RESOURCE entry with a component-local `id` and a
+ * `target` routing slot.  `id` == 0 is valid (used for the console singleton).
+ * `target` may be NULL (leaves the entry immune to slot-based invalidation).
+ *
+ * Returns:
+ *   NX_OK      — *out is set to the new handle.
+ *   NX_EINVAL  — NULL table / NULL out.
+ *   NX_ENOMEM  — table full.
+ */
+int nx_handle_alloc_resource(struct nx_handle_table *t,
+                             uint32_t                rights,
+                             uint32_t                id,
+                             struct nx_slot         *target,
+                             nx_handle_t            *out);
+
+/*
+ * Return a pointer to the live entry for handle `h`, or NULL if `h` is
+ * invalid or stale.  The pointer is valid only until the next alloc/close
+ * on the same table.  Callers may read any field of the entry directly.
+ */
+const struct nx_handle_entry *nx_handle_entry_get(const struct nx_handle_table *t,
+                                                   nx_handle_t                   h);
+
+/*
+ * Allocate a handle and immediately wire its backing target slot.  Equivalent
+ * to `nx_handle_alloc` followed by `nx_handle_set_slot`; provided as a single
  * call so the two steps are always paired.  NULL slot is accepted and leaves
  * the entry immune to slot-based invalidation (same as plain alloc).
+ * Used for object-pointer-based handle types (CHANNEL, VMO, DIR, CONFIG).
  */
 int nx_handle_alloc_with_slot(struct nx_handle_table *t,
                               enum nx_handle_type     type,
                               uint32_t                rights,
                               void                   *object,
-                              struct nx_slot         *slot,
+                              struct nx_slot         *target,
                               nx_handle_t            *out);
 
 /*
- * Wire `slot` onto an already-allocated handle.  No-op if `h` is invalid
- * or if the entry already has a non-NULL slot.  Used by callers that must
+ * Wire `target` onto an already-allocated handle.  No-op if `h` is invalid
+ * or if the entry already has a non-NULL target.  Used by callers that must
  * alloc first and wire after (e.g. when the slot pointer is only available
  * after the object is created).
  */
 void nx_handle_set_slot(struct nx_handle_table *t,
                         nx_handle_t             h,
-                        struct nx_slot         *slot);
+                        struct nx_slot         *target);
 
 /*
  * Walk every process's handle table and invalidate all entries whose

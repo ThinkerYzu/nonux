@@ -386,7 +386,8 @@ TEST(scheduler_dispatch_tick_void_reply_payload_len_nonzero)
 /* Section 5: vfs dispatch                                             */
 /* ================================================================== */
 
-static void  *s_vfs_open_out_file;
+/* Slice 9b.1: VFS ops now use uint32_t id, not void *file. */
+static uint32_t s_vfs_open_id = 1;
 static int    s_vfs_open_rc;
 static int    s_vfs_open_called;
 static int    s_vfs_close_called;
@@ -395,18 +396,17 @@ static int    s_vfs_read_called;
 static const char *s_vfs_read_src;
 static int    s_vfs_mkdir_rc;
 
-static int vfs_fake_open(void *s, const char *p, uint32_t f, void **out)
+static uint32_t vfs_fake_open(void *s, const char *p, uint32_t f)
 {
     (void)s;(void)p;(void)f;
-    *out = s_vfs_open_out_file;
     s_vfs_open_called++;
-    return s_vfs_open_rc;
+    return s_vfs_open_rc ? 0u : s_vfs_open_id;
 }
-static void vfs_fake_close(void *s, void *f)   { (void)s;(void)f; s_vfs_close_called++; }
-static void vfs_fake_retain(void *s, void *f)  { (void)s;(void)f; }
-static int64_t vfs_fake_read(void *s, void *f, void *buf, size_t cap)
+static void vfs_fake_close(void *s, uint32_t id)   { (void)s;(void)id; s_vfs_close_called++; }
+static void vfs_fake_retain(void *s, uint32_t id)  { (void)s;(void)id; }
+static int64_t vfs_fake_read(void *s, uint32_t id, void *buf, size_t cap)
 {
-    (void)s;(void)f;
+    (void)s;(void)id;
     size_t n = strlen(s_vfs_read_src);
     if (n > cap) n = cap;
     memcpy(buf, s_vfs_read_src, n);
@@ -414,10 +414,10 @@ static int64_t vfs_fake_read(void *s, void *f, void *buf, size_t cap)
     s_vfs_read_rc = (int64_t)n;
     return (int64_t)n;
 }
-static int64_t vfs_fake_write(void *s, void *f, const void *b, size_t l)
-    { (void)s;(void)f;(void)b; return (int64_t)l; }
-static int64_t vfs_fake_seek(void *s, void *f, int64_t o, int w)
-    { (void)s;(void)f;(void)o;(void)w; return 0; }
+static int64_t vfs_fake_write(void *s, uint32_t id, const void *b, size_t l)
+    { (void)s;(void)id;(void)b; return (int64_t)l; }
+static int64_t vfs_fake_seek(void *s, uint32_t id, int64_t o, int w)
+    { (void)s;(void)id;(void)o;(void)w; return 0; }
 static int vfs_fake_readdir(void *s, const char *p, uint32_t *c, struct nx_fs_dirent *d)
     { (void)s;(void)p;(void)c;(void)d; return NX_ENOENT; }
 static int vfs_fake_mkdir(void *s, const char *p)
@@ -435,10 +435,10 @@ static const struct nx_vfs_ops vfs_fake_ops = {
 
 TEST(vfs_dispatch_open_rc_and_out_file_in_reply)
 {
-    static char sentinel;
-    s_vfs_open_out_file = &sentinel;
-    s_vfs_open_rc       = NX_OK;
-    s_vfs_open_called   = 0;
+    /* Slice 9b.1: open returns a uint32_t id stored in reply->rc. */
+    s_vfs_open_id     = 7;
+    s_vfs_open_rc     = 0;   /* 0 = no error → returns s_vfs_open_id */
+    s_vfs_open_called = 0;
 
     struct nx_vfs_msg_open req;
     memset(&req, 0, sizeof req);
@@ -457,21 +457,19 @@ TEST(vfs_dispatch_open_rc_and_out_file_in_reply)
     ASSERT(msg.reply_payload_len == (uint32_t)sizeof(struct nx_vfs_reply_open));
 
     const struct nx_vfs_reply_open *r = msg.payload;
-    ASSERT_EQ_U((unsigned)r->rc, (unsigned)NX_OK);
-    ASSERT_EQ_PTR((void *)(uintptr_t)r->out_file, &sentinel);
+    ASSERT_EQ_U(r->rc, s_vfs_open_id);
 }
 
 TEST(vfs_dispatch_open_direct_vs_dispatch_equivalence)
 {
-    static char sentinel;
-    s_vfs_open_out_file = &sentinel;
-    s_vfs_open_rc       = NX_OK;
+    /* Slice 9b.1: open returns uint32_t id; dispatch stores it in reply->rc. */
+    s_vfs_open_id = 3;
+    s_vfs_open_rc = 0;
 
-    /* direct call rc */
-    void *out_direct = NULL;
-    int rc_direct = vfs_fake_open(NULL, "/foo", NX_VFS_OPEN_READ, &out_direct);
+    /* direct call returns the id */
+    uint32_t id_direct = vfs_fake_open(NULL, "/foo", NX_VFS_OPEN_READ);
 
-    /* dispatch call rc */
+    /* dispatch routes to the same op; id appears in reply->rc */
     struct nx_vfs_msg_open req;
     memset(&req, 0, sizeof req);
     strncpy(req.path, "/foo", sizeof req.path - 1);
@@ -483,7 +481,9 @@ TEST(vfs_dispatch_open_direct_vs_dispatch_equivalence)
     msg.payload_len = (uint32_t)sizeof req;
     int rc_dispatch = nx_vfs_dispatch(NULL, &vfs_fake_ops, &msg);
 
-    ASSERT_CALL_EQUIVALENT(rc_direct, rc_dispatch);
+    ASSERT_EQ_U((unsigned)rc_dispatch, (unsigned)NX_OK);
+    const struct nx_vfs_reply_open *r = msg.payload;
+    ASSERT_EQ_U(r->rc, id_direct);
 }
 
 TEST(vfs_dispatch_read_writes_data_to_caller_buf)
@@ -496,8 +496,8 @@ TEST(vfs_dispatch_read_writes_data_to_caller_buf)
 
     struct nx_vfs_msg_read req;
     memset(&req, 0, sizeof req);
-    req.file = 0;
-    req.buf  = (uint64_t)(uintptr_t)dst;
+    req.id  = 0;
+    req.buf = (uint64_t)(uintptr_t)dst;
     req.cap  = sizeof dst;
 
     struct nx_ipc_message msg;
@@ -524,7 +524,7 @@ TEST(vfs_dispatch_close_increments_counter)
 
     struct nx_vfs_msg_close req;
     memset(&req, 0, sizeof req);
-    req.file = (uint64_t)(uintptr_t)(void *)0xabcd;
+    req.id = 0xabcd;
 
     struct nx_ipc_message msg;
     memset(&msg, 0, sizeof msg);
@@ -586,22 +586,23 @@ TEST(vfs_dispatch_stat_out_struct_in_reply)
 /* Section 6: fs dispatch (shared with ramfs / procfs)                */
 /* ================================================================== */
 
-static int    s_fs_open_called;
-static int    s_fs_open_rc;
-static void  *s_fs_open_out;
-static int    s_fs_close_called;
-static int    s_fs_mkdir_rc;
+/* Slice 9b.1: fs ops use uint32_t id, not void *file. */
+static int      s_fs_open_called;
+static int      s_fs_open_rc;
+static uint32_t s_fs_open_id;
+static int      s_fs_close_called;
+static int      s_fs_mkdir_rc;
 
-static int fs_fake_open(void *s, const char *p, uint32_t f, void **o)
-    { (void)s;(void)p;(void)f; *o = s_fs_open_out; s_fs_open_called++; return s_fs_open_rc; }
-static void fs_fake_close(void *s, void *f)   { (void)s;(void)f; s_fs_close_called++; }
-static void fs_fake_retain(void *s, void *f)  { (void)s;(void)f; }
-static int64_t fs_fake_read(void *s, void *f, void *b, size_t c)
-    { (void)s;(void)f;(void)b;(void)c; return 0; }
-static int64_t fs_fake_write(void *s, void *f, const void *b, size_t l)
-    { (void)s;(void)f;(void)b; return (int64_t)l; }
-static int64_t fs_fake_seek(void *s, void *f, int64_t o, int w)
-    { (void)s;(void)f;(void)o;(void)w; return 0; }
+static uint32_t fs_fake_open(void *s, const char *p, uint32_t f)
+    { (void)s;(void)p;(void)f; s_fs_open_called++; return s_fs_open_rc ? 0u : s_fs_open_id; }
+static void fs_fake_close(void *s, uint32_t id)   { (void)s;(void)id; s_fs_close_called++; }
+static void fs_fake_retain(void *s, uint32_t id)  { (void)s;(void)id; }
+static int64_t fs_fake_read(void *s, uint32_t id, void *b, size_t c)
+    { (void)s;(void)id;(void)b;(void)c; return 0; }
+static int64_t fs_fake_write(void *s, uint32_t id, const void *b, size_t l)
+    { (void)s;(void)id;(void)b; return (int64_t)l; }
+static int64_t fs_fake_seek(void *s, uint32_t id, int64_t o, int w)
+    { (void)s;(void)id;(void)o;(void)w; return 0; }
 static int fs_fake_readdir(void *s, const char *p, uint32_t *c, struct nx_fs_dirent *d)
     { (void)s;(void)p;(void)c;(void)d; return NX_ENOENT; }
 static int fs_fake_mkdir(void *s, const char *p)
@@ -619,17 +620,16 @@ static const struct nx_fs_ops fs_fake_ops = {
 
 TEST(fs_dispatch_open_and_close_equivalence)
 {
-    static char sentinel;
-    s_fs_open_out    = &sentinel;
-    s_fs_open_rc     = NX_OK;
-    s_fs_open_called = 0;
+    /* Slice 9b.1: open returns uint32_t id; close takes uint32_t id. */
+    s_fs_open_id     = 5;
+    s_fs_open_rc     = 0;
+    s_fs_open_called  = 0;
     s_fs_close_called = 0;
 
-    /* direct open */
-    void *out_direct = NULL;
-    int rc_direct = fs_fake_open(NULL, "/x", NX_FS_OPEN_READ, &out_direct);
+    /* direct open returns id */
+    uint32_t id_direct = fs_fake_open(NULL, "/x", NX_FS_OPEN_READ);
 
-    /* dispatch open */
+    /* dispatch open stores id in reply->rc */
     struct nx_fs_msg_open req_open;
     memset(&req_open, 0, sizeof req_open);
     strncpy(req_open.path, "/x", sizeof req_open.path - 1);
@@ -642,13 +642,15 @@ TEST(fs_dispatch_open_and_close_equivalence)
     msg.payload_len = (uint32_t)sizeof req_open;
 
     int rc_dispatch = nx_fs_dispatch(NULL, &fs_fake_ops, &msg);
-    ASSERT_CALL_EQUIVALENT(rc_direct, rc_dispatch);
+    ASSERT_EQ_U((unsigned)rc_dispatch, (unsigned)NX_OK);
+    const struct nx_fs_reply_open *r_open = msg.payload;
+    ASSERT_EQ_U(r_open->rc, id_direct);
     ASSERT_EQ_U((unsigned)s_fs_open_called, 2u);   /* 1 direct + 1 dispatch */
 
     /* dispatch close */
     struct nx_fs_msg_close req_close;
     memset(&req_close, 0, sizeof req_close);
-    req_close.file = (uint64_t)(uintptr_t)&sentinel;
+    req_close.id = id_direct;
 
     memset(&msg, 0, sizeof msg);
     msg.msg_type    = NX_FS_OP_CLOSE;

@@ -61,7 +61,7 @@ void nx_handle_table_init(struct nx_handle_table *t)
         t->entries[i].type       = NX_HANDLE_INVALID;
         t->entries[i].rights     = 0;
         t->entries[i].object     = NULL;
-        t->entries[i].slot       = NULL;
+        t->entries[i].target     = NULL;
         /* Generation deliberately preserved across `init` so that a
          * table-init on a previously-used table still invalidates any
          * lingering handle values from the prior incarnation.  Tests
@@ -98,7 +98,7 @@ int nx_handle_alloc(struct nx_handle_table *t,
         e->type   = type;
         e->rights = rights;
         e->object = object;
-        e->slot   = NULL;   /* caller wires via alloc_with_slot / set_slot */
+        e->target = NULL;   /* caller wires via alloc_with_slot / set_slot */
         /* Generation stays as-is — close incremented it when the slot
          * was freed, and alloc inherits that same value so the newly-
          * returned handle encodes it.  Bumping here instead would leak
@@ -147,7 +147,7 @@ int nx_handle_close(struct nx_handle_table *t, nx_handle_t h)
     e->type   = NX_HANDLE_INVALID;
     e->rights = 0;
     e->object = NULL;
-    e->slot   = NULL;
+    e->target = NULL;
     /* Bump generation LAST so a racing lookup either sees the fully-
      * zeroed entry (and returns NX_ENOENT on type check) or the old
      * generation (and returns NX_ENOENT on generation check).  Either
@@ -177,16 +177,15 @@ int nx_handle_duplicate(struct nx_handle_table *t,
      * escalation attempt → NX_EPERM. */
     if ((new_rights & ~src_rights) != 0) return NX_EPERM;
 
-    /* Capture the source entry's slot before alloc (which may reuse the
-     * same index on a different slot number — unlikely but correct to
-     * snapshot now). */
+    /* Capture the source entry's target before alloc (which may reuse the
+     * same index — unlikely but correct to snapshot now). */
     size_t src_idx;
     decode_index(src, &src_idx);   /* safe: lookup already validated */
-    struct nx_slot *src_slot = t->entries[src_idx].slot;
+    struct nx_slot *src_target = t->entries[src_idx].target;
 
     int dup_rc = nx_handle_alloc(t, src_type, new_rights, src_object, out);
-    if (dup_rc == NX_OK && src_slot)
-        nx_handle_set_slot(t, *out, src_slot);
+    if (dup_rc == NX_OK && src_target)
+        nx_handle_set_slot(t, *out, src_target);
     return dup_rc;
 }
 
@@ -196,26 +195,60 @@ int nx_handle_alloc_with_slot(struct nx_handle_table *t,
                               enum nx_handle_type     type,
                               uint32_t                rights,
                               void                   *object,
-                              struct nx_slot         *slot,
+                              struct nx_slot         *target,
                               nx_handle_t            *out)
 {
     int rc = nx_handle_alloc(t, type, rights, object, out);
-    if (rc == NX_OK && slot)
-        nx_handle_set_slot(t, *out, slot);
+    if (rc == NX_OK && target)
+        nx_handle_set_slot(t, *out, target);
     return rc;
+}
+
+int nx_handle_alloc_resource(struct nx_handle_table *t,
+                             uint32_t                rights,
+                             uint32_t                id,
+                             struct nx_slot         *target,
+                             nx_handle_t            *out)
+{
+    if (!t || !out) return NX_EINVAL;
+
+    for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
+        struct nx_handle_entry *e = &t->entries[i];
+        if (e->type != NX_HANDLE_INVALID) continue;
+        e->type   = NX_HANDLE_RESOURCE;
+        e->rights = rights;
+        e->id     = id;
+        e->target = target;
+        t->count++;
+        *out = encode_handle(e->generation, i);
+        return NX_OK;
+    }
+    return NX_ENOMEM;
+}
+
+const struct nx_handle_entry *nx_handle_entry_get(const struct nx_handle_table *t,
+                                                   nx_handle_t                   h)
+{
+    if (!t) return NULL;
+    size_t idx;
+    if (!decode_index(h, &idx)) return NULL;
+    const struct nx_handle_entry *e = &t->entries[idx];
+    if (e->type == NX_HANDLE_INVALID) return NULL;
+    if (e->generation != decode_generation(h)) return NULL;
+    return e;
 }
 
 void nx_handle_set_slot(struct nx_handle_table *t,
                         nx_handle_t             h,
-                        struct nx_slot         *slot)
+                        struct nx_slot         *target)
 {
     if (!t) return;
     size_t idx;
     if (!decode_index(h, &idx)) return;
     struct nx_handle_entry *e = &t->entries[idx];
     if (e->type == NX_HANDLE_INVALID) return;
-    if (e->slot) return;   /* already wired — don't overwrite */
-    e->slot = slot;
+    if (e->target) return;   /* already wired — don't overwrite */
+    e->target = target;
 }
 
 /* ---------- Slot-based invalidation ----------------------------------- */
@@ -226,12 +259,12 @@ static int invalidate_slot_cb(struct nx_process *p, void *ctx)
     struct nx_handle_table *t        = &p->handles;
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         struct nx_handle_entry *e = &t->entries[i];
-        if (e->slot != dep_slot) continue;
+        if (e->target != dep_slot) continue;
         if (e->type == NX_HANDLE_INVALID) continue;
         e->type       = NX_HANDLE_INVALID;
         e->rights     = 0;
         e->object     = NULL;
-        e->slot       = NULL;
+        e->target     = NULL;
         e->generation++;
         t->count--;
     }
