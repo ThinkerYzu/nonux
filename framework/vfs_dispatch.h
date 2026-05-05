@@ -32,20 +32,18 @@ static inline int nx_vfs_dispatch(
             (struct nx_vfs_msg_open *)msg->payload;
         const char *_path = _req->path;
         uint32_t _flags = _req->flags;
-        void *_out_file = NULL;
-        int _rc = ops->open(self, _path, _flags, &_out_file);
+        uint32_t _rcu32 = ops->open(self, _path, _flags);
         struct nx_vfs_reply_open *_r =
             (struct nx_vfs_reply_open *)msg->payload;
-        _r->rc = _rc;
-        _r->out_file = (uint64_t)(uintptr_t)_out_file;
+        _r->rc = _rcu32;
         msg->reply_payload_len = (uint32_t)sizeof *_r;
-        return _rc;
+        return 0;
     }
     case NX_VFS_OP_CLOSE: {
         struct nx_vfs_msg_close *_req =
             (struct nx_vfs_msg_close *)msg->payload;
-        void *_file = (void *)(uintptr_t)_req->file;
-        ops->close(self, _file);
+        uint32_t _id = _req->id;
+        ops->close(self, _id);
         struct nx_vfs_reply_close *_r =
             (struct nx_vfs_reply_close *)msg->payload;
         _r->rc = 0;
@@ -55,8 +53,8 @@ static inline int nx_vfs_dispatch(
     case NX_VFS_OP_RETAIN: {
         struct nx_vfs_msg_retain *_req =
             (struct nx_vfs_msg_retain *)msg->payload;
-        void *_file = (void *)(uintptr_t)_req->file;
-        ops->retain(self, _file);
+        uint32_t _id = _req->id;
+        ops->retain(self, _id);
         struct nx_vfs_reply_retain *_r =
             (struct nx_vfs_reply_retain *)msg->payload;
         _r->rc = 0;
@@ -66,10 +64,10 @@ static inline int nx_vfs_dispatch(
     case NX_VFS_OP_READ: {
         struct nx_vfs_msg_read *_req =
             (struct nx_vfs_msg_read *)msg->payload;
-        void *_file = (void *)(uintptr_t)_req->file;
+        uint32_t _id = _req->id;
         void *_buf = (void *)(uintptr_t)_req->buf;
         size_t _cap = _req->cap;
-        int64_t _rc64 = ops->read(self, _file, _buf, _cap);
+        int64_t _rc64 = ops->read(self, _id, _buf, _cap);
         int _rc = (int)_rc64;
         struct nx_vfs_reply_read *_r =
             (struct nx_vfs_reply_read *)msg->payload;
@@ -81,10 +79,10 @@ static inline int nx_vfs_dispatch(
     case NX_VFS_OP_WRITE: {
         struct nx_vfs_msg_write *_req =
             (struct nx_vfs_msg_write *)msg->payload;
-        void *_file = (void *)(uintptr_t)_req->file;
+        uint32_t _id = _req->id;
         const void *_buf = (const void *)(uintptr_t)_req->buf;
         size_t _len = _req->len;
-        int64_t _rc64 = ops->write(self, _file, _buf, _len);
+        int64_t _rc64 = ops->write(self, _id, _buf, _len);
         int _rc = (int)_rc64;
         struct nx_vfs_reply_write *_r =
             (struct nx_vfs_reply_write *)msg->payload;
@@ -96,10 +94,10 @@ static inline int nx_vfs_dispatch(
     case NX_VFS_OP_SEEK: {
         struct nx_vfs_msg_seek *_req =
             (struct nx_vfs_msg_seek *)msg->payload;
-        void *_file = (void *)(uintptr_t)_req->file;
+        uint32_t _id = _req->id;
         int64_t _offset = _req->offset;
         int _whence = _req->whence;
-        int64_t _rc64 = ops->seek(self, _file, _offset, _whence);
+        int64_t _rc64 = ops->seek(self, _id, _offset, _whence);
         int _rc = (int)_rc64;
         struct nx_vfs_reply_seek *_r =
             (struct nx_vfs_reply_seek *)msg->payload;

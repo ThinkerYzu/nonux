@@ -62,11 +62,10 @@ struct fake_fs_state {
      * the driver side. */
     uint8_t data[64];
     size_t  size;
-    int     file_sentinel;  /* pointer to this field is the opaque "file" */
+    /* Slice 9b.1: fake driver returns ID=1 for every open. */
 };
 
-static int fake_open(void *self, const char *path, uint32_t flags,
-                     void **out_file)
+static uint32_t fake_open(void *self, const char *path, uint32_t flags)
 {
     struct fake_fs_state *s = self;
     s->open_calls++;
@@ -76,33 +75,31 @@ static int fake_open(void *self, const char *path, uint32_t flags,
     }
     s->last_path[n] = '\0';
     s->last_flags = flags;
-
-    *out_file = &s->file_sentinel;
-    return NX_OK;
+    return 1;  /* singleton: always ID 1 */
 }
 
-static void fake_close(void *self, void *file)
+static void fake_close(void *self, uint32_t id)
 {
     struct fake_fs_state *s = self;
     s->close_calls++;
-    (void)file;
+    (void)id;
 }
 
-static int64_t fake_read(void *self, void *file, void *buf, size_t cap)
+static int64_t fake_read(void *self, uint32_t id, void *buf, size_t cap)
 {
     struct fake_fs_state *s = self;
     s->read_calls++;
-    (void)file;
+    (void)id;
     size_t n = s->size < cap ? s->size : cap;
     memcpy(buf, s->data, n);
     return (int64_t)n;
 }
 
-static int64_t fake_write(void *self, void *file, const void *buf, size_t len)
+static int64_t fake_write(void *self, uint32_t id, const void *buf, size_t len)
 {
     struct fake_fs_state *s = self;
     s->write_calls++;
-    (void)file;
+    (void)id;
     size_t room = sizeof s->data - s->size;
     size_t n = len < room ? len : room;
     memcpy(s->data + s->size, buf, n);
@@ -204,11 +201,10 @@ TEST(vfs_simple_open_forwards_path_and_flags_to_driver)
     struct fixture fx;
     fixture_setup(&fx);
 
-    void *file = NULL;
-    int rc = vfs_simple_vfs_ops.open(fx.vfs_state, "/hello",
-                                     NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
-                                     NX_VFS_OPEN_CREATE, &file);
-    ASSERT_EQ_U(rc, NX_OK);
+    uint32_t file = vfs_simple_vfs_ops.open(fx.vfs_state, "/hello",
+                                             NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
+                                             NX_VFS_OPEN_CREATE);
+    ASSERT(file != 0);
     ASSERT_EQ_U(fx.fake_state.open_calls, 1);
     ASSERT(strcmp(fx.fake_state.last_path, "/hello") == 0);
     ASSERT_EQ_U(fx.fake_state.last_flags,
@@ -224,11 +220,10 @@ TEST(vfs_simple_write_then_read_forwards_byte_counts)
     struct fixture fx;
     fixture_setup(&fx);
 
-    void *f = NULL;
-    ASSERT_EQ_U(vfs_simple_vfs_ops.open(fx.vfs_state, "/x",
-                                        NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
-                                        NX_VFS_OPEN_CREATE, &f),
-                NX_OK);
+    uint32_t f = vfs_simple_vfs_ops.open(fx.vfs_state, "/x",
+                                          NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
+                                          NX_VFS_OPEN_CREATE);
+    ASSERT(f != 0);
 
     const char *payload = "world";
     int64_t wrote = vfs_simple_vfs_ops.write(fx.vfs_state, f, payload, 5);
@@ -250,11 +245,9 @@ TEST(vfs_simple_relative_path_rejected_before_driver_call)
     struct fixture fx;
     fixture_setup(&fx);
 
-    void *f = (void *)0xdead;
-    int rc = vfs_simple_vfs_ops.open(fx.vfs_state, "hello",
-                                     NX_VFS_OPEN_READ | NX_VFS_OPEN_CREATE,
-                                     &f);
-    ASSERT_EQ_U(rc, NX_EINVAL);
+    uint32_t f = vfs_simple_vfs_ops.open(fx.vfs_state, "hello",
+                                          NX_VFS_OPEN_READ | NX_VFS_OPEN_CREATE);
+    ASSERT_EQ_U(f, 0);
     ASSERT_EQ_U(fx.fake_state.open_calls, 0);
     fixture_teardown(&fx);
 }
@@ -264,10 +257,8 @@ TEST(vfs_simple_null_path_returns_einval)
     struct fixture fx;
     fixture_setup(&fx);
 
-    void *f = NULL;
-    ASSERT_EQ_U(vfs_simple_vfs_ops.open(fx.vfs_state, NULL,
-                                        NX_VFS_OPEN_READ, &f),
-                NX_EINVAL);
+    uint32_t f = vfs_simple_vfs_ops.open(fx.vfs_state, NULL, NX_VFS_OPEN_READ);
+    ASSERT_EQ_U(f, 0);
     ASSERT_EQ_U(fx.fake_state.open_calls, 0);
     fixture_teardown(&fx);
 }
@@ -282,11 +273,9 @@ TEST(vfs_simple_without_mounted_fs_returns_enoent)
     ASSERT_NOT_NULL(vstate);
     ASSERT_EQ_U(vfs_simple_component_ops.init(vstate), NX_OK);
 
-    void *f = NULL;
-    ASSERT_EQ_U(vfs_simple_vfs_ops.open(vstate, "/x",
-                                        NX_VFS_OPEN_READ | NX_VFS_OPEN_CREATE,
-                                        &f),
-                NX_ENOENT);
+    uint32_t f = vfs_simple_vfs_ops.open(vstate, "/x",
+                                          NX_VFS_OPEN_READ | NX_VFS_OPEN_CREATE);
+    ASSERT_EQ_U(f, 0);
     vfs_simple_component_ops.destroy(vstate);
     free(vstate);
 }
@@ -299,11 +288,10 @@ TEST(vfs_simple_resolves_slot_fresh_on_each_call)
     struct fixture fx;
     fixture_setup(&fx);
 
-    void *f = NULL;
-    ASSERT_EQ_U(vfs_simple_vfs_ops.open(fx.vfs_state, "/a",
-                                        NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
-                                        NX_VFS_OPEN_CREATE, &f),
-                NX_OK);
+    uint32_t f = vfs_simple_vfs_ops.open(fx.vfs_state, "/a",
+                                          NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
+                                          NX_VFS_OPEN_CREATE);
+    ASSERT(f != 0);
     ASSERT_EQ_U((uint64_t)vfs_simple_vfs_ops.write(fx.vfs_state, f, "z", 1),
                 1);
 

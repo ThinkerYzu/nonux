@@ -54,39 +54,36 @@
 struct nx_vfs_ops {
     /*
      * Open `path` (absolute, rooted at `/`).  Resolves the mount and
-     * dispatches to the driver's `nx_fs_ops.open` with the path
-     * stripped of its mount prefix.  In v1 only `/` is mounted, so the
-     * path passes through unchanged.
+     * dispatches to the driver.  Returns the VFS-local open-ID
+     * (non-zero on success, 0 on failure).
      *
-     * Returns / errors: see `nx_fs_ops.open` — the VFS layer forwards
-     * the driver's status unchanged (NX_OK, NX_ENOENT, NX_EPERM,
-     * NX_ENOMEM, NX_EINVAL).  Additional VFS-specific status:
-     *   NX_ENOENT  — no filesystem mounted at the resolved mount point.
+     * Slice 9b.1: now returns a component-owned uint32_t id rather
+     * than an opaque pointer.  vfs_simple maintains its own open
+     * table; the id is 1-based (0 = failure).
      */
-    int (*open)(void *self, const char *path, uint32_t flags, void **out_file);
+    uint32_t (*open)(void *self, const char *path, uint32_t flags);
 
-    /* Release per-open state.  See `nx_fs_ops.close`. */
-    void (*close)(void *self, void *file);
-
-    /*
-     * Retain (bump refcount on) per-open state — slice 7.6d.N.8.
-     * See `nx_fs_ops.retain`.  Forwards to the active mount's
-     * driver.
-     */
-    void (*retain)(void *self, void *file);
+    /* Release per-open state at `id`.  See `nx_fs_ops.close`. */
+    void (*close)(void *self, uint32_t id);
 
     /*
-     * Read / write delegate to the driver's ops.  See `nx_fs_ops.read
-     * / .write` for the byte-count return convention.
+     * Retain (bump refcount on) per-open state at `id` — slice 7.6d.N.8.
+     * Forwards to the active mount's driver.
      */
-    int64_t (*read)(void *self, void *file, void *buf, size_t cap);
-    int64_t (*write)(void *self, void *file, const void *buf, size_t len);
+    void (*retain)(void *self, uint32_t id);
 
     /*
-     * Reposition a per-open cursor (slice 6.4).  See `nx_fs_ops.seek`
-     * for the contract; v1 VFS forwards unchanged.
+     * Read bytes from the open at `id`.  See `nx_fs_ops.read` for the
+     * byte-count return convention.
      */
-    int64_t (*seek)(void *self, void *file, int64_t offset, int whence);
+    int64_t (*read)(void *self, uint32_t id, void *buf, size_t cap);
+    int64_t (*write)(void *self, uint32_t id, const void *buf, size_t len);
+
+    /*
+     * Reposition the cursor for the open at `id` (slice 6.4).  See
+     * `nx_fs_ops.seek` for the contract; vfs_simple forwards unchanged.
+     */
+    int64_t (*seek)(void *self, uint32_t id, int64_t offset, int whence);
 
     /*
      * Enumerate the immediate children of `dir_path` (slice 7.7b.1).

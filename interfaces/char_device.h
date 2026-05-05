@@ -56,6 +56,19 @@ struct nx_char_device_ops {
     int64_t (*write)(void *self, const void *buf, size_t len);
 
     /*
+     * Read up to `cap` bytes from the device into `buf`.  Blocks until
+     * at least one byte is available (uart_pl011 yield-loops on the RX
+     * FIFO).  `id` is ignored for singleton devices; a future
+     * multi-device scenario uses `id` to select the instance.
+     *
+     * Returns:
+     *   >= 0       — bytes read.
+     *   NX_EINVAL  — NULL buf with cap > 0.
+     *   NX_EIO     — device-level failure.
+     */
+    int64_t (*read)(void *self, uint32_t id, void *buf, size_t cap);
+
+    /*
      * Deliver one received byte to the driver.  Called from ISR
      * context via the generated `nx_char_device_rx_byte_from_irq`
      * helper, which grabs a slot from a fixed-size pre-built message

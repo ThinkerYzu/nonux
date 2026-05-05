@@ -1,5 +1,5 @@
 /*
- * Slice 8.0c — VFS blocking-call wrappers.
+ * Slice 9b.1 — VFS blocking-call wrappers (ID-based API).
  *
  * Each wrapper packages its inputs into a kstack request struct,
  * issues `nx_slot_call_blocking` (kernel build), and unpacks the
@@ -7,20 +7,15 @@
  * bypassing the IPC round-trip so host unit tests keep working
  * without a real scheduler.
  *
+ * Slice 9b.1 changes: `open` returns uint32_t id (0 = failure);
+ * close/retain/read/write/seek take `uint32_t id` instead of `void *file`.
+ *
  * Generated wrapper declarations live in `framework/vfs_call.h`;
  * message / reply structs in `interfaces/vfs_msg.h`;
  * receiver dispatch shim in `framework/vfs_dispatch.h`.
- *
- * R8 note (kernel path): `slot->active` is read only by the
- * dispatcher thread (in `vfs_dispatch.h`), never here.  These
- * wrappers hand an opaque `struct nx_slot *` to
- * `nx_slot_call_blocking`, which enqueues to the dispatcher.
  */
 
 #include "framework/vfs_call.h"
-
-/* slot_call.h is already pulled in via vfs_call.h; include directly
- * here for clarity in the kernel path's nx_task_current() usage. */
 #include "framework/slot_call.h"
 #include "framework/component.h"
 #include "framework/ipc.h"
@@ -28,7 +23,7 @@
 
 #if !__STDC_HOSTED__
 #include "core/sched/task.h"
-#include "core/lib/lib.h"   /* memset / memcpy */
+#include "core/lib/lib.h"
 #else
 #include <string.h>
 #endif
@@ -42,7 +37,6 @@
 
 #if __STDC_HOSTED__
 
-/* Resolve the ops table from slot, or return err_val. */
 #define HOST_RESOLVE(slot, ops_var, err_val)                           \
     if (!(slot) || !(slot)->active || !(slot)->active->descriptor ||   \
         !(slot)->active->descriptor->iface_ops)                        \
@@ -50,7 +44,6 @@
     const struct nx_vfs_ops *(ops_var) =                               \
         (const struct nx_vfs_ops *)(slot)->active->descriptor->iface_ops
 
-/* Same, but for void-return wrappers (no return value). */
 #define HOST_RESOLVE_VOID(slot, ops_var)                               \
     if (!(slot) || !(slot)->active || !(slot)->active->descriptor ||   \
         !(slot)->active->descriptor->iface_ops)                        \
@@ -92,16 +85,15 @@ static void copy_path(char *dst, size_t dst_cap, const char *src)
 
 /* --- nx_vfs_open ------------------------------------------------------ */
 
-int nx_vfs_open(struct nx_slot *slot, const char *path, uint32_t flags,
-                void **out_file)
+uint32_t nx_vfs_open(struct nx_slot *slot, const char *path, uint32_t flags)
 {
 #if __STDC_HOSTED__
-    HOST_RESOLVE(slot, ops, NX_ENOENT);
-    if (!ops->open) return NX_ENOENT;
-    return ops->open(slot->active->impl, path, flags, out_file);
+    HOST_RESOLVE(slot, ops, 0);
+    if (!ops->open) return 0;
+    return ops->open(slot->active->impl, path, flags);
 #else
     struct nx_task *task = nx_task_current();
-    if (!task) return NX_EINVAL;
+    if (!task) return 0;
 
     struct nx_vfs_msg_open req;
     memset(&req, 0, sizeof req);
@@ -113,27 +105,26 @@ int nx_vfs_open(struct nx_slot *slot, const char *path, uint32_t flags,
 
     KERNEL_INIT_MSG(msg, task, slot, NX_VFS_OP_OPEN, req);
     int rc = nx_slot_call_blocking(slot, &msg, &reply, sizeof reply);
-    if (rc != NX_OK) return rc;
-    if (out_file) *out_file = (void *)(uintptr_t)reply.out_file;
+    if (rc != NX_OK) return 0;
     return reply.rc;
 #endif
 }
 
 /* --- nx_vfs_close ----------------------------------------------------- */
 
-void nx_vfs_close(struct nx_slot *slot, void *file)
+void nx_vfs_close(struct nx_slot *slot, uint32_t id)
 {
 #if __STDC_HOSTED__
     HOST_RESOLVE_VOID(slot, ops);
     if (!ops->close) return;
-    ops->close(slot->active->impl, file);
+    ops->close(slot->active->impl, id);
 #else
     struct nx_task *task = nx_task_current();
     if (!task) return;
 
     struct nx_vfs_msg_close req;
     memset(&req, 0, sizeof req);
-    req.file = (uint64_t)(uintptr_t)file;
+    req.id = id;
 
     struct nx_vfs_reply_close reply;
     memset(&reply, 0, sizeof reply);
@@ -145,19 +136,19 @@ void nx_vfs_close(struct nx_slot *slot, void *file)
 
 /* --- nx_vfs_retain ---------------------------------------------------- */
 
-void nx_vfs_retain(struct nx_slot *slot, void *file)
+void nx_vfs_retain(struct nx_slot *slot, uint32_t id)
 {
 #if __STDC_HOSTED__
     HOST_RESOLVE_VOID(slot, ops);
     if (!ops->retain) return;
-    ops->retain(slot->active->impl, file);
+    ops->retain(slot->active->impl, id);
 #else
     struct nx_task *task = nx_task_current();
     if (!task) return;
 
     struct nx_vfs_msg_retain req;
     memset(&req, 0, sizeof req);
-    req.file = (uint64_t)(uintptr_t)file;
+    req.id = id;
 
     struct nx_vfs_reply_retain reply;
     memset(&reply, 0, sizeof reply);
@@ -169,21 +160,21 @@ void nx_vfs_retain(struct nx_slot *slot, void *file)
 
 /* --- nx_vfs_read ------------------------------------------------------ */
 
-int64_t nx_vfs_read(struct nx_slot *slot, void *file, void *buf, size_t cap)
+int64_t nx_vfs_read(struct nx_slot *slot, uint32_t id, void *buf, size_t cap)
 {
 #if __STDC_HOSTED__
     HOST_RESOLVE(slot, ops, (int64_t)NX_ENOENT);
     if (!ops->read) return NX_ENOENT;
-    return ops->read(slot->active->impl, file, buf, cap);
+    return ops->read(slot->active->impl, id, buf, cap);
 #else
     struct nx_task *task = nx_task_current();
     if (!task) return NX_EINVAL;
 
     struct nx_vfs_msg_read req;
     memset(&req, 0, sizeof req);
-    req.file = (uint64_t)(uintptr_t)file;
-    req.buf  = (uint64_t)(uintptr_t)buf;
-    req.cap  = cap;
+    req.id  = id;
+    req.buf = (uint64_t)(uintptr_t)buf;
+    req.cap = cap;
 
     struct nx_vfs_reply_read reply;
     memset(&reply, 0, sizeof reply);
@@ -197,22 +188,22 @@ int64_t nx_vfs_read(struct nx_slot *slot, void *file, void *buf, size_t cap)
 
 /* --- nx_vfs_write ----------------------------------------------------- */
 
-int64_t nx_vfs_write(struct nx_slot *slot, void *file, const void *buf,
+int64_t nx_vfs_write(struct nx_slot *slot, uint32_t id, const void *buf,
                      size_t len)
 {
 #if __STDC_HOSTED__
     HOST_RESOLVE(slot, ops, (int64_t)NX_ENOENT);
     if (!ops->write) return NX_ENOENT;
-    return ops->write(slot->active->impl, file, buf, len);
+    return ops->write(slot->active->impl, id, buf, len);
 #else
     struct nx_task *task = nx_task_current();
     if (!task) return NX_EINVAL;
 
     struct nx_vfs_msg_write req;
     memset(&req, 0, sizeof req);
-    req.file = (uint64_t)(uintptr_t)file;
-    req.buf  = (uint64_t)(uintptr_t)buf;
-    req.len  = len;
+    req.id  = id;
+    req.buf = (uint64_t)(uintptr_t)buf;
+    req.len = len;
 
     struct nx_vfs_reply_write reply;
     memset(&reply, 0, sizeof reply);
@@ -226,20 +217,20 @@ int64_t nx_vfs_write(struct nx_slot *slot, void *file, const void *buf,
 
 /* --- nx_vfs_seek ------------------------------------------------------ */
 
-int64_t nx_vfs_seek(struct nx_slot *slot, void *file, int64_t offset,
+int64_t nx_vfs_seek(struct nx_slot *slot, uint32_t id, int64_t offset,
                     int whence)
 {
 #if __STDC_HOSTED__
     HOST_RESOLVE(slot, ops, (int64_t)NX_ENOENT);
     if (!ops->seek) return NX_ENOENT;
-    return ops->seek(slot->active->impl, file, offset, whence);
+    return ops->seek(slot->active->impl, id, offset, whence);
 #else
     struct nx_task *task = nx_task_current();
     if (!task) return NX_EINVAL;
 
     struct nx_vfs_msg_seek req;
     memset(&req, 0, sizeof req);
-    req.file   = (uint64_t)(uintptr_t)file;
+    req.id     = id;
     req.offset = offset;
     req.whence = whence;
 

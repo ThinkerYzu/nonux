@@ -59,17 +59,21 @@ struct fake8c_state {
     int last_mkdir_rc;
 };
 
-static int f8c_open(void *self, const char *path, uint32_t flags,
-                    void **out)
+static struct fake8c_file *f8c_id_to_file(struct fake8c_state *s, uint32_t id)
+{
+    if (!id || id > 4) return NULL;
+    return &s->files[id - 1];
+}
+
+static uint32_t f8c_open(void *self, const char *path, uint32_t flags)
 {
     struct fake8c_state *s = self;
-    if (!path || path[0] != '/') return NX_EINVAL;
+    if (!path || path[0] != '/') return 0;
     for (int i = 0; i < 4; i++) {
         if (!s->files[i].in_use) continue;
         if (strcmp(s->files[i].name, path) == 0) {
             s->files[i].cursor = 0;
-            *out = &s->files[i];
-            return NX_OK;
+            return (uint32_t)(i + 1);
         }
     }
     if (flags & NX_FS_OPEN_CREATE) {
@@ -81,32 +85,31 @@ static int f8c_open(void *self, const char *path, uint32_t flags,
             s->files[i].cursor = 0;
             s->files[i].retain_count = 1;
             s->files[i].close_calls  = 0;
-            *out = &s->files[i];
-            return NX_OK;
+            return (uint32_t)(i + 1);
         }
-        return NX_ENOMEM;
+        return 0;
     }
-    return NX_ENOENT;
+    return 0;
 }
 
-static void f8c_close(void *self, void *file)
+static void f8c_close(void *self, uint32_t id)
 {
-    (void)self;
-    struct fake8c_file *f = file;
+    struct fake8c_state *s = self;
+    struct fake8c_file *f = f8c_id_to_file(s, id);
     if (f) f->close_calls++;
 }
 
-static void f8c_retain(void *self, void *file)
+static void f8c_retain(void *self, uint32_t id)
 {
-    (void)self;
-    struct fake8c_file *f = file;
+    struct fake8c_state *s = self;
+    struct fake8c_file *f = f8c_id_to_file(s, id);
     if (f) f->retain_count++;
 }
 
-static int64_t f8c_read(void *self, void *file, void *buf, size_t cap)
+static int64_t f8c_read(void *self, uint32_t id, void *buf, size_t cap)
 {
-    (void)self;
-    struct fake8c_file *f = file;
+    struct fake8c_state *s = self;
+    struct fake8c_file *f = f8c_id_to_file(s, id);
     if (!f || !buf) return NX_EINVAL;
     size_t avail = f->size > f->cursor ? f->size - f->cursor : 0;
     size_t n = avail < cap ? avail : cap;
@@ -115,10 +118,10 @@ static int64_t f8c_read(void *self, void *file, void *buf, size_t cap)
     return (int64_t)n;
 }
 
-static int64_t f8c_write(void *self, void *file, const void *buf, size_t len)
+static int64_t f8c_write(void *self, uint32_t id, const void *buf, size_t len)
 {
-    (void)self;
-    struct fake8c_file *f = file;
+    struct fake8c_state *s = self;
+    struct fake8c_file *f = f8c_id_to_file(s, id);
     if (!f || !buf) return NX_EINVAL;
     size_t end = f->cursor + len;
     if (end > sizeof f->data) return NX_ENOMEM;
@@ -128,10 +131,10 @@ static int64_t f8c_write(void *self, void *file, const void *buf, size_t len)
     return (int64_t)len;
 }
 
-static int64_t f8c_seek(void *self, void *file, int64_t offset, int whence)
+static int64_t f8c_seek(void *self, uint32_t id, int64_t offset, int whence)
 {
-    (void)self;
-    struct fake8c_file *f = file;
+    struct fake8c_state *s = self;
+    struct fake8c_file *f = f8c_id_to_file(s, id);
     if (!f) return NX_EINVAL;
     int64_t new_pos;
     if (whence == NX_FS_SEEK_SET)      new_pos = offset;
@@ -289,10 +292,8 @@ TEST(wrapper_open_existing_file_returns_ok)
     fix8c_setup(&fx);
     plant_file(&fx, "/a.txt", FAKE_DATA);
 
-    void *file = NULL;
-    int rc = nx_vfs_open(&fx.vfs_slot, "/a.txt", NX_VFS_OPEN_READ, &file);
-    ASSERT_EQ_U(rc, NX_OK);
-    ASSERT_NOT_NULL(file);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/a.txt", NX_VFS_OPEN_READ);
+    ASSERT(file != 0);
 
     nx_vfs_close(&fx.vfs_slot, file);
     fix8c_teardown(&fx);
@@ -303,9 +304,8 @@ TEST(wrapper_open_missing_file_returns_enoent)
     struct fix8c fx;
     fix8c_setup(&fx);
 
-    void *file = NULL;
-    int rc = nx_vfs_open(&fx.vfs_slot, "/nope.txt", NX_VFS_OPEN_READ, &file);
-    ASSERT_EQ_U(rc, NX_ENOENT);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/nope.txt", NX_VFS_OPEN_READ);
+    ASSERT_EQ_U(file, 0);
 
     fix8c_teardown(&fx);
 }
@@ -317,18 +317,14 @@ TEST(wrapper_open_equiv_direct_open)
     plant_file(&fx, "/b.txt", FAKE_DATA);
 
     /* Direct path. */
-    void *direct_file = NULL;
-    int direct_rc = f8c_open(&fx.fake_state, "/b.txt", NX_VFS_OPEN_READ,
-                              &direct_file);
+    uint32_t direct_file = f8c_open(&fx.fake_state, "/b.txt", NX_VFS_OPEN_READ);
 
     /* Wrapper path (resets cursor via vfs_simple which calls fake ops). */
     fx.fake_state.files[0].cursor = 0;
-    void *wrap_file = NULL;
-    int wrap_rc = nx_vfs_open(&fx.vfs_slot, "/b.txt", NX_VFS_OPEN_READ,
-                               &wrap_file);
+    uint32_t wrap_file = nx_vfs_open(&fx.vfs_slot, "/b.txt", NX_VFS_OPEN_READ);
 
-    ASSERT_EQ_U(direct_rc, wrap_rc);
-    ASSERT((direct_file != NULL) == (wrap_file != NULL));
+    ASSERT(direct_file != 0);
+    ASSERT((direct_file != 0) == (wrap_file != 0));
 
     nx_vfs_close(&fx.vfs_slot, wrap_file);
     fix8c_teardown(&fx);
@@ -340,9 +336,8 @@ TEST(wrapper_close_increments_close_calls)
     fix8c_setup(&fx);
     struct fake8c_file *fnode = plant_file(&fx, "/c.txt", FAKE_DATA);
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/c.txt", NX_VFS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/c.txt", NX_VFS_OPEN_READ);
+    ASSERT(file != 0);
     int before = fnode->close_calls;
     nx_vfs_close(&fx.vfs_slot, file);
     ASSERT_EQ_U(fnode->close_calls, before + 1);
@@ -360,9 +355,8 @@ TEST(wrapper_read_returns_correct_bytes)
     fix8c_setup(&fx);
     plant_file(&fx, "/r.txt", FAKE_DATA);
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/r.txt", NX_VFS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/r.txt", NX_VFS_OPEN_READ);
+    ASSERT(file != 0);
 
     char buf[32];
     int64_t got = nx_vfs_read(&fx.vfs_slot, file, buf, sizeof buf);
@@ -379,9 +373,8 @@ TEST(wrapper_read_equiv_direct_read)
     fix8c_setup(&fx);
     plant_file(&fx, "/rd.txt", "abc");
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/rd.txt", NX_VFS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/rd.txt", NX_VFS_OPEN_READ);
+    ASSERT(file != 0);
 
     /* First read. */
     char buf1[8];
@@ -409,9 +402,8 @@ TEST(wrapper_write_stores_data)
     fix8c_setup(&fx);
     plant_file(&fx, "/w.txt", "");
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/w.txt", NX_VFS_OPEN_WRITE, &file),
-                NX_OK);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/w.txt", NX_VFS_OPEN_WRITE);
+    ASSERT(file != 0);
 
     int64_t wrote = nx_vfs_write(&fx.vfs_slot, file, "xyz", 3);
     ASSERT_EQ_U(wrote, 3);
@@ -433,11 +425,10 @@ TEST(wrapper_write_equiv_direct_write)
     fix8c_setup(&fx);
     plant_file(&fx, "/wd.txt", "");
 
-    void *file1 = NULL, *file2 = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/wd.txt",
-                             NX_VFS_OPEN_WRITE, &file1), NX_OK);
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/wd.txt",
-                             NX_VFS_OPEN_WRITE, &file2), NX_OK);
+    uint32_t file1 = nx_vfs_open(&fx.vfs_slot, "/wd.txt", NX_VFS_OPEN_WRITE);
+    ASSERT(file1 != 0);
+    uint32_t file2 = nx_vfs_open(&fx.vfs_slot, "/wd.txt", NX_VFS_OPEN_WRITE);
+    ASSERT(file2 != 0);
 
     int64_t rc1 = nx_vfs_write(&fx.vfs_slot, file1, "hi", 2);
     int64_t rc2 = nx_vfs_write(&fx.vfs_slot, file2, "hi", 2);
@@ -458,9 +449,8 @@ TEST(wrapper_seek_moves_cursor)
     fix8c_setup(&fx);
     plant_file(&fx, "/s.txt", "0123456789");
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/s.txt", NX_VFS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/s.txt", NX_VFS_OPEN_READ);
+    ASSERT(file != 0);
 
     int64_t new_pos = nx_vfs_seek(&fx.vfs_slot, file, 5, NX_VFS_SEEK_SET);
     ASSERT_EQ_U(new_pos, 5);
@@ -475,11 +465,10 @@ TEST(wrapper_seek_equiv_direct_seek)
     fix8c_setup(&fx);
     plant_file(&fx, "/sd.txt", "abcdef");
 
-    void *file1 = NULL, *file2 = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/sd.txt", NX_VFS_OPEN_READ, &file1),
-                NX_OK);
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/sd.txt", NX_VFS_OPEN_READ, &file2),
-                NX_OK);
+    uint32_t file1 = nx_vfs_open(&fx.vfs_slot, "/sd.txt", NX_VFS_OPEN_READ);
+    ASSERT(file1 != 0);
+    uint32_t file2 = nx_vfs_open(&fx.vfs_slot, "/sd.txt", NX_VFS_OPEN_READ);
+    ASSERT(file2 != 0);
 
     int64_t rc1 = nx_vfs_seek(&fx.vfs_slot, file1, 3, NX_VFS_SEEK_SET);
     int64_t rc2 = nx_vfs_seek(&fx.vfs_slot, file2, 3, NX_VFS_SEEK_SET);
@@ -631,9 +620,8 @@ TEST(wrapper_retain_bumps_refcount)
     struct fake8c_file *fnode = plant_file(&fx, "/ret.txt", FAKE_DATA);
 
     /* Open via vfs_simple so we get a proper wrapper handle. */
-    void *file = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/ret.txt", NX_VFS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_vfs_open(&fx.vfs_slot, "/ret.txt", NX_VFS_OPEN_READ);
+    ASSERT(file != 0);
 
     int before = fnode->retain_count;
     nx_vfs_retain(&fx.vfs_slot, file);
@@ -649,11 +637,10 @@ TEST(wrapper_retain_equiv_direct_retain)
     fix8c_setup(&fx);
     struct fake8c_file *fnode = plant_file(&fx, "/retq.txt", FAKE_DATA);
 
-    void *file1 = NULL, *file2 = NULL;
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/retq.txt", NX_VFS_OPEN_READ, &file1),
-                NX_OK);
-    ASSERT_EQ_U(nx_vfs_open(&fx.vfs_slot, "/retq.txt", NX_VFS_OPEN_READ, &file2),
-                NX_OK);
+    uint32_t file1 = nx_vfs_open(&fx.vfs_slot, "/retq.txt", NX_VFS_OPEN_READ);
+    ASSERT(file1 != 0);
+    uint32_t file2 = nx_vfs_open(&fx.vfs_slot, "/retq.txt", NX_VFS_OPEN_READ);
+    ASSERT(file2 != 0);
 
     int before = fnode->retain_count;
     nx_vfs_retain(&fx.vfs_slot, file1);
@@ -676,15 +663,14 @@ TEST(wrapper_retain_equiv_direct_retain)
 
 TEST(wrapper_open_null_slot_returns_enoent)
 {
-    void *file = NULL;
-    int rc = nx_vfs_open(NULL, "/x.txt", NX_VFS_OPEN_READ, &file);
-    ASSERT_EQ_U(rc, NX_ENOENT);
+    uint32_t file = nx_vfs_open(NULL, "/x.txt", NX_VFS_OPEN_READ);
+    ASSERT_EQ_U(file, 0);
 }
 
 TEST(wrapper_read_null_slot_returns_error)
 {
     char buf[8];
-    int64_t rc = nx_vfs_read(NULL, (void *)1, buf, sizeof buf);
+    int64_t rc = nx_vfs_read(NULL, (uint32_t)1, buf, sizeof buf);
     ASSERT(rc < 0);
 }
 

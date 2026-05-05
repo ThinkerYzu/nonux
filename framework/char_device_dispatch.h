@@ -41,6 +41,21 @@ static inline int nx_char_device_dispatch(
         msg->reply_payload_len = (uint32_t)sizeof *_r;
         return _rc;
     }
+    case NX_CHAR_DEVICE_OP_READ: {
+        struct nx_char_device_msg_read *_req =
+            (struct nx_char_device_msg_read *)msg->payload;
+        uint32_t _id = _req->id;
+        void *_buf = (void *)(uintptr_t)_req->buf;
+        size_t _cap = _req->cap;
+        int64_t _rc64 = ops->read(self, _id, _buf, _cap);
+        int _rc = (int)_rc64;
+        struct nx_char_device_reply_read *_r =
+            (struct nx_char_device_reply_read *)msg->payload;
+        _r->rc = _rc64;
+        _r->bytes_actual = _rc64 > 0 ? (size_t)_rc64 : 0;
+        msg->reply_payload_len = (uint32_t)sizeof *_r;
+        return _rc;
+    }
     case NX_CHAR_DEVICE_OP_RX_BYTE: {
         struct nx_char_device_msg_rx_byte *_req =
             (struct nx_char_device_msg_rx_byte *)msg->payload;

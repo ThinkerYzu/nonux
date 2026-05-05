@@ -29,35 +29,33 @@ enum nx_vfs_op_id {
 struct nx_vfs_msg_open {
     char path[128];
     uint32_t flags;
-    uint64_t out_file;
 };
 
 struct nx_vfs_reply_open {
-    int rc;
-    uint64_t out_file;
+    uint32_t rc;
 };
 
-/* Request: nx_vfs_close() — Release per-open state.  See `nx_fs_ops.close`. */
+/* Request: nx_vfs_close() — Release per-open state at `id`.  See `nx_fs_ops.close`. */
 struct nx_vfs_msg_close {
-    uint64_t file;
+    uint32_t id;
 };
 
 struct nx_vfs_reply_close {
     int rc; /* always NX_OK; placeholder for void ops */
 };
 
-/* Request: nx_vfs_retain() — Retain (bump refcount on) per-open state — slice 7.6d.N.8. */
+/* Request: nx_vfs_retain() — Retain (bump refcount on) per-open state at `id` — slice 7.6d.N.8. */
 struct nx_vfs_msg_retain {
-    uint64_t file;
+    uint32_t id;
 };
 
 struct nx_vfs_reply_retain {
     int rc; /* always NX_OK; placeholder for void ops */
 };
 
-/* Request: nx_vfs_read() — Read / write delegate to the driver's ops.  See `nx_fs_ops.read */
+/* Request: nx_vfs_read() — Read bytes from the open at `id`.  See `nx_fs_ops.read` for the */
 struct nx_vfs_msg_read {
-    uint64_t file;
+    uint32_t id;
     uint64_t buf; /* void * encoded as u64 */
     size_t cap;
 };
@@ -68,7 +66,7 @@ struct nx_vfs_reply_read {
 };
 
 struct nx_vfs_msg_write {
-    uint64_t file;
+    uint32_t id;
     uint64_t buf; /* const void * encoded as u64 */
     size_t len;
 };
@@ -78,9 +76,9 @@ struct nx_vfs_reply_write {
     size_t bytes_actual;
 };
 
-/* Request: nx_vfs_seek() — Reposition a per-open cursor (slice 6.4).  See `nx_fs_ops.seek` */
+/* Request: nx_vfs_seek() — Reposition the cursor for the open at `id` (slice 6.4).  See */
 struct nx_vfs_msg_seek {
-    uint64_t file;
+    uint32_t id;
     int64_t offset;
     int whence;
 };

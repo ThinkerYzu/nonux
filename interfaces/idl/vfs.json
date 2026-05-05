@@ -22,38 +22,37 @@
     {
       "name": "open",
       "op_id": 1,
-      "doc": "Open `path` (absolute, rooted at `/`).  Resolves the mount and\ndispatches to the driver's `nx_fs_ops.open` with the path\nstripped of its mount prefix.  In v1 only `/` is mounted, so the\npath passes through unchanged.\n\nReturns / errors: see `nx_fs_ops.open` — the VFS layer forwards\nthe driver's status unchanged (NX_OK, NX_ENOENT, NX_EPERM,\nNX_ENOMEM, NX_EINVAL).  Additional VFS-specific status:\n  NX_ENOENT  — no filesystem mounted at the resolved mount point.",
+      "doc": "Open `path` (absolute, rooted at `/`).  Resolves the mount and\ndispatches to the driver.  Returns the VFS-local open-ID\n(non-zero on success, 0 on failure).\n\nSlice 9b.1: now returns a component-owned uint32_t id rather\nthan an opaque pointer.  vfs_simple maintains its own open\ntable; the id is 1-based (0 = failure).",
       "params": [
         { "name": "path", "type": "string_in" },
-        { "name": "flags", "type": "u32" },
-        { "name": "out_file", "type": "opaque_self_handle", "direction": "out" }
+        { "name": "flags", "type": "u32" }
       ],
-      "returns": { "type": "int_status", "out_param": "out_file" }
+      "returns": { "type": "u32" }
     },
     {
       "name": "close",
       "op_id": 2,
-      "doc": "Release per-open state.  See `nx_fs_ops.close`.",
+      "doc": "Release per-open state at `id`.  See `nx_fs_ops.close`.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" }
+        { "name": "id", "type": "u32" }
       ],
       "returns": { "type": "void" }
     },
     {
       "name": "retain",
       "op_id": 3,
-      "doc": "Retain (bump refcount on) per-open state — slice 7.6d.N.8.\nSee `nx_fs_ops.retain`.  Forwards to the active mount's\ndriver.",
+      "doc": "Retain (bump refcount on) per-open state at `id` — slice 7.6d.N.8.\nForwards to the active mount's driver.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" }
+        { "name": "id", "type": "u32" }
       ],
       "returns": { "type": "void" }
     },
     {
       "name": "read",
       "op_id": 4,
-      "doc": "Read / write delegate to the driver's ops.  See `nx_fs_ops.read\n/ .write` for the byte-count return convention.",
+      "doc": "Read bytes from the open at `id`.  See `nx_fs_ops.read` for the\nbyte-count return convention.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "id", "type": "u32" },
         { "name": "buf", "type": "bytes_out", "cap": "cap", "direction": "out" },
         { "name": "cap", "type": "usize" }
       ],
@@ -63,7 +62,7 @@
       "name": "write",
       "op_id": 5,
       "params": [
-        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "id", "type": "u32" },
         { "name": "buf", "type": "bytes_in", "len": "len" },
         { "name": "len", "type": "usize" }
       ],
@@ -72,9 +71,9 @@
     {
       "name": "seek",
       "op_id": 6,
-      "doc": "Reposition a per-open cursor (slice 6.4).  See `nx_fs_ops.seek`\nfor the contract; v1 VFS forwards unchanged.",
+      "doc": "Reposition the cursor for the open at `id` (slice 6.4).  See\n`nx_fs_ops.seek` for the contract; vfs_simple forwards unchanged.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "id", "type": "u32" },
         { "name": "offset", "type": "i64" },
         { "name": "whence", "type": "i32" }
       ],

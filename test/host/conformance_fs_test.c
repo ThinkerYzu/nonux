@@ -38,13 +38,17 @@ struct stub_file {
 };
 
 struct stub_open {
+    int               in_use;
     struct stub_file *file;
     uint32_t          flags;
     size_t            cursor;
 };
 
+#define STUB_MAX_OPEN 16
+
 struct fs_stub {
     struct stub_file files[STUB_MAX_FILES];
+    struct stub_open opens[STUB_MAX_OPEN];
 };
 
 static struct stub_file *stub_find(struct fs_stub *s, const char *path)
@@ -72,47 +76,61 @@ static struct stub_file *stub_create(struct fs_stub *s, const char *path)
     return NULL;
 }
 
-static int stub_open_op(void *self, const char *path, uint32_t flags,
-                        void **out_file)
+/* Slice 9b.1: ID-based open table helpers. */
+static struct stub_open *stub_id_to_open(struct fs_stub *s, uint32_t id)
+{
+    if (id == 0 || id > STUB_MAX_OPEN) return NULL;
+    struct stub_open *op = &s->opens[id - 1];
+    return op->in_use ? op : NULL;
+}
+
+static uint32_t stub_open_op(void *self, const char *path, uint32_t flags)
 {
     const uint32_t known = NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
                            NX_FS_OPEN_CREATE;
-    if (!self || !path || !out_file) return NX_EINVAL;
-    if (path[0] == '\0') return NX_EINVAL;
-    if (flags & ~known) return NX_EINVAL;
+    if (!self || !path) return 0;
+    if (path[0] == '\0') return 0;
+    if (flags & ~known) return 0;
 
     struct fs_stub *s = self;
     struct stub_file *file = stub_find(s, path);
     if (!file) {
-        if (!(flags & NX_FS_OPEN_CREATE)) return NX_ENOENT;
+        if (!(flags & NX_FS_OPEN_CREATE)) return 0;
         file = stub_create(s, path);
-        if (!file) return NX_ENOMEM;
+        if (!file) return 0;
     }
 
-    struct stub_open *op = calloc(1, sizeof *op);
-    if (!op) return NX_ENOMEM;
-    op->file   = file;
-    op->flags  = flags;
-    op->cursor = 0;
-    *out_file = op;
-    return NX_OK;
+    for (unsigned i = 0; i < STUB_MAX_OPEN; i++) {
+        if (!s->opens[i].in_use) {
+            s->opens[i].in_use = 1;
+            s->opens[i].file   = file;
+            s->opens[i].flags  = flags;
+            s->opens[i].cursor = 0;
+            return (uint32_t)(i + 1);
+        }
+    }
+    return 0;
 }
 
-static void stub_close_op(void *self, void *file)
+static void stub_close_op(void *self, uint32_t id)
 {
-    (void)self;
-    if (!file) return;
-    free(file);
+    if (!self || id == 0) return;
+    struct fs_stub *s = self;
+    struct stub_open *op = stub_id_to_open(s, id);
+    if (!op) return;
+    op->in_use = 0;
+    op->file   = NULL;
 }
 
-static int64_t stub_read_op(void *self, void *file, void *buf, size_t cap)
+static int64_t stub_read_op(void *self, uint32_t id, void *buf, size_t cap)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
+    if (!self) return NX_EINVAL;
     if (cap == 0) return 0;
     if (!buf) return NX_EINVAL;
 
-    struct stub_open *op = file;
+    struct fs_stub *s = self;
+    struct stub_open *op = stub_id_to_open(s, id);
+    if (!op) return NX_EINVAL;
     if (!(op->flags & NX_FS_OPEN_READ)) return NX_EPERM;
 
     size_t remain = (op->cursor < op->file->size)
@@ -123,14 +141,15 @@ static int64_t stub_read_op(void *self, void *file, void *buf, size_t cap)
     return (int64_t)n;
 }
 
-static int64_t stub_write_op(void *self, void *file, const void *buf, size_t len)
+static int64_t stub_write_op(void *self, uint32_t id, const void *buf, size_t len)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
+    if (!self) return NX_EINVAL;
     if (len == 0) return 0;
     if (!buf) return NX_EINVAL;
 
-    struct stub_open *op = file;
+    struct fs_stub *s = self;
+    struct stub_open *op = stub_id_to_open(s, id);
+    if (!op) return NX_EINVAL;
     if (!(op->flags & NX_FS_OPEN_WRITE)) return NX_EPERM;
 
     size_t room = (op->cursor < STUB_FILE_CAP)
@@ -143,11 +162,12 @@ static int64_t stub_write_op(void *self, void *file, const void *buf, size_t len
     return (int64_t)n;
 }
 
-static int64_t stub_seek_op(void *self, void *file, int64_t offset, int whence)
+static int64_t stub_seek_op(void *self, uint32_t id, int64_t offset, int whence)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
-    struct stub_open *op = file;
+    if (!self) return NX_EINVAL;
+    struct fs_stub *s = self;
+    struct stub_open *op = stub_id_to_open(s, id);
+    if (!op) return NX_EINVAL;
 
     int64_t new_pos;
     switch (whence) {
@@ -331,9 +351,9 @@ TEST(fs_stub_internal_unknown_flag_bit_rejected)
 {
     void *self = fs_stub_create();
     ASSERT_NOT_NULL(self);
-    void *f = NULL;
-    /* Bit 31 is outside the known READ/WRITE/CREATE set. */
-    ASSERT_EQ_U(fs_stub_ops.open(self, "/a", (1U << 31), &f), NX_EINVAL);
+    /* Bit 31 is outside the known READ/WRITE/CREATE set — open returns 0. */
+    uint32_t f = fs_stub_ops.open(self, "/a", (1U << 31));
+    ASSERT_EQ_U(f, 0);
     fs_stub_destroy(self);
 }
 
@@ -342,10 +362,9 @@ TEST(fs_stub_internal_write_fills_capacity_then_enomem)
     void *self = fs_stub_create();
     ASSERT_NOT_NULL(self);
 
-    void *f = NULL;
-    ASSERT_EQ_U(fs_stub_ops.open(self, "/big",
-                                 NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE, &f),
-                NX_OK);
+    uint32_t f = fs_stub_ops.open(self, "/big",
+                                  NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE);
+    ASSERT(f != 0);
 
     /* Fill to capacity. */
     static uint8_t junk[STUB_FILE_CAP];

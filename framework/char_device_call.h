@@ -18,6 +18,8 @@
 
 int64_t nx_char_device_write(struct nx_slot *slot, const void *buf,
                              size_t len);
+int64_t nx_char_device_read(struct nx_slot *slot, uint32_t id, void *buf,
+                            size_t cap);
 void nx_char_device_rx_byte(struct nx_slot *slot, uint8_t byte);
 
 #endif /* NONUX_FRAMEWORK_CHAR_DEVICE_CALL_H */

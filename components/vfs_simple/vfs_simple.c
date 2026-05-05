@@ -49,42 +49,19 @@
 #endif
 
 /*
- * Slice 7.7b.2 — per-open wrapper.
+ * Slice 9b.1 — per-open ID table.
  *
- * vfs_simple now serves multiple mounts (root + procfs).  The opaque
- * `void *file` we hand back from open() can't simply be the driver's
- * per-open pointer any more, because subsequent close/read/write/seek/
- * retain calls only have that pointer to work with — they wouldn't
- * know which mount's op table to dispatch into.  So we wrap the
- * driver per-open in a small `vfs_simple_open` that remembers the
- * mount slot name alongside the per-open, and hand the wrapper out
- * to callers.
+ * vfs_simple maintains its own internal open table (slice 9b.1).  The
+ * `void *file` pointer API is replaced by a uint32_t open-ID returned
+ * to callers.  vfs_simple maps ID → {mount_slot_name, driver_id} and
+ * on each op re-resolves the slot by name (preserving the slot-as-
+ * late-binding primitive: see DESIGN §Slot-Based Indirection).
  *
- * The mount is recorded by *slot name* (a string-literal pointer like
- * "filesystem.root") rather than by cached ops/self pointers.  This
- * preserves the slot-as-late-binding-primitive property
- * (DESIGN §Slot-Based Indirection): every op re-resolves the slot
- * via `nx_slot_lookup`, so an `nx_slot_swap(slot, NULL)` mid-run
- * causes subsequent reads to fail cleanly with NX_ENOENT (proven by
- * the slice-3.x slot_swap_clears_handle test).  Caching the ops
- * pointer would break that — exactly what slice 7.7b.2's first
- * iteration tripped on.
+ * Slice 7.7b.2 per-open multi-mount support is preserved: the mount
+ * slot name is still recorded alongside the driver ID.
  *
- * Refcount discipline.  Wrapper.refs and driver per-open refs move in
- * lockstep so a wrapper is freed exactly when its driver per-open is.
- * `open` returns refs=1 on both sides.  `retain` calls driver retain
- * (must be non-NULL — every filesystem driver bound under vfs_simple
- * implements it as of slice 7.7b.2) and bumps wrapper.refs.  `close`
- * always calls driver close (which decrements driver refs and frees
- * its slot at zero) and decrements wrapper.refs; the wrapper is
- * returned to the pool when refs reaches zero.  Callers MUST pair
- * every successful open / retain with exactly one close.
- *
- * Pool sized for v1's ramfs RAMFS_MAX_OPEN (= 96) plus headroom for
- * procfs's PROCFS_MAX_OPEN (= 8) plus retain duplicates.  108 is
- * comfortably above RAMFS_MAX_OPEN so a worst-case all-files-open mix
- * doesn't trip ENOMEM at the wrapper layer.  Static .bss cost is
- * trivial (~3.5 KB).
+ * IDs are 1-based (0 = invalid/error).  The pool size matches the
+ * previous wrapper pool.
  */
 #define VFS_SIMPLE_MAX_OPEN  108u
 
@@ -92,7 +69,7 @@ struct vfs_simple_open {
     int          in_use;
     int          refs;
     const char  *mount;       /* slot name; string literal, never freed */
-    void        *driver_file;
+    uint32_t     driver_id;   /* ID returned by the underlying fs driver */
 };
 
 static struct vfs_simple_open g_vfs_simple_opens[VFS_SIMPLE_MAX_OPEN];
@@ -110,10 +87,23 @@ static struct vfs_simple_open *vfs_simple_alloc_wrapper(void)
 
 static void vfs_simple_free_wrapper(struct vfs_simple_open *w)
 {
-    w->in_use      = 0;
-    w->refs        = 0;
-    w->mount       = NULL;
-    w->driver_file = NULL;
+    w->in_use    = 0;
+    w->refs      = 0;
+    w->mount     = NULL;
+    w->driver_id = 0;
+}
+
+/* Convert between the public uint32_t ID and the internal entry. */
+static uint32_t vfs_simple_wrap_to_id(struct vfs_simple_open *w)
+{
+    return (uint32_t)(w - g_vfs_simple_opens) + 1;
+}
+
+static struct vfs_simple_open *vfs_simple_id_to_wrap(uint32_t id)
+{
+    if (id == 0 || id > VFS_SIMPLE_MAX_OPEN) return NULL;
+    struct vfs_simple_open *w = &g_vfs_simple_opens[id - 1];
+    return w->in_use ? w : NULL;
 }
 
 struct vfs_simple_state {
@@ -156,88 +146,75 @@ static const char *mount_for_path(const char *path)
 
 /* ---------- nx_vfs_ops — forward to the mounted driver --------------- */
 
-static int vfs_simple_open(void *self, const char *path, uint32_t flags,
-                           void **out_file)
+static uint32_t vfs_simple_open(void *self, const char *path, uint32_t flags)
 {
     (void)self;
-    if (!path) return NX_EINVAL;
-    /* v1 only recognises absolute paths; an empty or relative path is
-     * rejected before touching the driver. */
-    if (path[0] != '/') return NX_EINVAL;
+    if (!path) return 0;
+    if (path[0] != '/') return 0;
 
     const char *mount = mount_for_path(path);
     struct vfs_simple_open *w = vfs_simple_alloc_wrapper();
-    if (!w) return NX_ENOMEM;
+    if (!w) return 0;
 
-    /* nx_vfs_*_READ/_WRITE/_CREATE match nx_fs_*_READ/_WRITE/_CREATE bit-
-     * for-bit (both headers define them as (1<<0) .. (1<<2)).  No
-     * translation needed; pass the mask through. */
-    void *driver_file = NULL;
-    int rc = nx_fs_open(nx_slot_lookup(mount), path, flags, &driver_file);
-    if (rc != NX_OK) { vfs_simple_free_wrapper(w); return rc; }
+    uint32_t driver_id = nx_fs_open(nx_slot_lookup(mount), path, flags);
+    if (driver_id == 0) { vfs_simple_free_wrapper(w); return 0; }
 
-    w->refs        = 1;
-    w->mount       = mount;
-    w->driver_file = driver_file;
-    *out_file      = w;
-    return NX_OK;
+    w->refs      = 1;
+    w->mount     = mount;
+    w->driver_id = driver_id;
+    return vfs_simple_wrap_to_id(w);
 }
 
-static void vfs_simple_close(void *self, void *file)
+static void vfs_simple_close(void *self, uint32_t id)
 {
     (void)self;
-    if (!file) return;
-    struct vfs_simple_open *w = file;
+    if (id == 0) return;
+    struct vfs_simple_open *w = vfs_simple_id_to_wrap(id);
+    if (!w) return;
     /* Slot may have been swapped to NULL between open and close — in
      * which case nx_fs_close is a no-op (disp_resolve / HOST_RESOLVE_FS
-     * returns early).  Drop the wrapper anyway so vfs_simple's pool
-     * isn't permanently leaked.  Mirrors the existing "close after
-     * unmount still closes the handle slot" host test. */
-    nx_fs_close(nx_slot_lookup(w->mount), w->driver_file);
+     * returns early).  Drop the wrapper anyway so the pool isn't leaked. */
+    nx_fs_close(nx_slot_lookup(w->mount), w->driver_id);
     if (w->refs > 0 && --w->refs > 0) return;
     vfs_simple_free_wrapper(w);
 }
 
-static void vfs_simple_retain(void *self, void *file)
+static void vfs_simple_retain(void *self, uint32_t id)
 {
     (void)self;
-    if (!file) return;
-    struct vfs_simple_open *w = file;
+    if (id == 0) return;
+    struct vfs_simple_open *w = vfs_simple_id_to_wrap(id);
+    if (!w) return;
     struct nx_slot *fs_slot = nx_slot_lookup(w->mount);
-    /* Guard: only bump wrapper.refs if the slot is still active so that
-     * wrapper.refs stays in sync with the driver's per-open refcount.
-     * Reading slot->active is legal here — vfs_simple runs on the
-     * dispatcher thread (R8).  All bound drivers implement retain as of
-     * slice 7.7b.2, so no ops->retain NULL check is needed. */
     if (!fs_slot || !fs_slot->active) return;
-    nx_fs_retain(fs_slot, w->driver_file);
+    nx_fs_retain(fs_slot, w->driver_id);
     w->refs++;
 }
 
-static int64_t vfs_simple_read(void *self, void *file, void *buf, size_t cap)
+static int64_t vfs_simple_read(void *self, uint32_t id, void *buf, size_t cap)
 {
     (void)self;
-    if (!file) return NX_EINVAL;
-    struct vfs_simple_open *w = file;
-    return nx_fs_read(nx_slot_lookup(w->mount), w->driver_file, buf, cap);
+    struct vfs_simple_open *w = vfs_simple_id_to_wrap(id);
+    if (!w) return NX_EINVAL;
+    return nx_fs_read(nx_slot_lookup(w->mount), w->driver_id, buf, cap);
 }
 
-static int64_t vfs_simple_write(void *self, void *file, const void *buf,
+static int64_t vfs_simple_write(void *self, uint32_t id, const void *buf,
                                 size_t len)
 {
     (void)self;
-    if (!file) return NX_EINVAL;
-    struct vfs_simple_open *w = file;
-    return nx_fs_write(nx_slot_lookup(w->mount), w->driver_file, buf, len);
+    struct vfs_simple_open *w = vfs_simple_id_to_wrap(id);
+    if (!w) return NX_EINVAL;
+    return nx_fs_write(nx_slot_lookup(w->mount), w->driver_id, buf, len);
 }
 
-static int64_t vfs_simple_seek(void *self, void *file,
+static int64_t vfs_simple_seek(void *self, uint32_t id,
                                int64_t offset, int whence)
 {
     (void)self;
-    if (!file) return NX_EINVAL;
-    struct vfs_simple_open *w = file;
-    return nx_fs_seek(nx_slot_lookup(w->mount), w->driver_file, offset, whence);
+    struct vfs_simple_open *w = vfs_simple_id_to_wrap(id);
+    if (!w) return NX_EINVAL;
+    return nx_fs_seek(nx_slot_lookup(w->mount), w->driver_id, offset, whence);
 }
 
 static int vfs_simple_readdir(void *self, const char *dir_path,

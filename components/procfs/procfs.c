@@ -245,6 +245,8 @@ static size_t procfs_render_stat(struct nx_process *p, char *out, size_t cap)
 
 /* ---------- nx_fs_ops -------------------------------------------------- */
 
+/* Slice 9b.1: ID-based table helpers — same 1-based index convention as
+ * ramfs.  0 = invalid; valid IDs are 1..PROCFS_MAX_OPEN. */
 static struct procfs_open *procfs_alloc_open(struct procfs_state *s)
 {
     for (unsigned i = 0; i < PROCFS_MAX_OPEN; i++) {
@@ -256,72 +258,82 @@ static struct procfs_open *procfs_alloc_open(struct procfs_state *s)
     return NULL;
 }
 
-static int procfs_op_open(void *self, const char *path, uint32_t flags,
-                          void **out_file)
+static struct procfs_open *procfs_id_to_open(struct procfs_state *s,
+                                              uint32_t id)
 {
-    if (!self || !path || !out_file) return NX_EINVAL;
-    if (path[0] == '\0') return NX_EINVAL;
+    if (id == 0 || id > PROCFS_MAX_OPEN) return NULL;
+    struct procfs_open *op = &s->opens[id - 1];
+    return op->in_use ? op : NULL;
+}
 
-    /* Read-only filesystem: refuse any write/create/append flag.  Read
-     * may be requested explicitly (NX_FS_OPEN_READ) or implicitly by
-     * passing 0 (busybox's open() with no O_WRONLY drops to flags=0). */
+static uint32_t procfs_open_to_id(struct procfs_state *s,
+                                   struct procfs_open *op)
+{
+    return (uint32_t)(op - s->opens) + 1;
+}
+
+static uint32_t procfs_op_open(void *self, const char *path, uint32_t flags)
+{
+    if (!self || !path) return 0;
+    if (path[0] == '\0') return 0;
+
+    /* Read-only filesystem: refuse any write/create/append flag. */
     if (flags & (NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE | NX_FS_OPEN_APPEND))
-        return NX_EPERM;
+        return 0;
 
-    /* Only /proc/<pid>/stat is openable as a file in v1.  Directory
-     * paths are routed through HANDLE_DIR by the syscall layer's stat
-     * probe, so this op never sees them in the live build; but defend
-     * against it (the host fake_fs path may call open on a dir). */
+    /* Only /proc/<pid>/stat is openable as a file in v1. */
     uint32_t pid;
     const char *tail = procfs_parse_pid(path, &pid);
-    if (!tail) return NX_ENOENT;
+    if (!tail) return 0;
 
-    /* Match exactly "/stat" (no other files exist under /proc/<pid>). */
     if (tail[0] != '/' || tail[1] != 's' || tail[2] != 't' ||
         tail[3] != 'a' || tail[4] != 't' || tail[5] != '\0')
-        return NX_ENOENT;
+        return 0;
 
     struct nx_process *p = nx_process_lookup_by_pid(pid);
-    if (!p) return NX_ENOENT;
+    if (!p) return 0;
 
     struct procfs_state *s = self;
     struct procfs_open  *op = procfs_alloc_open(s);
-    if (!op) return NX_ENOMEM;
+    if (!op) return 0;
     op->refs   = 1;
     op->cursor = 0;
     op->size   = procfs_render_stat(p, op->buf, PROCFS_STAT_BUFSZ);
 
-    *out_file = op;
-    return NX_OK;
+    return procfs_open_to_id(s, op);
 }
 
-static void procfs_op_close(void *self, void *file)
+static void procfs_op_close(void *self, uint32_t id)
 {
-    (void)self;
-    if (!file) return;
-    struct procfs_open *op = file;
+    if (!self || id == 0) return;
+    struct procfs_state *s = self;
+    struct procfs_open *op = procfs_id_to_open(s, id);
+    if (!op) return;
     if (op->refs > 0 && --op->refs > 0) return;
     op->in_use = 0;
     op->size   = 0;
     op->cursor = 0;
 }
 
-static void procfs_op_retain(void *self, void *file)
+static void procfs_op_retain(void *self, uint32_t id)
 {
-    (void)self;
-    if (!file) return;
-    struct procfs_open *op = file;
+    if (!self || id == 0) return;
+    struct procfs_state *s = self;
+    struct procfs_open *op = procfs_id_to_open(s, id);
+    if (!op) return;
     op->refs++;
 }
 
-static int64_t procfs_op_read(void *self, void *file, void *buf, size_t cap)
+static int64_t procfs_op_read(void *self, uint32_t id, void *buf, size_t cap)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
+    if (!self) return NX_EINVAL;
     if (cap == 0) return 0;
     if (!buf) return NX_EINVAL;
 
-    struct procfs_open *op = file;
+    struct procfs_state *s = self;
+    struct procfs_open *op = procfs_id_to_open(s, id);
+    if (!op) return NX_EINVAL;
+
     size_t remain = (op->cursor < op->size) ? op->size - op->cursor : 0;
     size_t n      = remain < cap ? remain : cap;
     if (n > 0) memcpy(buf, op->buf + op->cursor, n);
@@ -329,19 +341,20 @@ static int64_t procfs_op_read(void *self, void *file, void *buf, size_t cap)
     return (int64_t)n;
 }
 
-static int64_t procfs_op_write(void *self, void *file,
+static int64_t procfs_op_write(void *self, uint32_t id,
                                const void *buf, size_t len)
 {
-    (void)self; (void)file; (void)buf; (void)len;
+    (void)self; (void)id; (void)buf; (void)len;
     return NX_EPERM;        /* read-only filesystem */
 }
 
-static int64_t procfs_op_seek(void *self, void *file,
+static int64_t procfs_op_seek(void *self, uint32_t id,
                               int64_t offset, int whence)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
-    struct procfs_open *op = file;
+    if (!self) return NX_EINVAL;
+    struct procfs_state *s = self;
+    struct procfs_open *op = procfs_id_to_open(s, id);
+    if (!op) return NX_EINVAL;
 
     int64_t base;
     switch (whence) {

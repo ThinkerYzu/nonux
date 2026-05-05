@@ -250,12 +250,13 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
         if (type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_close(object);
         } else if (type == NX_HANDLE_FILE) {
-            /* Dispatch through the vfs slot.  If the slot has been
-             * unmounted mid-flight the object leaks — unavoidable, but
-             * the handle slot still gets freed.  Not a normal path. */
+            /* Slice 9b.1: object field encodes the vfs open-id as
+             * (void*)(uintptr_t)id — extract and forward to vfs_close. */
             struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-            if (vfs_slot)
-                nx_vfs_close(vfs_slot, object);
+            if (vfs_slot) {
+                uint32_t vfs_id = (uint32_t)(uintptr_t)object;
+                nx_vfs_close(vfs_slot, vfs_id);
+            }
         } else if (type == NX_HANDLE_DIR) {
             /* Slice 7.6d.N.5 — free the directory cursor.  No vfs
              * dispatch: the cursor is a kheap-allocated state struct
@@ -463,26 +464,26 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 #endif
 
-    void *file = 0;
-    rc = nx_vfs_open(vfs_slot, kpath, flags, &file);
-    if (rc != NX_OK) return rc;
+    /* Slice 9b.1: nx_vfs_open returns a uint32_t id (0 = failure).
+     * Store it in the handle entry as (void*)(uintptr_t)id — the
+     * object field is reinterpreted as an id until slice 9b.2
+     * redesigns the handle entry.  id >= 1 so the pointer is never
+     * NULL (nx_handle_alloc rejects NULL objects). */
+    uint32_t vfs_id = nx_vfs_open(vfs_slot, kpath, flags);
+    if (vfs_id == 0) return NX_ENOENT;
 
     uint32_t rights = 0;
     if (flags & NX_VFS_OPEN_READ)  rights |= NX_RIGHT_READ;
     if (flags & NX_VFS_OPEN_WRITE) rights |= NX_RIGHT_WRITE;
-    /* SEEK is implicitly granted on any file open — seek is meaningful
-     * on every backing store that supports reads or writes.  If a
-     * future driver exposes a non-seekable stream type, the right can
-     * be dropped or attenuated via `nx_handle_duplicate`. */
     if (rights) rights |= NX_RIGHT_SEEK;
 
     struct nx_handle_table *t = nx_syscall_current_table();
     nx_handle_t h = NX_HANDLE_INVALID;
-    rc = nx_handle_alloc_with_slot(t, NX_HANDLE_FILE, rights, file, vfs_slot, &h);
+    void *file_obj = (void *)(uintptr_t)vfs_id;
+    rc = nx_handle_alloc_with_slot(t, NX_HANDLE_FILE, rights, file_obj,
+                                   vfs_slot, &h);
     if (rc != NX_OK) {
-        /* Handle-table full or other alloc failure — roll back the
-         * driver-side open so the per-open slot isn't leaked. */
-        nx_vfs_close(vfs_slot, file);
+        nx_vfs_close(vfs_slot, vfs_id);
         return rc;
     }
     return (nx_status_t)h;
@@ -639,8 +640,10 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
+    /* Slice 9b.1: obj encodes the vfs open-id. */
+    uint32_t vfs_id = (uint32_t)(uintptr_t)obj;
     uint8_t staging[NX_FILE_IO_MAX];
-    int64_t got = nx_vfs_read(vfs_slot, obj, staging, cap);
+    int64_t got = nx_vfs_read(vfs_slot, vfs_id, staging, cap);
     if (got < 0) return (nx_status_t)got;
 
     rc = copy_to_user(buf, staging, (size_t)got);
@@ -696,7 +699,9 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
-    return (nx_status_t)nx_vfs_write(vfs_slot, obj, staging, len);
+    /* Slice 9b.1: obj encodes the vfs open-id. */
+    uint32_t vfs_id = (uint32_t)(uintptr_t)obj;
+    return (nx_status_t)nx_vfs_write(vfs_slot, vfs_id, staging, len);
 }
 
 /*
@@ -722,7 +727,9 @@ static nx_status_t sys_seek(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
-    return (nx_status_t)nx_vfs_seek(vfs_slot, object, offset, whence);
+    /* Slice 9b.1: object field encodes the vfs open-id. */
+    uint32_t vfs_id = (uint32_t)(uintptr_t)object;
+    return (nx_status_t)nx_vfs_seek(vfs_slot, vfs_id, offset, whence);
 }
 
 /*
@@ -2390,8 +2397,10 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
             nx_channel_endpoint_close(e->object);
         } else if (e->type == NX_HANDLE_FILE) {
             struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-            if (vfs_slot)
-                nx_vfs_close(vfs_slot, e->object);
+            if (vfs_slot) {
+                uint32_t fid = (uint32_t)(uintptr_t)e->object;
+                nx_vfs_close(vfs_slot, fid);
+            }
         } else if (e->type == NX_HANDLE_DIR) {
 #if !__STDC_HOSTED__
             free(e->object);
@@ -2410,8 +2419,10 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
         nx_channel_endpoint_retain(src_object);
     } else if (src_type == NX_HANDLE_FILE) {
         struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-        if (vfs_slot)
-            nx_vfs_retain(vfs_slot, src_object);
+        if (vfs_slot) {
+            uint32_t fid = (uint32_t)(uintptr_t)src_object;
+            nx_vfs_retain(vfs_slot, fid);
+        }
     }
 
     /* 5. Install the source's (type, rights, object) at the destination
@@ -2530,8 +2541,10 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
             nx_channel_endpoint_retain(src_object);
         } else if (src_type == NX_HANDLE_FILE) {
             struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-            if (vfs_slot)
-                nx_vfs_retain(vfs_slot, src_object);
+            if (vfs_slot) {
+                uint32_t fid = (uint32_t)(uintptr_t)src_object;
+                nx_vfs_retain(vfs_slot, fid);
+            }
         }
 
         e->type       = src_type;

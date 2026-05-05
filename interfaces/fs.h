@@ -82,32 +82,26 @@
 struct nx_fs_ops {
     /*
      * Open `path` on the driver instance `self`.  `flags` is a bitmask
-     * of `NX_FS_OPEN_*`.  On success, `*out_file` is written with an
-     * opaque per-open state pointer and NX_OK is returned.
+     * of `NX_FS_OPEN_*`.  On success, returns a non-zero component-local
+     * open-ID; the driver stores the per-open state in its own internal
+     * table keyed by this ID.  Returns 0 on failure (path missing,
+     * table full, or access refused).
      *
-     * Returns:
-     *   NX_OK      — *out_file holds the new file-state pointer.
-     *   NX_EINVAL  — NULL args / empty path / unknown flag bits.
-     *   NX_ENOENT  — path missing and CREATE not set.
-     *   NX_EPERM   — driver refuses the requested access mode.
-     *   NX_ENOMEM  — driver could not allocate per-open state.
+     * Slice 9b.1: replaces the pointer-out API.  `id` is 1-based (0 is
+     * the invalid sentinel); the driver stores objects at index `id-1`
+     * in its opens[] pool.  Callers may use the same ID across any op
+     * unless the issuing component has been replaced (recomposition
+     * invalidates all IDs for the old instance).
      */
-    int (*open)(void *self, const char *path, uint32_t flags, void **out_file);
+    uint32_t (*open)(void *self, const char *path, uint32_t flags);
 
     /*
-     * Release per-open state returned by `open`.  Idempotent against
-     * NULL.  After close, the `file` pointer is dead — passing it to
-     * any other op is a programmer error (driver may assert / trap /
-     * silently corrupt state; well-behaved callers don't do it).
-     *
-     * Slice 7.6d.N.8 introduces refcounted per-open state (see
-     * `retain` below) so a `dup3(file_fd, ...)` + `close(file_fd)`
-     * sequence keeps the duplicated handle alive.  `close` becomes
-     * "decrement the refcount; release when zero".  Callers don't
-     * see the refcount: pair every successful open / retain with
+     * Release the per-open state at `id`.  Decrements the refcount;
+     * frees the slot when it reaches zero.  `id == 0` is silently
+     * ignored.  Callers must pair every successful open / retain with
      * exactly one close.
      */
-    void (*close)(void *self, void *file);
+    void (*close)(void *self, uint32_t id);
 
     /*
      * Bump the per-open's reference count (slice 7.6d.N.8).  Used by
@@ -121,48 +115,42 @@ struct nx_fs_ops {
      * case.  ramfs implements it as a refcount bump on its
      * per-open struct.
      */
-    void (*retain)(void *self, void *file);
+    void (*retain)(void *self, uint32_t id);
 
     /*
-     * Read up to `cap` bytes from `file` into `buf`, starting at the
-     * per-open cursor.  Advances the cursor by the number of bytes
-     * actually read.  `cap == 0` is permitted and returns 0.
+     * Read up to `cap` bytes from the open at `id` into `buf`, starting
+     * at the per-open cursor.  Advances the cursor by the number of
+     * bytes actually read.  `cap == 0` is permitted and returns 0.
      *
      * Returns:
      *   >= 0       — bytes read (0 = end-of-file at current cursor).
-     *   NX_EINVAL  — NULL args (except `buf` when `cap == 0`).
+     *   NX_EINVAL  — bad id / NULL buf with cap > 0.
      *   NX_EPERM   — file was opened without NX_FS_OPEN_READ.
      */
-    int64_t (*read)(void *self, void *file, void *buf, size_t cap);
+    int64_t (*read)(void *self, uint32_t id, void *buf, size_t cap);
 
     /*
-     * Write `len` bytes from `buf` into `file` at the per-open cursor,
-     * extending the file if the cursor is at (or past) end-of-file.
-     * Advances the cursor by the number of bytes actually written.
-     * `len == 0` is permitted and returns 0.
+     * Write `len` bytes from `buf` into the open at `id`, extending the
+     * file if the cursor is past end-of-file.  `len == 0` returns 0.
      *
      * Returns:
-     *   >= 0       — bytes written (may be < len if the backing store
-     *                filled; caller retries with the remaining tail).
-     *   NX_EINVAL  — NULL args (except `buf` when `len == 0`).
+     *   >= 0       — bytes written.
+     *   NX_EINVAL  — bad id / NULL buf with len > 0.
      *   NX_EPERM   — file was opened without NX_FS_OPEN_WRITE.
-     *   NX_ENOMEM  — backing store exhausted before any bytes written.
+     *   NX_ENOMEM  — backing store exhausted.
      */
-    int64_t (*write)(void *self, void *file, const void *buf, size_t len);
+    int64_t (*write)(void *self, uint32_t id, const void *buf, size_t len);
 
     /*
-     * Reposition the per-open cursor (slice 6.4).  `whence` is one of
-     * `NX_FS_SEEK_SET` (absolute), `_CUR` (relative to current cursor),
-     * or `_END` (relative to current size).  The new position must
-     * land in `[0, size]` inclusive — past-EOF seeks return NX_EINVAL
-     * (no hole-filling in v1; callers write in sequence or SEEK_END).
+     * Reposition the per-open cursor for the open at `id`.  `whence` is
+     * one of `NX_FS_SEEK_SET` (absolute), `_CUR` (relative to current
+     * cursor), or `_END` (relative to current size).
      *
      * Returns the new absolute cursor position on success (≥ 0), or a
      * negative NX_E* on failure:
-     *   NX_EINVAL  — NULL args, unknown whence, or resulting position
-     *                outside [0, size].
+     *   NX_EINVAL  — bad id, unknown whence, or position outside [0, size].
      */
-    int64_t (*seek)(void *self, void *file, int64_t offset, int whence);
+    int64_t (*seek)(void *self, uint32_t id, int64_t offset, int whence);
 
     /*
      * Read the next entry under `dir_path` (slice 7.7b.1).

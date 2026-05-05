@@ -207,48 +207,59 @@ static uint32_t ramfs_classify(struct ramfs_state *s, const char *path)
 
 /* ---------- nx_fs_ops implementations -------------------------------- */
 
-static int ramfs_op_open(void *self, const char *path, uint32_t flags,
-                         void **out_file)
+/* Slice 9b.1: open returns a 1-based index into opens[].  0 = failure.
+ * id_to_open / open_to_id convert between the public uint32_t id and the
+ * internal array index. */
+static struct ramfs_open *id_to_open(struct ramfs_state *s, uint32_t id)
+{
+    if (id == 0 || id > RAMFS_MAX_OPEN) return NULL;
+    struct ramfs_open *op = &s->opens[id - 1];
+    return op->in_use ? op : NULL;
+}
+
+static uint32_t open_to_id(struct ramfs_state *s, struct ramfs_open *op)
+{
+    return (uint32_t)(op - s->opens) + 1;
+}
+
+static uint32_t ramfs_op_open(void *self, const char *path, uint32_t flags)
 {
     const uint32_t known = NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
                            NX_FS_OPEN_CREATE | NX_FS_OPEN_APPEND;
-    if (!self || !path || !out_file) return NX_EINVAL;
-    if (path[0] == '\0') return NX_EINVAL;
-    if (flags & ~known) return NX_EINVAL;
+    if (!self || !path) return 0;
+    if (path[0] == '\0') return 0;
+    if (flags & ~known) return 0;
 
     struct ramfs_state *s = self;
 
     struct ramfs_file *file = ramfs_find(s, path);
     if (file && file->kind == RAMFS_KIND_DIR) {
-        /* Slice 7.7b.1: refuse file-style open on a directory.  The
-         * syscall layer's sys_open consults `stat` and routes DIR
-         * paths through the HANDLE_DIR allocation path — this guard
-         * stops a buggy caller from getting a HANDLE_FILE pointing
-         * at a directory entry. */
-        return NX_EPERM;
+        /* Refuse file-style open on a directory — syscall layer routes
+         * dirs through HANDLE_DIR. */
+        return 0;
     }
     if (!file) {
-        if (!(flags & NX_FS_OPEN_CREATE)) return NX_ENOENT;
+        if (!(flags & NX_FS_OPEN_CREATE)) return 0;
         file = ramfs_create_file(s, path);
-        if (!file) return NX_ENOMEM;
+        if (!file) return 0;
     }
 
     struct ramfs_open *op = ramfs_alloc_open(s);
-    if (!op) return NX_ENOMEM;
+    if (!op) return 0;
     op->refs   = 1;
     op->file   = file;
     op->flags  = flags;
     op->cursor = 0;
 
-    *out_file = op;
-    return NX_OK;
+    return open_to_id(s, op);
 }
 
-static void ramfs_op_close(void *self, void *file)
+static void ramfs_op_close(void *self, uint32_t id)
 {
-    (void)self;
-    if (!file) return;
-    struct ramfs_open *op = file;
+    if (!self || id == 0) return;
+    struct ramfs_state *s = self;
+    struct ramfs_open *op = id_to_open(s, id);
+    if (!op) return;
     if (op->refs > 0 && --op->refs > 0) return;
     op->in_use = 0;
     op->file   = NULL;
@@ -256,22 +267,24 @@ static void ramfs_op_close(void *self, void *file)
     op->cursor = 0;
 }
 
-static void ramfs_op_retain(void *self, void *file)
+static void ramfs_op_retain(void *self, uint32_t id)
 {
-    (void)self;
-    if (!file) return;
-    struct ramfs_open *op = file;
+    if (!self || id == 0) return;
+    struct ramfs_state *s = self;
+    struct ramfs_open *op = id_to_open(s, id);
+    if (!op) return;
     op->refs++;
 }
 
-static int64_t ramfs_op_read(void *self, void *file, void *buf, size_t cap)
+static int64_t ramfs_op_read(void *self, uint32_t id, void *buf, size_t cap)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
+    if (!self) return NX_EINVAL;
     if (cap == 0) return 0;
     if (!buf) return NX_EINVAL;
 
-    struct ramfs_open *op = file;
+    struct ramfs_state *s = self;
+    struct ramfs_open *op = id_to_open(s, id);
+    if (!op) return NX_EINVAL;
     if (!(op->flags & NX_FS_OPEN_READ)) return NX_EPERM;
 
     size_t remain = (op->cursor < op->file->size)
@@ -282,26 +295,19 @@ static int64_t ramfs_op_read(void *self, void *file, void *buf, size_t cap)
     return (int64_t)n;
 }
 
-static int64_t ramfs_op_write(void *self, void *file, const void *buf,
+static int64_t ramfs_op_write(void *self, uint32_t id, const void *buf,
                               size_t len)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
+    if (!self) return NX_EINVAL;
     if (len == 0) return 0;
     if (!buf) return NX_EINVAL;
 
-    struct ramfs_open *op = file;
+    struct ramfs_state *s = self;
+    struct ramfs_open *op = id_to_open(s, id);
+    if (!op) return NX_EINVAL;
     if (!(op->flags & NX_FS_OPEN_WRITE)) return NX_EPERM;
 
-    /* Slice 7.6d.N.11: O_APPEND semantic — every write seeks to
-     * end-of-file first.  POSIX-mandated atomicity (seek+write as
-     * one) is moot in v1 (single-CPU, no concurrent writers across
-     * processes that share an open), but the seek-before-write is
-     * still load-bearing because dup3 + the slice 7.6d.N.8 retain
-     * machinery let two handle slots reference the same per-open
-     * struct: a non-APPEND write between two APPEND writes would
-     * otherwise stomp the appended data when the cursor was left
-     * mid-file. */
+    /* O_APPEND: every write seeks to end-of-file first. */
     if (op->flags & NX_FS_OPEN_APPEND) op->cursor = op->file->size;
 
     size_t room = (op->cursor < RAMFS_FILE_CAP)
@@ -314,12 +320,13 @@ static int64_t ramfs_op_write(void *self, void *file, const void *buf,
     return (int64_t)n;
 }
 
-static int64_t ramfs_op_seek(void *self, void *file,
+static int64_t ramfs_op_seek(void *self, uint32_t id,
                              int64_t offset, int whence)
 {
-    (void)self;
-    if (!file) return NX_EINVAL;
-    struct ramfs_open *op = file;
+    if (!self) return NX_EINVAL;
+    struct ramfs_state *s = self;
+    struct ramfs_open *op = id_to_open(s, id);
+    if (!op) return NX_EINVAL;
 
     int64_t base;
     switch (whence) {

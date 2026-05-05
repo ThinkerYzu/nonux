@@ -1,22 +1,24 @@
 /*
  * uart_pl011 — PL011 UART character-device component.
  *
- * Slice 8.0b: replaces the original smoke-test handle_msg (which only
- * tracked message counts and checked UART_MSG_WRITE) with the IDL-
- * generated nx_char_device_dispatch shim.  The component now implements
- * struct nx_char_device_ops and delegates handle_msg entirely to the
- * generated dispatcher.
+ * Slice 9b.1: adds read(id, buf, cap) op — routes to nx_console_read.
+ * `id` is ignored (singleton device); a future multi-device scenario
+ * would use it to select the instance.
  *
  * Implements:
- *   write(buf, len)  — writes len bytes to the PL011 TX FIFO via uart_putc.
- *   rx_byte(byte)    — receives one byte from IRQ context (no-op in v1;
- *                      a future RX ring-buffer will land here).
+ *   write(buf, len)       — writes len bytes to the PL011 TX FIFO.
+ *   read(id, buf, cap)    — blocks until bytes available; reads from RX.
+ *   rx_byte(byte)         — IRQ-context byte delivery (no-op in v1).
  */
 
 #include "framework/char_device_dispatch.h"
 #include "framework/component.h"
 #include "framework/ipc.h"
 #include "interfaces/char_device.h"
+
+#if !__STDC_HOSTED__
+#include "framework/console.h"
+#endif
 
 #if __STDC_HOSTED__
 #include <string.h>
@@ -44,17 +46,29 @@ static int64_t uart_pl011_write(void *self, const void *buf, size_t len)
     return (int64_t)len;
 }
 
+static int64_t uart_pl011_read(void *self, uint32_t id, void *buf, size_t cap)
+{
+    (void)self;
+    (void)id;    /* singleton — id ignored */
+    if (cap == 0) return 0;
+    if (!buf) return NX_EINVAL;
+#if !__STDC_HOSTED__
+    return (int64_t)nx_console_read(buf, cap);
+#else
+    (void)buf;
+    return 0;    /* host build: EOF */
+#endif
+}
+
 static void uart_pl011_rx_byte(void *self, uint8_t byte)
 {
-    /* v1: no RX ring buffer yet; bytes delivered from IRQ context are
-     * silently dropped.  A future slice wires this to a per-device
-     * receive queue and wakes any blocked reader. */
     (void)self;
     (void)byte;
 }
 
 static const struct nx_char_device_ops uart_pl011_char_device_ops = {
     .write   = uart_pl011_write,
+    .read    = uart_pl011_read,
     .rx_byte = uart_pl011_rx_byte,
 };
 

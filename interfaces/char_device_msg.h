@@ -14,6 +14,7 @@
  * leave their slot as a gravestone — never reuse a freed id. */
 enum nx_char_device_op_id {
     NX_CHAR_DEVICE_OP_WRITE = 1,
+    NX_CHAR_DEVICE_OP_READ = 3,
     NX_CHAR_DEVICE_OP_RX_BYTE = 2,
 };
 
@@ -24,6 +25,18 @@ struct nx_char_device_msg_write {
 };
 
 struct nx_char_device_reply_write {
+    int64_t rc;
+    size_t bytes_actual;
+};
+
+/* Request: nx_char_device_read() — Read up to `cap` bytes from the device into `buf`.  Blocks until */
+struct nx_char_device_msg_read {
+    uint32_t id;
+    uint64_t buf; /* void * encoded as u64 */
+    size_t cap;
+};
+
+struct nx_char_device_reply_read {
     int64_t rc;
     size_t bytes_actual;
 };

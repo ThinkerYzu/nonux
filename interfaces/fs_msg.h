@@ -29,17 +29,15 @@ enum nx_fs_op_id {
 struct nx_fs_msg_open {
     char path[128];
     uint32_t flags;
-    uint64_t out_file;
 };
 
 struct nx_fs_reply_open {
-    int rc;
-    uint64_t out_file;
+    uint32_t rc;
 };
 
-/* Request: nx_fs_close() — Release per-open state returned by `open`.  Idempotent against */
+/* Request: nx_fs_close() — Release the per-open state at `id`.  Decrements the refcount; */
 struct nx_fs_msg_close {
-    uint64_t file;
+    uint32_t id;
 };
 
 struct nx_fs_reply_close {
@@ -48,16 +46,16 @@ struct nx_fs_reply_close {
 
 /* Request: nx_fs_retain() — Bump the per-open's reference count (slice 7.6d.N.8).  Used by */
 struct nx_fs_msg_retain {
-    uint64_t file;
+    uint32_t id;
 };
 
 struct nx_fs_reply_retain {
     int rc; /* always NX_OK; placeholder for void ops */
 };
 
-/* Request: nx_fs_read() — Read up to `cap` bytes from `file` into `buf`, starting at the */
+/* Request: nx_fs_read() — Read up to `cap` bytes from the open at `id` into `buf`, starting */
 struct nx_fs_msg_read {
-    uint64_t file;
+    uint32_t id;
     uint64_t buf; /* void * encoded as u64 */
     size_t cap;
 };
@@ -67,9 +65,9 @@ struct nx_fs_reply_read {
     size_t bytes_actual;
 };
 
-/* Request: nx_fs_write() — Write `len` bytes from `buf` into `file` at the per-open cursor, */
+/* Request: nx_fs_write() — Write `len` bytes from `buf` into the open at `id`, extending the */
 struct nx_fs_msg_write {
-    uint64_t file;
+    uint32_t id;
     uint64_t buf; /* const void * encoded as u64 */
     size_t len;
 };
@@ -79,9 +77,9 @@ struct nx_fs_reply_write {
     size_t bytes_actual;
 };
 
-/* Request: nx_fs_seek() — Reposition the per-open cursor (slice 6.4).  `whence` is one of */
+/* Request: nx_fs_seek() — Reposition the per-open cursor for the open at `id`.  `whence` is */
 struct nx_fs_msg_seek {
-    uint64_t file;
+    uint32_t id;
     int64_t offset;
     int whence;
 };

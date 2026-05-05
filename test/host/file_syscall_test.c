@@ -74,8 +74,15 @@ struct fake_fs_state {
     int close_calls;
 };
 
-static int fake_open(void *self, const char *path, uint32_t flags,
-                     void **out_file)
+/* Slice 9b.1: ID-based helpers. */
+static struct fake_file *fake_id_to_file(struct fake_fs_state *s, uint32_t id)
+{
+    if (id == 0 || id > 4) return NULL;
+    struct fake_file *f = &s->files[id - 1];
+    return f->in_use ? f : NULL;
+}
+
+static uint32_t fake_open(void *self, const char *path, uint32_t flags)
 {
     struct fake_fs_state *s = self;
     for (int i = 0; i < 4; i++) {
@@ -90,25 +97,25 @@ static int fake_open(void *self, const char *path, uint32_t flags,
                 f->name[n] = path[n]; n++;
             }
             f->name[n] = '\0';
-            *out_file = f;
-            return NX_OK;
+            return (uint32_t)(i + 1);
         }
     }
-    return NX_ENOMEM;
+    return 0;
 }
 
-static void fake_close(void *self, void *file)
+static void fake_close(void *self, uint32_t id)
 {
     struct fake_fs_state *s = self;
-    struct fake_file     *f = file;
+    struct fake_file     *f = fake_id_to_file(s, id);
     s->close_calls++;
     if (f) f->in_use = 0;
 }
 
-static int64_t fake_read(void *self, void *file, void *buf, size_t cap)
+static int64_t fake_read(void *self, uint32_t id, void *buf, size_t cap)
 {
-    (void)self;
-    struct fake_file *f = file;
+    struct fake_fs_state *s = self;
+    struct fake_file *f = fake_id_to_file(s, id);
+    if (!f) return NX_EINVAL;
     if (!(f->flags & NX_FS_OPEN_READ)) return NX_EPERM;
     size_t remain = f->cursor < f->size ? f->size - f->cursor : 0;
     size_t n = cap < remain ? cap : remain;
@@ -117,10 +124,11 @@ static int64_t fake_read(void *self, void *file, void *buf, size_t cap)
     return (int64_t)n;
 }
 
-static int64_t fake_write(void *self, void *file, const void *buf, size_t len)
+static int64_t fake_write(void *self, uint32_t id, const void *buf, size_t len)
 {
-    (void)self;
-    struct fake_file *f = file;
+    struct fake_fs_state *s = self;
+    struct fake_file *f = fake_id_to_file(s, id);
+    if (!f) return NX_EINVAL;
     if (!(f->flags & NX_FS_OPEN_WRITE)) return NX_EPERM;
     size_t room = sizeof f->data - f->size;
     size_t n = len < room ? len : room;
@@ -130,10 +138,11 @@ static int64_t fake_write(void *self, void *file, const void *buf, size_t len)
     return (int64_t)n;
 }
 
-static int64_t fake_seek(void *self, void *file, int64_t offset, int whence)
+static int64_t fake_seek(void *self, uint32_t id, int64_t offset, int whence)
 {
-    (void)self;
-    struct fake_file *f = file;
+    struct fake_fs_state *s = self;
+    struct fake_file *f = fake_id_to_file(s, id);
+    if (!f) return NX_EINVAL;
     int64_t base;
     switch (whence) {
     case NX_FS_SEEK_SET: base = 0;                    break;
@@ -728,21 +737,19 @@ TEST(sys_seek_no_seek_right_returns_eperm)
     fixture_setup(&fx);
     struct trap_frame_host tf;
 
-    /* Seed a file through the driver directly so we own a valid per-
-     * open pointer. */
-    void *file = NULL;
+    /* Seed a file through the driver directly to get a valid open-id. */
     ASSERT_EQ_U(fx.fake_comp.descriptor->iface_ops ==
                 (const void *)&fake_fs_ops, 1);
-    ASSERT_EQ_U(fake_fs_ops.open(&fx.fake_state, "/r",
-                                 NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
-                                 NX_FS_OPEN_CREATE, &file),
-                NX_OK);
+    uint32_t fid = fake_fs_ops.open(&fx.fake_state, "/r",
+                                    NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
+                                    NX_FS_OPEN_CREATE);
+    ASSERT(fid != 0);
 
     /* Alloc a HANDLE_FILE with only READ (no SEEK). */
     struct nx_handle_table *t = nx_syscall_current_table();
     nx_handle_t h;
     ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_FILE, NX_RIGHT_READ,
-                                file, &h), NX_OK);
+                                (void *)(uintptr_t)fid, &h), NX_OK);
 
     int64_t rc = dispatch(&tf, NX_SYS_SEEK, (uint64_t)h, 0,
                           NX_VFS_SEEK_SET);

@@ -51,17 +51,21 @@ struct fake8d_state {
     int last_mkdir_rc;
 };
 
-static int fd8_open(void *self, const char *path, uint32_t flags,
-                    void **out)
+static struct fake8d_file *fd8_id_to_file(struct fake8d_state *s, uint32_t id)
+{
+    if (!id || id > 4) return NULL;
+    return &s->files[id - 1];
+}
+
+static uint32_t fd8_open(void *self, const char *path, uint32_t flags)
 {
     struct fake8d_state *s = self;
-    if (!path || path[0] != '/') return NX_EINVAL;
+    if (!path || path[0] != '/') return 0;
     for (int i = 0; i < 4; i++) {
         if (!s->files[i].in_use) continue;
         if (strcmp(s->files[i].name, path) == 0) {
             s->files[i].cursor = 0;
-            *out = &s->files[i];
-            return NX_OK;
+            return (uint32_t)(i + 1);
         }
     }
     if (flags & NX_FS_OPEN_CREATE) {
@@ -73,32 +77,31 @@ static int fd8_open(void *self, const char *path, uint32_t flags,
             s->files[i].cursor = 0;
             s->files[i].retain_count = 1;
             s->files[i].close_calls  = 0;
-            *out = &s->files[i];
-            return NX_OK;
+            return (uint32_t)(i + 1);
         }
-        return NX_ENOMEM;
+        return 0;
     }
-    return NX_ENOENT;
+    return 0;
 }
 
-static void fd8_close(void *self, void *file)
+static void fd8_close(void *self, uint32_t id)
 {
-    (void)self;
-    struct fake8d_file *f = file;
+    struct fake8d_state *s = self;
+    struct fake8d_file *f = fd8_id_to_file(s, id);
     if (f) f->close_calls++;
 }
 
-static void fd8_retain(void *self, void *file)
+static void fd8_retain(void *self, uint32_t id)
 {
-    (void)self;
-    struct fake8d_file *f = file;
+    struct fake8d_state *s = self;
+    struct fake8d_file *f = fd8_id_to_file(s, id);
     if (f) f->retain_count++;
 }
 
-static int64_t fd8_read(void *self, void *file, void *buf, size_t cap)
+static int64_t fd8_read(void *self, uint32_t id, void *buf, size_t cap)
 {
-    (void)self;
-    struct fake8d_file *f = file;
+    struct fake8d_state *s = self;
+    struct fake8d_file *f = fd8_id_to_file(s, id);
     if (!f || !buf) return NX_EINVAL;
     size_t avail = f->size > f->cursor ? f->size - f->cursor : 0;
     size_t n = avail < cap ? avail : cap;
@@ -107,10 +110,10 @@ static int64_t fd8_read(void *self, void *file, void *buf, size_t cap)
     return (int64_t)n;
 }
 
-static int64_t fd8_write(void *self, void *file, const void *buf, size_t len)
+static int64_t fd8_write(void *self, uint32_t id, const void *buf, size_t len)
 {
-    (void)self;
-    struct fake8d_file *f = file;
+    struct fake8d_state *s = self;
+    struct fake8d_file *f = fd8_id_to_file(s, id);
     if (!f || !buf) return NX_EINVAL;
     size_t end = f->cursor + len;
     if (end > sizeof f->data) return NX_ENOMEM;
@@ -120,10 +123,10 @@ static int64_t fd8_write(void *self, void *file, const void *buf, size_t len)
     return (int64_t)len;
 }
 
-static int64_t fd8_seek(void *self, void *file, int64_t offset, int whence)
+static int64_t fd8_seek(void *self, uint32_t id, int64_t offset, int whence)
 {
-    (void)self;
-    struct fake8d_file *f = file;
+    struct fake8d_state *s = self;
+    struct fake8d_file *f = fd8_id_to_file(s, id);
     if (!f) return NX_EINVAL;
     int64_t new_pos;
     if (whence == NX_FS_SEEK_SET)      new_pos = offset;
@@ -255,10 +258,8 @@ TEST(fs_wrapper_open_existing_file_returns_ok)
     fix8d_setup(&fx);
     plant_file(&fx, "/a.txt", FAKE8D_DATA);
 
-    void *file = NULL;
-    int rc = nx_fs_open(&fx.root_slot, "/a.txt", NX_FS_OPEN_READ, &file);
-    ASSERT_EQ_U(rc, NX_OK);
-    ASSERT_NOT_NULL(file);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/a.txt", NX_FS_OPEN_READ);
+    ASSERT(file != 0);
     nx_fs_close(&fx.root_slot, file);
 
     fix8d_teardown(&fx);
@@ -269,9 +270,8 @@ TEST(fs_wrapper_open_missing_file_returns_enoent)
     struct fix8d fx;
     fix8d_setup(&fx);
 
-    void *file = NULL;
-    int rc = nx_fs_open(&fx.root_slot, "/no.txt", NX_FS_OPEN_READ, &file);
-    ASSERT_EQ_U(rc, NX_ENOENT);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/no.txt", NX_FS_OPEN_READ);
+    ASSERT_EQ_U(file, 0);
 
     fix8d_teardown(&fx);
 }
@@ -282,17 +282,14 @@ TEST(fs_wrapper_open_equiv_direct_open)
     fix8d_setup(&fx);
     plant_file(&fx, "/eq.txt", FAKE8D_DATA);
 
-    void *direct_file = NULL;
-    int direct_rc = fd8_open(&fx.fake_state, "/eq.txt", NX_FS_OPEN_READ,
-                             &direct_file);
+    uint32_t direct_file = fd8_open(&fx.fake_state, "/eq.txt", NX_FS_OPEN_READ);
     if (direct_file) fd8_close(&fx.fake_state, direct_file);
 
-    void *wrap_file = NULL;
-    int wrap_rc = nx_fs_open(&fx.root_slot, "/eq.txt", NX_FS_OPEN_READ,
-                             &wrap_file);
-    if (wrap_file) nx_fs_close(&fx.root_slot, wrap_file);
+    uint32_t wrap_file = nx_fs_open(&fx.root_slot, "/eq.txt", NX_FS_OPEN_READ);
+    if (wrap_file != 0) nx_fs_close(&fx.root_slot, wrap_file);
 
-    ASSERT_EQ_U(direct_rc, wrap_rc);
+    ASSERT(direct_file != 0);
+    ASSERT((direct_file != 0) == (wrap_file != 0));
 
     fix8d_teardown(&fx);
 }
@@ -303,9 +300,8 @@ TEST(fs_wrapper_close_increments_close_calls)
     fix8d_setup(&fx);
     struct fake8d_file *fnode = plant_file(&fx, "/cl.txt", FAKE8D_DATA);
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_fs_open(&fx.root_slot, "/cl.txt", NX_FS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/cl.txt", NX_FS_OPEN_READ);
+    ASSERT(file != 0);
     int before = fnode->close_calls;
     nx_fs_close(&fx.root_slot, file);
     ASSERT_EQ_U(fnode->close_calls, before + 1);
@@ -323,9 +319,8 @@ TEST(fs_wrapper_read_returns_correct_bytes)
     fix8d_setup(&fx);
     plant_file(&fx, "/rd.txt", FAKE8D_DATA);
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_fs_open(&fx.root_slot, "/rd.txt", NX_FS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/rd.txt", NX_FS_OPEN_READ);
+    ASSERT(file != 0);
 
     char buf[16] = {0};
     int64_t n = nx_fs_read(&fx.root_slot, file, buf, sizeof buf);
@@ -343,15 +338,14 @@ TEST(fs_wrapper_read_equiv_direct_read)
     plant_file(&fx, "/rdeq.txt", FAKE8D_DATA);
 
     /* Direct open+read+close first; fd8_open resets cursor to 0 each open. */
-    void *df = NULL;
-    fd8_open(&fx.fake_state, "/rdeq.txt", NX_FS_OPEN_READ, &df);
+    uint32_t df = fd8_open(&fx.fake_state, "/rdeq.txt", NX_FS_OPEN_READ);
     char dbuf[16] = {0};
     int64_t drc = fd8_read(&fx.fake_state, df, dbuf, sizeof dbuf);
     fd8_close(&fx.fake_state, df);
 
     /* Wrapper open+read+close; nx_fs_open calls fd8_open which resets cursor. */
-    void *wf = NULL;
-    nx_fs_open(&fx.root_slot, "/rdeq.txt", NX_FS_OPEN_READ, &wf);
+    uint32_t wf = nx_fs_open(&fx.root_slot, "/rdeq.txt", NX_FS_OPEN_READ);
+    ASSERT(wf != 0);
     char wbuf[16] = {0};
     int64_t wrc = nx_fs_read(&fx.root_slot, wf, wbuf, sizeof wbuf);
     nx_fs_close(&fx.root_slot, wf);
@@ -371,10 +365,9 @@ TEST(fs_wrapper_write_stores_data)
     struct fix8d fx;
     fix8d_setup(&fx);
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_fs_open(&fx.root_slot, "/wr.txt",
-                           NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE, &file),
-                NX_OK);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/wr.txt",
+                               NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE);
+    ASSERT(file != 0);
     int64_t n = nx_fs_write(&fx.root_slot, file, "abc", 3);
     ASSERT_EQ_U((unsigned)n, 3);
     nx_fs_close(&fx.root_slot, file);
@@ -387,11 +380,12 @@ TEST(fs_wrapper_write_equiv_direct_write)
     struct fix8d fx;
     fix8d_setup(&fx);
 
-    void *df = NULL, *wf = NULL;
-    fd8_open(&fx.fake_state, "/weq.txt", NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE,
-             &df);
-    nx_fs_open(&fx.root_slot, "/weq2.txt",
-               NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE, &wf);
+    uint32_t df = fd8_open(&fx.fake_state, "/weq.txt",
+                           NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE);
+    ASSERT(df != 0);
+    uint32_t wf = nx_fs_open(&fx.root_slot, "/weq2.txt",
+                              NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE);
+    ASSERT(wf != 0);
 
     int64_t drc = fd8_write(&fx.fake_state, df, "xy", 2);
     int64_t wrc = nx_fs_write(&fx.root_slot, wf, "xy", 2);
@@ -413,9 +407,8 @@ TEST(fs_wrapper_seek_moves_cursor)
     fix8d_setup(&fx);
     plant_file(&fx, "/sk.txt", "abcdef");
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_fs_open(&fx.root_slot, "/sk.txt", NX_FS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/sk.txt", NX_FS_OPEN_READ);
+    ASSERT(file != 0);
     int64_t pos = nx_fs_seek(&fx.root_slot, file, 3, NX_FS_SEEK_SET);
     ASSERT_EQ_U((unsigned long long)pos, 3ULL);
 
@@ -433,9 +426,10 @@ TEST(fs_wrapper_seek_equiv_direct_seek)
     fix8d_setup(&fx);
     plant_file(&fx, "/skeq.txt", "0123456789");
 
-    void *df = NULL, *wf = NULL;
-    fd8_open(&fx.fake_state, "/skeq.txt", NX_FS_OPEN_READ, &df);
-    nx_fs_open(&fx.root_slot, "/skeq.txt", NX_FS_OPEN_READ, &wf);
+    uint32_t df = fd8_open(&fx.fake_state, "/skeq.txt", NX_FS_OPEN_READ);
+    ASSERT(df != 0);
+    uint32_t wf = nx_fs_open(&fx.root_slot, "/skeq.txt", NX_FS_OPEN_READ);
+    ASSERT(wf != 0);
 
     int64_t drc = fd8_seek(&fx.fake_state, df, 5, NX_FS_SEEK_SET);
     int64_t wrc = nx_fs_seek(&fx.root_slot, wf, 5, NX_FS_SEEK_SET);
@@ -582,9 +576,8 @@ TEST(fs_wrapper_retain_bumps_driver_refcount)
     fix8d_setup(&fx);
     struct fake8d_file *fnode = plant_file(&fx, "/ret.txt", FAKE8D_DATA);
 
-    void *file = NULL;
-    ASSERT_EQ_U(nx_fs_open(&fx.root_slot, "/ret.txt", NX_FS_OPEN_READ, &file),
-                NX_OK);
+    uint32_t file = nx_fs_open(&fx.root_slot, "/ret.txt", NX_FS_OPEN_READ);
+    ASSERT(file != 0);
     int before = fnode->retain_count;
     nx_fs_retain(&fx.root_slot, file);
     ASSERT_EQ_U(fnode->retain_count, before + 1);
@@ -601,18 +594,17 @@ TEST(fs_wrapper_retain_equiv_direct_retain)
     struct fake8d_file *f2 = plant_file(&fx, "/r2.txt", FAKE8D_DATA);
     (void)f2;
 
-    void *wf = NULL;
-    ASSERT_EQ_U(nx_fs_open(&fx.root_slot, "/r1.txt", NX_FS_OPEN_READ, &wf),
-                NX_OK);
+    uint32_t wf = nx_fs_open(&fx.root_slot, "/r1.txt", NX_FS_OPEN_READ);
+    ASSERT(wf != 0);
 
     int before = f1->retain_count;
-    fd8_retain(&fx.fake_state, wf);       /* direct: file ptr is the fake node */
-    int after_direct = f1->retain_count;
-    nx_fs_retain(&fx.root_slot, wf);       /* wrapper */
-    int after_wrap = f1->retain_count;
+    nx_fs_retain(&fx.root_slot, wf);       /* first retain via wrapper */
+    int after1 = f1->retain_count;
+    nx_fs_retain(&fx.root_slot, wf);       /* second retain via wrapper */
+    int after2 = f1->retain_count;
 
-    ASSERT_EQ_U(after_direct - before, 1);
-    ASSERT_EQ_U(after_wrap - after_direct, 1);
+    ASSERT_EQ_U(after1 - before, 1);
+    ASSERT_EQ_U(after2 - after1, 1);
 
     nx_fs_close(&fx.root_slot, wf);
     fix8d_teardown(&fx);
@@ -624,15 +616,14 @@ TEST(fs_wrapper_retain_equiv_direct_retain)
 
 TEST(fs_wrapper_open_null_slot_returns_enoent)
 {
-    void *file = NULL;
-    int rc = nx_fs_open(NULL, "/x.txt", NX_FS_OPEN_READ, &file);
-    ASSERT_EQ_U(rc, NX_ENOENT);
+    uint32_t file = nx_fs_open(NULL, "/x.txt", NX_FS_OPEN_READ);
+    ASSERT_EQ_U(file, 0);
 }
 
 TEST(fs_wrapper_read_null_slot_returns_error)
 {
     char buf[8];
-    int64_t rc = nx_fs_read(NULL, (void *)1, buf, sizeof buf);
+    int64_t rc = nx_fs_read(NULL, (uint32_t)1, buf, sizeof buf);
     ASSERT(rc < 0);
 }
 

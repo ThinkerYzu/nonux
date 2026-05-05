@@ -22,20 +22,19 @@
     {
       "name": "open",
       "op_id": 1,
-      "doc": "Open `path` on the driver instance `self`.  `flags` is a bitmask\nof `NX_FS_OPEN_*`.  On success, `*out_file` is written with an\nopaque per-open state pointer and NX_OK is returned.\n\nReturns:\n  NX_OK      — *out_file holds the new file-state pointer.\n  NX_EINVAL  — NULL args / empty path / unknown flag bits.\n  NX_ENOENT  — path missing and CREATE not set.\n  NX_EPERM   — driver refuses the requested access mode.\n  NX_ENOMEM  — driver could not allocate per-open state.",
+      "doc": "Open `path` on the driver instance `self`.  `flags` is a bitmask\nof `NX_FS_OPEN_*`.  On success, returns a non-zero component-local\nopen-ID; the driver stores the per-open state in its own internal\ntable keyed by this ID.  Returns 0 on failure (path missing,\ntable full, or access refused).\n\nSlice 9b.1: replaces the pointer-out API.  `id` is 1-based (0 is\nthe invalid sentinel); the driver stores objects at index `id-1`\nin its opens[] pool.  Callers may use the same ID across any op\nunless the issuing component has been replaced (recomposition\ninvalidates all IDs for the old instance).",
       "params": [
         { "name": "path", "type": "string_in" },
-        { "name": "flags", "type": "u32" },
-        { "name": "out_file", "type": "opaque_self_handle", "direction": "out" }
+        { "name": "flags", "type": "u32" }
       ],
-      "returns": { "type": "int_status", "out_param": "out_file" }
+      "returns": { "type": "u32" }
     },
     {
       "name": "close",
       "op_id": 2,
-      "doc": "Release per-open state returned by `open`.  Idempotent against\nNULL.  After close, the `file` pointer is dead — passing it to\nany other op is a programmer error (driver may assert / trap /\nsilently corrupt state; well-behaved callers don't do it).\n\nSlice 7.6d.N.8 introduces refcounted per-open state (see\n`retain` below) so a `dup3(file_fd, ...)` + `close(file_fd)`\nsequence keeps the duplicated handle alive.  `close` becomes\n\"decrement the refcount; release when zero\".  Callers don't\nsee the refcount: pair every successful open / retain with\nexactly one close.",
+      "doc": "Release the per-open state at `id`.  Decrements the refcount;\nfrees the slot when it reaches zero.  `id == 0` is silently\nignored.  Callers must pair every successful open / retain with\nexactly one close.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" }
+        { "name": "id", "type": "u32" }
       ],
       "returns": { "type": "void" }
     },
@@ -44,16 +43,16 @@
       "op_id": 3,
       "doc": "Bump the per-open's reference count (slice 7.6d.N.8).  Used by\nthe syscall layer when the same per-open state is referenced\nfrom multiple handle slots (POSIX dup / dup2 / dup3 / fcntl\nF_DUPFD; future fork-FILE inheritance) — the retained\nreference must be paired with a matching `close`.\n\nDrivers that don't implement refcounting MAY leave this op\nNULL; the syscall layer falls back to \"no retain\" in that\ncase.  ramfs implements it as a refcount bump on its\nper-open struct.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" }
+        { "name": "id", "type": "u32" }
       ],
       "returns": { "type": "void" }
     },
     {
       "name": "read",
       "op_id": 4,
-      "doc": "Read up to `cap` bytes from `file` into `buf`, starting at the\nper-open cursor.  Advances the cursor by the number of bytes\nactually read.  `cap == 0` is permitted and returns 0.\n\nReturns:\n  >= 0       — bytes read (0 = end-of-file at current cursor).\n  NX_EINVAL  — NULL args (except `buf` when `cap == 0`).\n  NX_EPERM   — file was opened without NX_FS_OPEN_READ.",
+      "doc": "Read up to `cap` bytes from the open at `id` into `buf`, starting\nat the per-open cursor.  Advances the cursor by the number of\nbytes actually read.  `cap == 0` is permitted and returns 0.\n\nReturns:\n  >= 0       — bytes read (0 = end-of-file at current cursor).\n  NX_EINVAL  — bad id / NULL buf with cap > 0.\n  NX_EPERM   — file was opened without NX_FS_OPEN_READ.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "id", "type": "u32" },
         { "name": "buf", "type": "bytes_out", "cap": "cap", "direction": "out" },
         { "name": "cap", "type": "usize" }
       ],
@@ -62,9 +61,9 @@
     {
       "name": "write",
       "op_id": 5,
-      "doc": "Write `len` bytes from `buf` into `file` at the per-open cursor,\nextending the file if the cursor is at (or past) end-of-file.\nAdvances the cursor by the number of bytes actually written.\n`len == 0` is permitted and returns 0.\n\nReturns:\n  >= 0       — bytes written (may be < len if the backing store\n               filled; caller retries with the remaining tail).\n  NX_EINVAL  — NULL args (except `buf` when `len == 0`).\n  NX_EPERM   — file was opened without NX_FS_OPEN_WRITE.\n  NX_ENOMEM  — backing store exhausted before any bytes written.",
+      "doc": "Write `len` bytes from `buf` into the open at `id`, extending the\nfile if the cursor is past end-of-file.  `len == 0` returns 0.\n\nReturns:\n  >= 0       — bytes written.\n  NX_EINVAL  — bad id / NULL buf with len > 0.\n  NX_EPERM   — file was opened without NX_FS_OPEN_WRITE.\n  NX_ENOMEM  — backing store exhausted.",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "id", "type": "u32" },
         { "name": "buf", "type": "bytes_in", "len": "len" },
         { "name": "len", "type": "usize" }
       ],
@@ -73,9 +72,9 @@
     {
       "name": "seek",
       "op_id": 6,
-      "doc": "Reposition the per-open cursor (slice 6.4).  `whence` is one of\n`NX_FS_SEEK_SET` (absolute), `_CUR` (relative to current cursor),\nor `_END` (relative to current size).  The new position must\nland in `[0, size]` inclusive — past-EOF seeks return NX_EINVAL\n(no hole-filling in v1; callers write in sequence or SEEK_END).\n\nReturns the new absolute cursor position on success (≥ 0), or a\nnegative NX_E* on failure:\n  NX_EINVAL  — NULL args, unknown whence, or resulting position\n               outside [0, size].",
+      "doc": "Reposition the per-open cursor for the open at `id`.  `whence` is\none of `NX_FS_SEEK_SET` (absolute), `_CUR` (relative to current\ncursor), or `_END` (relative to current size).\n\nReturns the new absolute cursor position on success (≥ 0), or a\nnegative NX_E* on failure:\n  NX_EINVAL  — bad id, unknown whence, or position outside [0, size].",
       "params": [
-        { "name": "file", "type": "opaque_self_handle" },
+        { "name": "id", "type": "u32" },
         { "name": "offset", "type": "i64" },
         { "name": "whence", "type": "i32" }
       ],

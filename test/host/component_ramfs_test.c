@@ -137,14 +137,12 @@ TEST(ramfs_hierarchical_readdir_dedups_synthesised_dirs)
     void *self = ramfs_fixture_create();
     ASSERT_NOT_NULL(self);
 
-    void *h;
-    ASSERT_EQ_U(ramfs_fs_ops.open(self, "/bin/sh",
-                                  NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE, &h),
-                NX_OK);
+    uint32_t h;
+    h = ramfs_fs_ops.open(self, "/bin/sh", NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE);
+    ASSERT(h != 0);
     ramfs_fs_ops.close(self, h);
-    ASSERT_EQ_U(ramfs_fs_ops.open(self, "/bin/cat",
-                                  NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE, &h),
-                NX_OK);
+    h = ramfs_fs_ops.open(self, "/bin/cat", NX_FS_OPEN_WRITE | NX_FS_OPEN_CREATE);
+    ASSERT(h != 0);
     ramfs_fs_ops.close(self, h);
 
     /* /bin is a synthesised dir per stat. */
@@ -190,9 +188,9 @@ TEST(ramfs_open_on_directory_returns_eperm)
     ASSERT_NOT_NULL(self);
     ASSERT_EQ_U(ramfs_fs_ops.mkdir(self, "/d"), NX_OK);
 
-    void *f = NULL;
-    int rc = ramfs_fs_ops.open(self, "/d", NX_FS_OPEN_READ, &f);
-    ASSERT_EQ_U(rc, NX_EPERM);
+    /* Slice 9b.1: open on a directory returns 0 (failure). */
+    uint32_t f = ramfs_fs_ops.open(self, "/d", NX_FS_OPEN_READ);
+    ASSERT_EQ_U(f, 0);
 
     ramfs_fixture_destroy(self);
 }
@@ -236,15 +234,15 @@ TEST(ramfs_file_table_exhaustion_returns_enomem)
         path[0] = '/';
         path[1] = 'a' + i;
         path[2] = '\0';
-        void *f = NULL;
-        int rc = ramfs_fs_ops.open(self, path,
-                                   NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
-                                   NX_FS_OPEN_CREATE, &f);
-        if (rc == NX_OK) {
+        uint32_t f = ramfs_fs_ops.open(self, path,
+                                       NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
+                                       NX_FS_OPEN_CREATE);
+        if (f != 0) {
             created++;
             ramfs_fs_ops.close(self, f);
         } else {
-            ASSERT_EQ_U(rc, NX_ENOMEM);
+            /* table full — expected at some point */
+            break;
         }
     }
     /* At least one attempt past capacity must have hit NX_ENOMEM.  Upper
@@ -266,24 +264,22 @@ TEST(ramfs_open_slot_exhaustion_returns_enomem)
 
     /* Seed the file so subsequent opens don't burn the file-table
      * slot on each attempt. */
-    void *seed = NULL;
-    ASSERT_EQ_U(ramfs_fs_ops.open(self, "/f",
-                                  NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
-                                  NX_FS_OPEN_CREATE, &seed),
-                NX_OK);
+    uint32_t seed = ramfs_fs_ops.open(self, "/f",
+                                      NX_FS_OPEN_READ | NX_FS_OPEN_WRITE |
+                                      NX_FS_OPEN_CREATE);
+    ASSERT(seed != 0);
     ramfs_fs_ops.close(self, seed);  /* releases open slot but not file */
 
     enum { ATTEMPTS = 128 }; /* > RAMFS_MAX_OPEN (96 = 4*24 per the
                               * slice 7.6d.N.13 bump) */
-    void *opens[ATTEMPTS];
+    uint32_t opens[ATTEMPTS];
     unsigned n = 0;
     for (int i = 0; i < ATTEMPTS; i++) {
-        void *f = NULL;
-        int rc = ramfs_fs_ops.open(self, "/f", NX_FS_OPEN_READ, &f);
-        if (rc == NX_OK) {
+        uint32_t f = ramfs_fs_ops.open(self, "/f", NX_FS_OPEN_READ);
+        if (f != 0) {
             opens[n++] = f;
         } else {
-            ASSERT_EQ_U(rc, NX_ENOMEM);
+            /* table exhausted */
             break;
         }
     }
@@ -293,8 +289,8 @@ TEST(ramfs_open_slot_exhaustion_returns_enomem)
     for (unsigned i = 0; i < n; i++) ramfs_fs_ops.close(self, opens[i]);
 
     /* After closing every open, we should be able to open again. */
-    void *f2 = NULL;
-    ASSERT_EQ_U(ramfs_fs_ops.open(self, "/f", NX_FS_OPEN_READ, &f2), NX_OK);
+    uint32_t f2 = ramfs_fs_ops.open(self, "/f", NX_FS_OPEN_READ);
+    ASSERT(f2 != 0);
     ramfs_fs_ops.close(self, f2);
 
     ramfs_fixture_destroy(self);

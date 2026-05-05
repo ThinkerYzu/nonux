@@ -15,6 +15,17 @@
       "returns": { "type": "i64_count_or_status" }
     },
     {
+      "name": "read",
+      "op_id": 3,
+      "doc": "Read up to `cap` bytes from the device into `buf`.  Blocks until\nat least one byte is available (uart_pl011 yield-loops on the RX\nFIFO).  `id` is ignored for singleton devices; a future\nmulti-device scenario uses `id` to select the instance.\n\nReturns:\n  >= 0       — bytes read.\n  NX_EINVAL  — NULL buf with cap > 0.\n  NX_EIO     — device-level failure.",
+      "params": [
+        { "name": "id", "type": "u32" },
+        { "name": "buf", "type": "bytes_out", "cap": "cap", "direction": "out" },
+        { "name": "cap", "type": "usize" }
+      ],
+      "returns": { "type": "i64_count_or_status" }
+    },
+    {
       "name": "rx_byte",
       "op_id": 2,
       "context": "irq",
