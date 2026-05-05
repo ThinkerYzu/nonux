@@ -277,6 +277,24 @@ KTEST(el0_readdir_walks_root_and_emits_names_then_marker)
     }
     KASSERT(reached);
 
+    /* Drain: el0_rdr may still have in-flight IPC calls (each sys_readdir
+     * entry issues one slot_call_blocking).  ops->dequeue only removes
+     * the task from the run queue; a blocked task re-enters when its IPC
+     * reply arrives, causing ghost IPC traffic that starves el0_file.
+     * Wait until the debug_write counter has stabilised for 8 consecutive
+     * yields — that indicates el0_rdr has printed the final "[el0-rdr-ok]"
+     * marker and parked in its WFE loop with no further IPC pending. */
+    {
+        uint64_t prev = nx_syscall_debug_write_calls();
+        int stable = 0;
+        for (int j = 0; j < 4096 && stable < 8; j++) {
+            nx_task_yield();
+            uint64_t cur = nx_syscall_debug_write_calls();
+            stable = (cur == prev) ? stable + 1 : 0;
+            prev = cur;
+        }
+    }
+
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();
     ops->dequeue(self, g_readdir_el0_task);
