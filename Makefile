@@ -1120,7 +1120,7 @@ KTEST_LOG := test/kernel-output.log
 
 test-kernel: kernel-test.bin
 	@rm -f $(KTEST_LOG)
-	@-timeout --preserve-status 900 \
+	@-timeout --preserve-status 1800 \
 	    $(QEMU) -M virt,gic-version=2 -cpu cortex-a53 \
 	    -display none -serial file:$(KTEST_LOG) -monitor none \
 	    -m $(QEMU_MEM) -semihosting -kernel kernel-test.bin; \

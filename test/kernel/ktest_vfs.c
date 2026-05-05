@@ -89,13 +89,12 @@ KTEST(vfs_simple_create_write_read_roundtrip_on_bound_instance)
     /* Create /ktest_hello, write a 5-byte payload, close.  The file is
      * created in ramfs's static inode table; the same instance stays
      * around for subsequent ktest_vfs tests unless one explicitly cleans
-     * up (we don't — these tests are additive). */
-    void *w = 0;
-    KASSERT_EQ_U(vops->open(vself, "/ktest_hello",
+     * up (we don't — these tests are additive).
+     * Slice 9b.1: open returns a uint32_t id (0 = failure). */
+    uint32_t w = vops->open(vself, "/ktest_hello",
                             NX_VFS_OPEN_READ | NX_VFS_OPEN_WRITE |
-                            NX_VFS_OPEN_CREATE, &w),
-                 NX_OK);
-    KASSERT_NOT_NULL(w);
+                            NX_VFS_OPEN_CREATE);
+    KASSERT(w != 0);
 
     const char *payload = "world";
     int64_t wrote = vops->write(vself, w, payload, 5);
@@ -106,10 +105,8 @@ KTEST(vfs_simple_create_write_read_roundtrip_on_bound_instance)
      * proves (a) the create from the previous open stuck, (b) ramfs's
      * reopen path works, and (c) vfs_simple correctly forwards the
      * READ-only flag without demanding WRITE. */
-    void *r = 0;
-    KASSERT_EQ_U(vops->open(vself, "/ktest_hello",
-                            NX_VFS_OPEN_READ, &r),
-                 NX_OK);
+    uint32_t r = vops->open(vself, "/ktest_hello", NX_VFS_OPEN_READ);
+    KASSERT(r != 0);
 
     char buf[8] = {0};
     int64_t got = vops->read(vself, r, buf, sizeof buf);
@@ -127,10 +124,10 @@ KTEST(vfs_simple_relative_path_returns_einval)
     const struct nx_vfs_ops *vops = vs->active->descriptor->iface_ops;
     KASSERT_NOT_NULL(vops);
 
-    void *f = 0;
-    int rc = vops->open(vs->active->impl, "relative",
-                        NX_VFS_OPEN_READ | NX_VFS_OPEN_CREATE, &f);
-    KASSERT_EQ_U((uint64_t)rc, (uint64_t)NX_EINVAL);
+    /* Slice 9b.1: open returns 0 on failure (no out-pointer). */
+    uint32_t id = vops->open(vs->active->impl, "relative",
+                             NX_VFS_OPEN_READ | NX_VFS_OPEN_CREATE);
+    KASSERT_EQ_U(id, 0u);
 }
 
 /* ---------- EL0 file round-trip (slice 6.3) ------------------------- *
@@ -193,8 +190,11 @@ KTEST(el0_file_open_write_close_reopen_read_roundtrip)
 
     /* Yield until EL0 reaches the final debug_write.  The program
      * issues six SVCs before debug_write (open, write, close, open,
-     * read, close); counter rise means every one succeeded. */
-    const int max_yields = 256;
+     * read, close); each open internally issues two blocking IPC calls
+     * (stat + open), so the full round-trip is 8 slot_call_blocking
+     * calls.  Bumped from 256 → 4096 so the IPC round-trips have
+     * enough scheduler yield budget to complete. */
+    const int max_yields = 4096;
     int reached = 0;
     for (int i = 0; i < max_yields; i++) {
         if (nx_syscall_debug_write_calls() > 0) { reached = 1; break; }

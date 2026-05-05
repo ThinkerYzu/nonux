@@ -300,7 +300,7 @@ TEST(handle_alloc_with_slot_wires_slot_field)
     struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0xABCD1234u;
 
     nx_handle_t h = NX_HANDLE_INVALID;
-    ASSERT_EQ_U(nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE,
+    ASSERT_EQ_U(nx_handle_alloc_with_slot(&t, NX_HANDLE_CHANNEL,
                                           NX_RIGHT_READ, &dummy,
                                           fake_slot, &h), NX_OK);
     ASSERT(h != NX_HANDLE_INVALID);
@@ -331,7 +331,7 @@ TEST(handle_set_slot_wires_on_valid_handle)
 
     int dummy = 3;
     nx_handle_t h = NX_HANDLE_INVALID;
-    nx_handle_alloc(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, &h);
+    nx_handle_alloc(&t, NX_HANDLE_CHANNEL, NX_RIGHT_READ, &dummy, &h);
 
     struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0xDEADBEEFu;
     nx_handle_set_slot(&t, h, fake_slot);
@@ -349,7 +349,7 @@ TEST(handle_set_slot_noop_if_already_wired)
     nx_handle_t h = NX_HANDLE_INVALID;
     struct nx_slot *slot_a = (struct nx_slot *)(uintptr_t)0x1000u;
     struct nx_slot *slot_b = (struct nx_slot *)(uintptr_t)0x2000u;
-    nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, slot_a, &h);
+    nx_handle_alloc_with_slot(&t, NX_HANDLE_CHANNEL, NX_RIGHT_READ, &dummy, slot_a, &h);
     nx_handle_set_slot(&t, h, slot_b);  /* second call must be a no-op */
 
     size_t idx = (h & 0xFFu) - 1u;
@@ -364,7 +364,7 @@ TEST(handle_close_clears_slot_field)
     int dummy = 5;
     nx_handle_t h = NX_HANDLE_INVALID;
     struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0x3000u;
-    nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE, NX_RIGHT_READ, &dummy, fake_slot, &h);
+    nx_handle_alloc_with_slot(&t, NX_HANDLE_CHANNEL, NX_RIGHT_READ, &dummy, fake_slot, &h);
 
     size_t idx = (h & 0xFFu) - 1u;
     ASSERT_EQ_PTR(t.entries[idx].target, fake_slot);
@@ -381,7 +381,7 @@ TEST(handle_duplicate_propagates_slot)
     int dummy = 6;
     nx_handle_t src = NX_HANDLE_INVALID;
     struct nx_slot *fake_slot = (struct nx_slot *)(uintptr_t)0x4000u;
-    nx_handle_alloc_with_slot(&t, NX_HANDLE_FILE,
+    nx_handle_alloc_with_slot(&t, NX_HANDLE_CHANNEL,
                               NX_RIGHT_READ | NX_RIGHT_WRITE,
                               &dummy, fake_slot, &src);
 
@@ -421,9 +421,9 @@ TEST(handle_invalidate_for_slot_clears_matching_entries)
     struct nx_slot *other_slot = (struct nx_slot *)(uintptr_t)0x6000u;
 
     nx_handle_t h_file, h_file2, h_other;
-    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_FILE, NX_RIGHT_READ,
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
                               &file_obj, vfs_slot, &h_file);
-    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_FILE, NX_RIGHT_READ,
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
                               &file_obj, vfs_slot, &h_file2);
     nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
                               &other_obj, other_slot, &h_other);
@@ -451,7 +451,7 @@ TEST(handle_invalidate_for_slot_ignores_null_slot_entries)
     struct nx_slot *vfs_slot = (struct nx_slot *)(uintptr_t)0x7000u;
 
     nx_handle_t h_wired, h_immune;
-    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_FILE, NX_RIGHT_READ,
+    nx_handle_alloc_with_slot(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
                               &obj, vfs_slot, &h_wired);
     nx_handle_alloc(&p->handles, NX_HANDLE_CHANNEL, NX_RIGHT_READ,
                     &obj, &h_immune);  /* NULL slot — immune */

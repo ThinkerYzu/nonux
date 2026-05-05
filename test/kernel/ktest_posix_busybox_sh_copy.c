@@ -98,9 +98,8 @@ KTEST(posix_busybox_sh_copy_parent_forks_and_execs_busybox_sh_copy)
         const struct nx_vfs_ops *vops =
             (const struct nx_vfs_ops *)vs->active->descriptor->iface_ops;
         void *vself = vs->active->impl;
-        void *file = NULL;
-        int rc2 = vops->open(vself, "/tmp/copy", NX_VFS_OPEN_READ, &file);
-        KASSERT_EQ_U(rc2, NX_OK);
+        uint32_t file = vops->open(vself, "/tmp/copy", NX_VFS_OPEN_READ);
+        KASSERT(file != 0);
         char buf[32] = { 0 };
         int64_t n = vops->read(vself, file, buf, sizeof buf - 1);
         /* /banner is "hello from initramfs\n" — 21 bytes. */

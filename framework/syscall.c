@@ -173,6 +173,13 @@ static nx_status_t sys_debug_write(uint64_t a0, uint64_t a1,
     const char *buf = (const char *)(uintptr_t)a0;
     size_t      len = (size_t)a1;
     if (!buf && len > 0) return NX_EINVAL;
+    /* Safety cap: any legitimate debug write is a short marker string.
+     * A huge len (> 4096) indicates a bug (e.g. sys_read failure stored
+     * as a negative int64 then reinterpreted as size_t by the caller).
+     * Return EINVAL early so a misbehaving EL0 program can't spin the
+     * UART for the full QEMU timeout before the ktest runner diagnoses
+     * the failure. */
+    if (len > 4096u) return NX_EINVAL;
 
 #if !__STDC_HOSTED__
     for (size_t i = 0; i < len; i++)
@@ -265,7 +272,6 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
             free(object);
 #endif
         }
-        /* HANDLE_CONSOLE: legacy path — no-op, singleton object. */
     }
     return nx_handle_close(t, h);
 }
@@ -494,21 +500,18 @@ static int lookup_file_object(nx_handle_t h, uint32_t need_rights,
     void                *obj;
     int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
     if (rc != NX_OK) return rc;
-    /* Accept both legacy FILE handles and new RESOURCE handles. */
-    if (type != NX_HANDLE_FILE && type != NX_HANDLE_RESOURCE) return NX_EINVAL;
+    if (type != NX_HANDLE_RESOURCE) return NX_EINVAL;
     if ((rights & need_rights) != need_rights) return NX_EPERM;
     *out = obj;
     return NX_OK;
 }
 
 /*
- * Handle-type-polymorphic `read` / `write`.  Slice 6.3 introduced
- * these for HANDLE_FILE; slice 7.5 teaches them to dispatch through
- * the channel layer when the handle is HANDLE_CHANNEL (which is
- * what `sys_pipe` allocates for both pipe ends).  POSIX conflates
- * these into one `read` / `write` pair — matching that expectation
- * means a `posix_read(pipe_fd)` wrapper doesn't need to know which
- * kernel primitive is under the fd.
+ * Handle-type-polymorphic `read` / `write`.  Dispatches via RESOURCE
+ * target slots (file and char-device) or directly through the CHANNEL
+ * layer for pipes.  POSIX conflates these into one `read` / `write`
+ * pair so a POSIX wrapper doesn't need to know which kernel primitive
+ * is under the fd.
  */
 /* Slice 7.8c — predicate for the CHANNEL arm's `nx_waitq_wait_unless`.
  * Returns non-zero when nx_channel_recv would not return NX_EAGAIN
@@ -563,25 +566,6 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     void               *obj    = cur_entry->object;  /* used by CHANNEL arm */
 
     if ((rights & NX_RIGHT_READ) != NX_RIGHT_READ) return NX_EPERM;
-
-    if (type == NX_HANDLE_CONSOLE) {
-        /* Slice 7.6d.N.final.a — UART RX wired.  nx_console_read
-         * blocks (yield-loop) until at least one byte is available,
-         * then drains up to `cap` bytes.  Copy through a kernel
-         * staging buffer because nx_console_read may sleep on yield
-         * and we don't want to hold a user pointer across context
-         * switches (TTBR0 stays this process's, but the user buffer
-         * could be in a page that becomes invalid via a parallel
-         * brk/mmap rearrangement in a future SMP build).  Bounded by
-         * NX_FILE_IO_MAX = 256 — same as the FILE arm. */
-        if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
-        uint8_t staging[NX_FILE_IO_MAX];
-        int got = nx_console_read(staging, cap);
-        if (got <= 0) return (nx_status_t)got;
-        rc = copy_to_user(buf, staging, (size_t)got);
-        if (rc != NX_OK) return rc;
-        return (nx_status_t)got;
-    }
 
     if (type == NX_HANDLE_CHANNEL) {
         /* Pipe read — bounded by the channel's 256-byte message size,
@@ -643,20 +627,7 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
         return (nx_status_t)got;
     }
 
-    if (type != NX_HANDLE_FILE) return NX_EINVAL;
-
-    if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
-    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-    if (!vfs_slot) return NX_ENOENT;
-
-    uint32_t vfs_id = (uint32_t)(uintptr_t)obj;
-    uint8_t staging[NX_FILE_IO_MAX];
-    int64_t got = nx_vfs_read(vfs_slot, vfs_id, staging, cap);
-    if (got < 0) return (nx_status_t)got;
-
-    rc = copy_to_user(buf, staging, (size_t)got);
-    if (rc != NX_OK) return rc;
-    return (nx_status_t)got;
+    return NX_EINVAL;
 }
 
 static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
@@ -675,19 +646,6 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = nx_handle_lookup(t, h, &type, &rights, &obj);
     if (rc != NX_OK) return rc;
     if ((rights & NX_RIGHT_WRITE) != NX_RIGHT_WRITE) return NX_EPERM;
-
-    if (type == NX_HANDLE_CONSOLE) {
-        /* Slice 7.6d.N.6b — STDOUT/STDERR routed through the pre-
-         * installed CONSOLE handles at slots 0/1.  Per-byte UART
-         * write inside nx_console_write; copy_from_user the payload
-         * into a kernel staging buffer first so we don't ask the
-         * UART to dereference user pointers across a TTBR0 flip. */
-        if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
-        uint8_t staging[NX_FILE_IO_MAX];
-        rc = copy_from_user(staging, buf, len);
-        if (rc != NX_OK) return rc;
-        return (nx_status_t)nx_console_write(staging, len);
-    }
 
     if (type == NX_HANDLE_CHANNEL) {
         if (len > NX_CHANNEL_MSG_MAX) len = NX_CHANNEL_MSG_MAX;
@@ -716,18 +674,7 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
         }
     }
 
-    if (type != NX_HANDLE_FILE) return NX_EINVAL;
-
-    if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
-    uint8_t staging[NX_FILE_IO_MAX];
-    rc = copy_from_user(staging, buf, len);
-    if (rc != NX_OK) return rc;
-
-    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-    if (!vfs_slot) return NX_ENOENT;
-
-    uint32_t vfs_id = (uint32_t)(uintptr_t)obj;
-    return (nx_status_t)nx_vfs_write(vfs_slot, vfs_id, staging, len);
+    return NX_EINVAL;
 }
 
 /*
@@ -750,9 +697,8 @@ static nx_status_t sys_seek(uint64_t a0, uint64_t a1, uint64_t a2,
     int rc = lookup_file_object(h, NX_RIGHT_SEEK, &object);
     if (rc != NX_OK) return rc;
 
-    /* For RESOURCE handles, target IS the vfs slot; for legacy FILE handles,
-     * fall back to nx_slot_lookup.  object (via union) encodes the id
-     * in both cases as (uint32_t)(uintptr_t)object. */
+    /* target IS the vfs slot; fall back to nx_slot_lookup when NULL.
+     * object (via union) encodes the RESOURCE id as (uint32_t)(uintptr_t)object. */
     const struct nx_handle_entry *se = nx_handle_entry_get(
         nx_syscall_current_table(), h);
     struct nx_slot *vfs_slot = (se && se->target) ? se->target
@@ -906,14 +852,6 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_handle_table *parent_tbl = &caller->process->handles;
     struct nx_handle_table *child_tbl  = &child->handles;
 
-    /* Resolve the vfs slot once for FILE handle inheritance.  Lookup
-     * may fail if there's no vfs configured (kernel-process bootstrap
-     * before slot bind) — we treat that as "no FILE handles to
-     * inherit" and skip the FILE branch.  CHANNEL inheritance never
-     * needs the vfs. */
-    /* Resolve the vfs slot once for FILE handle inheritance. */
-    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-
     struct nx_slot *char_slot_fk = nx_slot_lookup("char_device");
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         const struct nx_handle_entry *src = &parent_tbl->entries[i];
@@ -922,12 +860,6 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
         if (src->type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_retain(src->object);
             retain_ok = true;
-        } else if (src->type == NX_HANDLE_FILE) {
-            /* Legacy FILE handles — extract id via union bridge. */
-            if (vfs_slot) {
-                nx_vfs_retain(vfs_slot, (uint32_t)(uintptr_t)src->object);
-                retain_ok = true;
-            }
         } else if (src->type == NX_HANDLE_RESOURCE) {
             /* Slice 9b.2: RESOURCE handles.  Console (id=0 or target==
              * char_slot) are re-installed by nx_process_create — skip.
@@ -2262,19 +2194,10 @@ static nx_status_t sys_ppoll(uint64_t a0, uint64_t a1, uint64_t a2,
         }
 
         switch (type) {
-        case NX_HANDLE_CONSOLE:
-            states[i].kind = PPOLL_KIND_CONSOLE;
-            states[i].obj  = obj;
-            nx_console_register_pollset(&listeners[i]);
-            break;
         case NX_HANDLE_CHANNEL:
             states[i].kind = PPOLL_KIND_CHANNEL;
             states[i].obj  = obj;
             nx_channel_endpoint_register_pollset(obj, &listeners[i]);
-            break;
-        case NX_HANDLE_FILE:
-            states[i].kind = PPOLL_KIND_FILE;
-            states[i].obj  = obj;
             break;
         case NX_HANDLE_RESOURCE: {
             /* Slice 9b.2: dispatch by target, same logic as sys_read. */
@@ -2444,12 +2367,6 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     if (e->type != NX_HANDLE_INVALID) {
         if (e->type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_close(e->object);
-        } else if (e->type == NX_HANDLE_FILE) {
-            struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-            if (vfs_slot) {
-                uint32_t fid = (uint32_t)(uintptr_t)e->object;
-                nx_vfs_close(vfs_slot, fid);
-            }
         } else if (e->type == NX_HANDLE_RESOURCE) {
             struct nx_slot *char_slot_d = nx_slot_lookup("char_device");
             if (e->target && e->target != char_slot_d)
@@ -2469,12 +2386,6 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
      * handles (slice 7.6d.N.8): the per-open lives in two slots. */
     if (src_type == NX_HANDLE_CHANNEL) {
         nx_channel_endpoint_retain(src_object);
-    } else if (src_type == NX_HANDLE_FILE) {
-        struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-        if (vfs_slot) {
-            uint32_t fid = (uint32_t)(uintptr_t)src_object;
-            nx_vfs_retain(vfs_slot, fid);
-        }
     } else if (src_type == NX_HANDLE_RESOURCE && src_entry) {
         struct nx_slot *char_slot_d = nx_slot_lookup("char_device");
         if (src_entry->target && src_entry->target != char_slot_d && src_entry->id > 0)
@@ -2596,12 +2507,6 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
         /* Retain the underlying object before installing the copy. */
         if (src_type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_retain(src_object);
-        } else if (src_type == NX_HANDLE_FILE) {
-            struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
-            if (vfs_slot) {
-                uint32_t fid = (uint32_t)(uintptr_t)src_object;
-                nx_vfs_retain(vfs_slot, fid);
-            }
         } else if (src_type == NX_HANDLE_RESOURCE && fcntl_src) {
             struct nx_slot *char_slot_f = nx_slot_lookup("char_device");
             if (fcntl_src->target && fcntl_src->target != char_slot_f
@@ -2833,14 +2738,12 @@ static nx_status_t sys_ioctl(uint64_t a0, uint64_t a1, uint64_t a2,
         rc = nx_handle_lookup(t, h, &type, &rights, &obj);
         if (rc != NX_OK) return rc;
     }
-    /* Accept legacy CONSOLE handles and new RESOURCE console handles. */
-    if (type == NX_HANDLE_RESOURCE) {
+    if (type != NX_HANDLE_RESOURCE) return LINUX_ENOTTY;
+    {
         const struct nx_handle_entry *ie =
             (h == 0) ? &t->entries[2] : nx_handle_entry_get(t, h);
         struct nx_slot *char_slot_i = nx_slot_lookup("char_device");
         if (!ie || ie->target != char_slot_i) return LINUX_ENOTTY;
-    } else if (type != NX_HANDLE_CONSOLE) {
-        return LINUX_ENOTTY;
     }
 
     switch (cmd) {

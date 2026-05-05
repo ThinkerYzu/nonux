@@ -111,10 +111,8 @@ KTEST(procfs_open_pid0_stat_renders_kernel_R_0_prefix)
      * stat line for pid 0 → vfs->read returns it.  The prefix is
      * deterministic (kernel pid 0 is ACTIVE, parent_pid 0). */
     PROCFS_VOPS_INIT(vops, vself);
-    void *file = NULL;
-    int rc = vops->open(vself, "/proc/0/stat", NX_VFS_OPEN_READ, &file);
-    KASSERT_EQ_U(rc, NX_OK);
-    KASSERT(file != NULL);
+    uint32_t file = vops->open(vself, "/proc/0/stat", NX_VFS_OPEN_READ);
+    KASSERT(file != 0);
 
     char buf[128];
     int64_t got = vops->read(vself, file, buf, sizeof buf - 1);

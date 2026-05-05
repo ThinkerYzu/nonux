@@ -103,9 +103,8 @@ KTEST(posix_busybox_sh_append_parent_forks_and_execs_busybox_sh_append)
         const struct nx_vfs_ops *vops =
             (const struct nx_vfs_ops *)vs->active->descriptor->iface_ops;
         void *vself = vs->active->impl;
-        void *file = NULL;
-        int rc2 = vops->open(vself, "/tmp/ap", NX_VFS_OPEN_READ, &file);
-        KASSERT_EQ_U(rc2, NX_OK);
+        uint32_t file = vops->open(vself, "/tmp/ap", NX_VFS_OPEN_READ);
+        KASSERT(file != 0);
         char buf[8] = { 0 };
         int64_t n = vops->read(vself, file, buf, sizeof buf - 1);
         KASSERT_EQ_U((int)n, 4);

@@ -45,10 +45,9 @@ KTEST(initramfs_seed_makes_banner_readable_through_vfs)
     void *vself = vs->active->impl;
     KASSERT_NOT_NULL(vops);
 
-    void *file = NULL;
-    int rc = vops->open(vself, "/banner", NX_VFS_OPEN_READ, &file);
-    KASSERT_EQ_U(rc, NX_OK);
-    KASSERT_NOT_NULL(file);
+    /* Slice 9b.1: open returns uint32_t id (0 = failure). */
+    uint32_t file = vops->open(vself, "/banner", NX_VFS_OPEN_READ);
+    KASSERT(file != 0);
 
     char buf[64] = { 0 };
     int64_t n = vops->read(vself, file, buf, sizeof buf - 1);
@@ -70,9 +69,9 @@ KTEST(initramfs_seed_includes_init_with_elf_magic)
         (const struct nx_vfs_ops *)vs->active->descriptor->iface_ops;
     void *vself = vs->active->impl;
 
-    void *file = NULL;
-    int rc = vops->open(vself, "/init", NX_VFS_OPEN_READ, &file);
-    KASSERT_EQ_U(rc, NX_OK);
+    /* Slice 9b.1: open returns uint32_t id (0 = failure). */
+    uint32_t file = vops->open(vself, "/init", NX_VFS_OPEN_READ);
+    KASSERT(file != 0);
 
     uint8_t hdr[4] = { 0 };
     int64_t n = vops->read(vself, file, hdr, sizeof hdr);

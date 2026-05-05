@@ -406,57 +406,6 @@ TEST(sys_write_on_stale_handle_returns_enoent)
     fixture_teardown(&fx);
 }
 
-TEST(sys_write_to_console_handle_routes_through_nx_console_write)
-{
-    /* Slice 7.6d.N.6b replaced the magic-fd-fallback hack with proper
-     * per-process CONSOLE handles pre-installed at slots 0/1/2 by
-     * `nx_process_create`.  This host test installs CONSOLE handles
-     * directly in the kernel process's table (the host syscall layer
-     * uses g_kernel_process when no task is current) and checks that
-     * NX_SYS_WRITE to fd 1 / fd 2 dispatches through nx_console_write,
-     * which on the host build returns the byte count without touching
-     * a UART (there is none).  Programs that allocate fd 1/2 to
-     * something else (e.g. via dup3 over the console) get the regular
-     * type-keyed dispatch — covered by the pipe roundtrip ktest. */
-    extern int g_nx_console;
-    struct fixture fx;
-    fixture_setup(&fx);
-    struct trap_frame_host tf;
-
-    /* Pre-install three CONSOLE entries in the kernel process's table
-     * so fd 1 / fd 2 round-trip through the regular handle dispatch.
-     * Production code does this in nx_process_create; the host syscall
-     * fixture skips that path so we install manually here.  Zero the
-     * table struct directly to also reset slot generations — across
-     * tests the kernel process's slot 0/1/2 generations have been
-     * bumped by prior test sweeps, so `nx_handle_table_init` (which
-     * preserves generation) would yield encoded values like 1025
-     * instead of 1.  We don't assert the literal encoded values; the
-     * write-via-fd-1/2 dispatch is what we're validating. */
-    struct nx_handle_table *t = nx_syscall_current_table();
-    memset(t, 0, sizeof *t);
-    nx_handle_t h0, h1, h2;
-    ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_CONSOLE, NX_RIGHT_WRITE,
-                                &g_nx_console, &h0), NX_OK);
-    ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_CONSOLE, NX_RIGHT_WRITE,
-                                &g_nx_console, &h1), NX_OK);
-    ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_CONSOLE, NX_RIGHT_READ,
-                                &g_nx_console, &h2), NX_OK);
-    ASSERT_EQ_U(h0, 1);  /* slot 0 → STDOUT_FILENO */
-    ASSERT_EQ_U(h1, 2);  /* slot 1 → STDERR_FILENO */
-    ASSERT_EQ_U(h2, 3);  /* slot 2 → STDIN_FILENO via h==0 */
-
-    int64_t rc = dispatch(&tf, NX_SYS_WRITE, (uint64_t)1,
-                          (uint64_t)(uintptr_t)"hi", 2);
-    ASSERT_EQ_U((uint64_t)rc, 2);
-
-    rc = dispatch(&tf, NX_SYS_WRITE, (uint64_t)2,
-                  (uint64_t)(uintptr_t)"err", 3);
-    ASSERT_EQ_U((uint64_t)rc, 3);
-
-    fixture_teardown(&fx);
-}
-
 /*
  * Slice 7.6d.N.final.a — sys_ioctl on a CONSOLE handle accepts the
  * five cmds busybox / musl issue against stdin/stdout and returns
@@ -465,18 +414,18 @@ TEST(sys_write_to_console_handle_routes_through_nx_console_write)
  */
 TEST(sys_ioctl_console_termios_stubs_succeed)
 {
-    extern int g_nx_console;
     struct fixture fx;
     fixture_setup(&fx);
     struct trap_frame_host tf;
 
-    /* Pre-install a CONSOLE handle at slot 0 / encoded fd 1 (stdout
-     * shape).  Production sets up slots 0/1/2 in nx_process_create. */
+    /* Pre-install a RESOURCE console handle at slot 0 / encoded fd 1
+     * (stdout shape).  target=NULL matches nx_slot_lookup("char_device")
+     * in host builds where no char_device slot is registered.
+     * Production sets up slots 0/1/2 in nx_process_create. */
     struct nx_handle_table *t = nx_syscall_current_table();
     memset(t, 0, sizeof *t);
     nx_handle_t h0;
-    ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_CONSOLE, NX_RIGHT_WRITE,
-                                &g_nx_console, &h0), NX_OK);
+    ASSERT_EQ_U(nx_handle_alloc_resource(t, NX_RIGHT_WRITE, 0, NULL, &h0), NX_OK);
     ASSERT_EQ_U(h0, 1);
 
     uint8_t termios_buf[64] = {0};
@@ -745,11 +694,11 @@ TEST(sys_seek_no_seek_right_returns_eperm)
                                     NX_FS_OPEN_CREATE);
     ASSERT(fid != 0);
 
-    /* Alloc a HANDLE_FILE with only READ (no SEEK). */
+    /* Alloc a RESOURCE handle with only READ (no SEEK). */
     struct nx_handle_table *t = nx_syscall_current_table();
     nx_handle_t h;
-    ASSERT_EQ_U(nx_handle_alloc(t, NX_HANDLE_FILE, NX_RIGHT_READ,
-                                (void *)(uintptr_t)fid, &h), NX_OK);
+    ASSERT_EQ_U(nx_handle_alloc_resource(t, NX_RIGHT_READ, fid,
+                                         &fx.vfs_slot, &h), NX_OK);
 
     int64_t rc = dispatch(&tf, NX_SYS_SEEK, (uint64_t)h, 0,
                           NX_VFS_SEEK_SET);

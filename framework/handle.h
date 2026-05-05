@@ -59,9 +59,7 @@ enum nx_handle_type {
     NX_HANDLE_PROCESS,        /* process (slice 5.5) */
     NX_HANDLE_THREAD,         /* thread */
     NX_HANDLE_IRQ,            /* interrupt source */
-    NX_HANDLE_FILE,           /* file via VFS — superseded by RESOURCE (9b.4) */
     NX_HANDLE_DIR,            /* directory cursor (slice 7.6d.N.5) */
-    NX_HANDLE_CONSOLE,        /* UART console — superseded by RESOURCE (9b.4) */
     NX_HANDLE_RESOURCE,       /* slice 9b.2: component-owned resource;
                                  entry holds { id, target } instead of object.
                                  Pre-installed at slots 0/1/2 for console
