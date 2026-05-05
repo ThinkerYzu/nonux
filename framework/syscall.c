@@ -9,6 +9,7 @@
 #include "framework/registry.h"
 #include "framework/component.h"
 #include "framework/vfs_call.h"
+#include "framework/char_device_call.h"
 #include "interfaces/fs.h"
 #include "interfaces/vfs.h"
 
@@ -620,32 +621,26 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 
     if (type == NX_HANDLE_RESOURCE) {
-        /* Slice 9b.2: dispatch via entry->target.  Console target
-         * (char_device slot or NULL on host): delegate to nx_console_read.
-         * VFS target: delegate to nx_vfs_read. */
+        /* Slice 9b.3: route uniformly through entry->target via
+         * nx_slot_call_blocking.  Console target → nx_char_device_read;
+         * VFS target → nx_vfs_read.  No direct nx_console_read call. */
         struct nx_slot *char_slot = nx_slot_lookup("char_device");
-        if (cur_entry->target == char_slot) {
-            /* Console read — same path as HANDLE_CONSOLE above. */
-            if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
-            uint8_t staging[NX_FILE_IO_MAX];
-            int got = nx_console_read(staging, cap);
+        struct nx_slot *target    = cur_entry->target;
+        if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
+        uint8_t staging[NX_FILE_IO_MAX];
+        int64_t got;
+        if (target == char_slot) {
+            got = nx_char_device_read(target, cur_entry->id, staging, cap);
             if (got <= 0) return (nx_status_t)got;
-            rc = copy_to_user(buf, staging, (size_t)got);
-            if (rc != NX_OK) return rc;
-            return (nx_status_t)got;
         } else {
-            /* VFS file read. */
-            if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
-            struct nx_slot *vfs = cur_entry->target
-                                  ? cur_entry->target : nx_slot_lookup("vfs");
-            if (!vfs) return NX_ENOENT;
-            uint8_t staging[NX_FILE_IO_MAX];
-            int64_t got = nx_vfs_read(vfs, cur_entry->id, staging, cap);
+            if (!target) target = nx_slot_lookup("vfs");
+            if (!target) return NX_ENOENT;
+            got = nx_vfs_read(target, cur_entry->id, staging, cap);
             if (got < 0) return (nx_status_t)got;
-            rc = copy_to_user(buf, staging, (size_t)got);
-            if (rc != NX_OK) return rc;
-            return (nx_status_t)got;
         }
+        rc = copy_to_user(buf, staging, (size_t)got);
+        if (rc != NX_OK) return rc;
+        return (nx_status_t)got;
     }
 
     if (type != NX_HANDLE_FILE) return NX_EINVAL;
@@ -703,21 +698,18 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
     }
 
     if (type == NX_HANDLE_RESOURCE) {
-        /* Slice 9b.2: dispatch via target (same pattern as sys_read). */
+        /* Slice 9b.3: route via entry->target through slot_call_blocking.
+         * Console target → nx_char_device_write; VFS target → nx_vfs_write. */
         const struct nx_handle_entry *res = nx_handle_entry_get(t, h);
         if (!res) return NX_ENOENT;
         struct nx_slot *char_slot = nx_slot_lookup("char_device");
+        if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
+        uint8_t staging[NX_FILE_IO_MAX];
+        rc = copy_from_user(staging, buf, len);
+        if (rc != NX_OK) return rc;
         if (res->target == char_slot) {
-            if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
-            uint8_t staging[NX_FILE_IO_MAX];
-            rc = copy_from_user(staging, buf, len);
-            if (rc != NX_OK) return rc;
-            return (nx_status_t)nx_console_write(staging, len);
+            return (nx_status_t)nx_char_device_write(res->target, staging, len);
         } else {
-            if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
-            uint8_t staging[NX_FILE_IO_MAX];
-            rc = copy_from_user(staging, buf, len);
-            if (rc != NX_OK) return rc;
             struct nx_slot *vfs = res->target ? res->target : nx_slot_lookup("vfs");
             if (!vfs) return NX_ENOENT;
             return (nx_status_t)nx_vfs_write(vfs, res->id, staging, len);
@@ -931,9 +923,9 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
             nx_channel_endpoint_retain(src->object);
             retain_ok = true;
         } else if (src->type == NX_HANDLE_FILE) {
-            /* Legacy FILE handles — use object-cast-as-id bridge. */
+            /* Legacy FILE handles — extract id via union bridge. */
             if (vfs_slot) {
-                nx_vfs_retain(vfs_slot, src->object);
+                nx_vfs_retain(vfs_slot, (uint32_t)(uintptr_t)src->object);
                 retain_ok = true;
             }
         } else if (src->type == NX_HANDLE_RESOURCE) {
@@ -1239,9 +1231,8 @@ static nx_status_t sys_exec(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_ENOENT;
 
-    void *file = NULL;
-    rc = nx_vfs_open(vfs_slot, kpath, NX_VFS_OPEN_READ, &file);
-    if (rc != NX_OK) return rc;
+    uint32_t file = nx_vfs_open(vfs_slot, kpath, NX_VFS_OPEN_READ);
+    if (file == 0) return NX_ENOENT;
 
     /* 3. Slurp file contents. */
     uint8_t *kbuf = malloc(SYS_EXEC_MAX_FILE);

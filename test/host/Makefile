@@ -63,6 +63,7 @@ SRCS += ../../core/pmm/pmm.c \
         ../../framework/slot_call.c \
         ../../framework/vfs_call.c \
         ../../framework/fs_call.c \
+        ../../framework/char_device_call.c \
         ../../framework/hook.c \
         ../../framework/dispatcher.c \
         ../../framework/handle.c \

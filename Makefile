@@ -43,6 +43,7 @@ FW_C     := framework/registry.c \
             framework/slot_call.c \
             framework/vfs_call.c \
             framework/fs_call.c \
+            framework/char_device_call.c \
             framework/recompose.c \
             framework/config.c \
             framework/dispatcher.c \
@@ -248,7 +249,8 @@ KTEST_C       := test/kernel/ktest_main.c \
                  test/kernel/ktest_recompose.c \
                  test/kernel/ktest_config.c \
                  test/kernel/ktest_conn_mode.c \
-                 test/kernel/ktest_live_swap.c
+                 test/kernel/ktest_live_swap.c \
+                 test/kernel/ktest_9b_3.c
 
 # EL0 test programs assembled into kernel-test.bin's .rodata — each
 # is memcpy'd into the MMU's user window by its matching ktest before
