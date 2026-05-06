@@ -136,7 +136,7 @@ struct nx_process *nx_process_create(const char *name)
      * nx_slot_lookup returns NULL on host builds where the char_device
      * slot is absent; target=NULL is accepted by nx_handle_alloc_resource.
      */
-    struct nx_slot *char_slot = nx_slot_lookup("char_device");
+    struct nx_slot *char_slot = nx_slot_lookup("char_device.serial");
     nx_handle_t h0, h1, h2;
     int rc0 = nx_handle_alloc_resource(&p->handles, NX_RIGHT_WRITE, 0,
                                        char_slot, &h0);

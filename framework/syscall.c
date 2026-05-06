@@ -261,7 +261,7 @@ static nx_status_t sys_handle_close(uint64_t a0, uint64_t a1,
             /* Slice 9b.2: route close to the owning component via target. */
             const struct nx_handle_entry *res = nx_handle_entry_get(t, h);
             if (res) {
-                struct nx_slot *char_slot = nx_slot_lookup("char_device");
+                struct nx_slot *char_slot = nx_slot_lookup("char_device.serial");
                 if (res->target && res->target != char_slot)
                     nx_vfs_close(res->target, res->id);
                 /* console (target==char_slot or NULL): singleton, no close op */
@@ -608,7 +608,7 @@ static nx_status_t sys_read(uint64_t a0, uint64_t a1, uint64_t a2,
         /* Slice 9b.3: route uniformly through entry->target via
          * nx_slot_call_blocking.  Console target → nx_char_device_read;
          * VFS target → nx_vfs_read.  No direct nx_console_read call. */
-        struct nx_slot *char_slot = nx_slot_lookup("char_device");
+        struct nx_slot *char_slot = nx_slot_lookup("char_device.serial");
         struct nx_slot *target    = cur_entry->target;
         if (cap > NX_FILE_IO_MAX) cap = NX_FILE_IO_MAX;
         uint8_t staging[NX_FILE_IO_MAX];
@@ -660,7 +660,7 @@ static nx_status_t sys_write(uint64_t a0, uint64_t a1, uint64_t a2,
          * Console target → nx_char_device_write; VFS target → nx_vfs_write. */
         const struct nx_handle_entry *res = nx_handle_entry_get(t, h);
         if (!res) return NX_ENOENT;
-        struct nx_slot *char_slot = nx_slot_lookup("char_device");
+        struct nx_slot *char_slot = nx_slot_lookup("char_device.serial");
         if (len > NX_FILE_IO_MAX) len = NX_FILE_IO_MAX;
         uint8_t staging[NX_FILE_IO_MAX];
         rc = copy_from_user(staging, buf, len);
@@ -852,7 +852,7 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
     struct nx_handle_table *parent_tbl = &caller->process->handles;
     struct nx_handle_table *child_tbl  = &child->handles;
 
-    struct nx_slot *char_slot_fk = nx_slot_lookup("char_device");
+    struct nx_slot *char_slot_fk = nx_slot_lookup("char_device.serial");
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         const struct nx_handle_entry *src = &parent_tbl->entries[i];
         if (src->type == NX_HANDLE_INVALID) continue;
@@ -2203,7 +2203,7 @@ static nx_status_t sys_ppoll(uint64_t a0, uint64_t a1, uint64_t a2,
             /* Slice 9b.2: dispatch by target, same logic as sys_read. */
             const struct nx_handle_entry *re =
                 (h == 0) ? &t->entries[2] : nx_handle_entry_get(t, h);
-            struct nx_slot *char_slot_p = nx_slot_lookup("char_device");
+            struct nx_slot *char_slot_p = nx_slot_lookup("char_device.serial");
             if (re && re->target == char_slot_p) {
                 states[i].kind = PPOLL_KIND_CONSOLE;
                 states[i].obj  = obj;
@@ -2368,7 +2368,7 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
         if (e->type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_close(e->object);
         } else if (e->type == NX_HANDLE_RESOURCE) {
-            struct nx_slot *char_slot_d = nx_slot_lookup("char_device");
+            struct nx_slot *char_slot_d = nx_slot_lookup("char_device.serial");
             if (e->target && e->target != char_slot_d)
                 nx_vfs_close(e->target, e->id);
         } else if (e->type == NX_HANDLE_DIR) {
@@ -2387,7 +2387,7 @@ static nx_status_t sys_dup3(uint64_t a0, uint64_t a1, uint64_t a2,
     if (src_type == NX_HANDLE_CHANNEL) {
         nx_channel_endpoint_retain(src_object);
     } else if (src_type == NX_HANDLE_RESOURCE && src_entry) {
-        struct nx_slot *char_slot_d = nx_slot_lookup("char_device");
+        struct nx_slot *char_slot_d = nx_slot_lookup("char_device.serial");
         if (src_entry->target && src_entry->target != char_slot_d && src_entry->id > 0)
             nx_vfs_retain(src_entry->target, src_entry->id);
     }
@@ -2508,7 +2508,7 @@ static nx_status_t sys_fcntl(uint64_t a0, uint64_t a1, uint64_t a2,
         if (src_type == NX_HANDLE_CHANNEL) {
             nx_channel_endpoint_retain(src_object);
         } else if (src_type == NX_HANDLE_RESOURCE && fcntl_src) {
-            struct nx_slot *char_slot_f = nx_slot_lookup("char_device");
+            struct nx_slot *char_slot_f = nx_slot_lookup("char_device.serial");
             if (fcntl_src->target && fcntl_src->target != char_slot_f
                 && fcntl_src->id > 0)
                 nx_vfs_retain(fcntl_src->target, fcntl_src->id);
@@ -2742,7 +2742,7 @@ static nx_status_t sys_ioctl(uint64_t a0, uint64_t a1, uint64_t a2,
     {
         const struct nx_handle_entry *ie =
             (h == 0) ? &t->entries[2] : nx_handle_entry_get(t, h);
-        struct nx_slot *char_slot_i = nx_slot_lookup("char_device");
+        struct nx_slot *char_slot_i = nx_slot_lookup("char_device.serial");
         if (!ie || ie->target != char_slot_i) return LINUX_ENOTTY;
     }
 

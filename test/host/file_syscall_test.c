@@ -419,7 +419,7 @@ TEST(sys_ioctl_console_termios_stubs_succeed)
     struct trap_frame_host tf;
 
     /* Pre-install a RESOURCE console handle at slot 0 / encoded fd 1
-     * (stdout shape).  target=NULL matches nx_slot_lookup("char_device")
+     * (stdout shape).  target=NULL matches nx_slot_lookup("char_device.serial")
      * in host builds where no char_device slot is registered.
      * Production sets up slots 0/1/2 in nx_process_create. */
     struct nx_handle_table *t = nx_syscall_current_table();

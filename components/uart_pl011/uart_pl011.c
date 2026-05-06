@@ -37,13 +37,11 @@ static int64_t uart_pl011_write(void *self, const void *buf, size_t len)
 {
     (void)self;
 #if !__STDC_HOSTED__
-    const char *p = buf;
-    for (size_t i = 0; i < len; i++)
-        uart_putc(p[i]);
+    return (int64_t)nx_console_write(buf, len);
 #else
     (void)buf;
-#endif
     return (int64_t)len;
+#endif
 }
 
 static int64_t uart_pl011_read(void *self, uint32_t id, void *buf, size_t cap)

@@ -63,7 +63,7 @@ struct char_write_arg {
 static void char_write_kthread(void *arg)
 {
     const struct char_write_arg *a = (const struct char_write_arg *)arg;
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     g_9b3_rc = nx_char_device_write(cs, a->msg, a->len);
     atomic_store(&g_9b3_done, 1);
 }
@@ -71,7 +71,7 @@ static void char_write_kthread(void *arg)
 static void char_read_kthread(void *arg)
 {
     size_t cap = (size_t)(uintptr_t)arg;
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     g_9b3_rc = nx_char_device_read(cs, 0, g_9b3_buf, cap);
     atomic_store(&g_9b3_done, 1);
 }
@@ -80,7 +80,7 @@ static void char_read_kthread(void *arg)
 
 KTEST(char_device_slot_is_active_after_bootstrap)
 {
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
     KASSERT_NOT_NULL(cs->active);
     KASSERT_EQ_U((uint64_t)cs->active->state, (uint64_t)NX_LC_ACTIVE);
@@ -91,7 +91,7 @@ KTEST(char_device_slot_is_active_after_bootstrap)
 
 KTEST(char_device_write_returns_byte_count)
 {
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     static const struct char_write_arg arg2 = { "hello", 5 };
@@ -109,7 +109,7 @@ KTEST(char_device_write_returns_byte_count)
 
 KTEST(char_device_write_zero_len_returns_zero)
 {
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     static const struct char_write_arg arg3 = { "", 0 };
@@ -128,7 +128,7 @@ KTEST(char_device_write_zero_len_returns_zero)
 KTEST(char_device_read_returns_preinjected_bytes)
 {
     nx_console_reset_for_test();
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     size_t pushed = nx_console_test_inject_bytes("world", 5);
@@ -151,7 +151,7 @@ KTEST(char_device_read_returns_preinjected_bytes)
 KTEST(char_device_read_eof_returns_zero)
 {
     nx_console_reset_for_test();
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     nx_console_test_inject_eof();
@@ -171,7 +171,7 @@ KTEST(char_device_read_eof_returns_zero)
 KTEST(char_device_read_partial_less_than_cap)
 {
     nx_console_reset_for_test();
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     /* Inject 3 bytes; cap = 8 — read returns exactly 3. */
@@ -195,7 +195,7 @@ KTEST(char_device_read_partial_less_than_cap)
 KTEST(char_device_write_increments_console_write_calls)
 {
     nx_console_reset_for_test();
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     uint64_t before = nx_console_write_calls();
@@ -304,7 +304,7 @@ KTEST(vfs_seek_repositions_via_slot_call_blocking)
 KTEST(char_device_read_exact_byte_content_matches)
 {
     nx_console_reset_for_test();
-    struct nx_slot *cs = nx_slot_lookup("char_device");
+    struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
     static const char payload[] = "test123";
