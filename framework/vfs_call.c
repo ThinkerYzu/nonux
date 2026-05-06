@@ -105,7 +105,10 @@ uint32_t nx_vfs_open(struct nx_slot *slot, const char *path, uint32_t flags)
 
     KERNEL_INIT_MSG(msg, task, slot, NX_VFS_OP_OPEN, req);
     int rc = nx_slot_call_blocking(slot, &msg, &reply, sizeof reply);
-    if (rc != NX_OK) return 0;
+    /* nx_slot_call_blocking returns in_flight_reply_rc = (int32_t)vfs_id.
+     * A positive vfs_id indicates success; only negative rc means a
+     * framework-level error.  Do NOT treat non-zero as failure here. */
+    if (rc < 0) return 0;
     return reply.rc;
 #endif
 }
