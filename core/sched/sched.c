@@ -190,7 +190,18 @@ void sched_check_resched(void)
     g_sched_ops->yield(g_sched_self);
 
     struct nx_task *next = g_sched_ops->pick_next(g_sched_self);
-    if (!next || next == curr) return;
+    if (!next || next == curr) {
+#if !__STDC_HOSTED__
+        /* Nothing else is runnable — sleep until the next interrupt
+         * rather than spinning.  This lets nx_task_yield() serve as a
+         * real "wait for something to happen" when the dispatcher is
+         * blocked and only idle is in the runqueue.  Without this, a
+         * WAIT_FOR polling loop would burn through its iteration budget
+         * in microseconds before any timer tick fires. */
+        asm volatile("wfi");
+#endif
+        return;
+    }
 
     /* Fire NX_HOOK_CONTEXT_SWITCH (slice 4.4) — hooks run with
      * preempt-disabled on the outgoing task's kernel stack. */

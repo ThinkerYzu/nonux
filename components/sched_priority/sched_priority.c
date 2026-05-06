@@ -85,6 +85,17 @@ static int sched_priority_enqueue(void *self, struct nx_task *task)
     struct sched_priority_state *s = self;
     if (on_queue(s, task)) return NX_EEXIST;
     nx_list_add_tail(&s->queues[SCHED_PRIORITY_DEFAULT], &task->sched_node);
+#if !__STDC_HOSTED__
+    /* Same idle-preemption signal as sched_rr: if a non-idle task just
+     * became runnable while idle is running, flag a reschedule so the
+     * next IRQ return switches immediately. */
+    {
+        extern struct nx_task g_idle_task;
+        struct nx_task *curr = nx_task_current();
+        if (curr == &g_idle_task && task != &g_idle_task)
+            curr->need_resched = 1;
+    }
+#endif
     return NX_OK;
 }
 

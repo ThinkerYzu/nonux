@@ -44,6 +44,7 @@
 #include <string.h>
 #else
 #include "core/sched/sched.h"
+#include "core/sched/waitq.h"
 #include "core/lib/lib.h"
 #endif
 
@@ -56,6 +57,22 @@ static bool                 g_disp_mpsc_initialized;
 #if !__STDC_HOSTED__
 static bool            g_disp_kthread_spawned;
 static struct nx_task *g_disp_task;   /* kthread owning the dispatcher loop */
+
+/* Dispatcher sleep/wake.  The kthread blocks here when the MPSC queue is
+ * empty so it doesn't busy-poll and starve other tasks (including idle/
+ * ktest_main).  g_disp_pending counts messages currently in the MPSC
+ * queue: incremented before push in nx_dispatcher_enqueue, decremented
+ * after pop in nx_dispatcher_pump_once.  The predicate lets wait_unless
+ * re-check the count inside the IRQ-disabled critical section, closing
+ * the lost-wakeup race between "queue appears empty" and "sleep". */
+static struct nx_waitq g_disp_wq;
+static _Atomic int     g_disp_pending;
+
+static int disp_has_pending(void *ctx)
+{
+    (void)ctx;
+    return atomic_load_explicit(&g_disp_pending, memory_order_acquire) > 0;
+}
 #endif
 
 static inline struct nx_ipc_message *node_to_msg(struct nx_mpsc_node *n)
@@ -253,8 +270,19 @@ int nx_dispatcher_enqueue(struct nx_ipc_message *msg)
      * drain signal; the host build keeps the old pump-side semantics. */
     atomic_fetch_add_explicit(&msg->dst_slot->in_flight_calls, 1u,
                               memory_order_acq_rel);
+    /* Bump pending count before push so the waitq predicate sees a
+     * non-zero count if the dispatcher wakes and checks before the
+     * MPSC pop resolves the transient Vyukov state. */
+    atomic_fetch_add_explicit(&g_disp_pending, 1, memory_order_acq_rel);
 #endif
     nx_mpsc_push(&g_disp_mpsc, &msg->disp_node);
+#if !__STDC_HOSTED__
+    /* Wake the dispatcher kthread if it is sleeping on an empty queue.
+     * wake_one calls sched_rr_enqueue(dispatcher), which — combined with
+     * the enqueue-side idle preemption fix — ensures that if idle is the
+     * current task, need_resched is set and idle yields at the next IRQ. */
+    nx_waitq_wake_one(&g_disp_wq);
+#endif
     return NX_OK;
 }
 
@@ -286,6 +314,9 @@ int nx_dispatcher_pump_once(void)
 
     struct nx_mpsc_node *node = nx_mpsc_pop(&g_disp_mpsc);
     if (!node) return 0;
+#if !__STDC_HOSTED__
+    atomic_fetch_sub_explicit(&g_disp_pending, 1, memory_order_acq_rel);
+#endif
 
     struct nx_ipc_message *msg = node_to_msg(node);
     struct nx_slot *dst = msg->dst_slot;
@@ -369,11 +400,13 @@ static void nx_dispatcher_kthread_entry(void *arg)
     for (;;) {
         while (nx_dispatcher_pump_once())
             ;
-        /* Queue empty — yield so other kthreads can produce work.
-         * When they yield back to us, we drain again.  Slice 3.9b
-         * can add a proper wait-queue later (the spec allows the
-         * dispatcher to block on an `msg_queue_dequeue_wait`). */
-        nx_task_yield();
+        /* Queue drained — block until a producer enqueues a message.
+         * wait_unless re-checks disp_has_pending inside the IRQ-disabled
+         * critical section, so a push+wake that races with this path
+         * cannot be lost: if g_disp_pending > 0 the sleep is skipped and
+         * we retry pump_once immediately (handles Vyukov transient state
+         * as well as genuine new arrivals). */
+        nx_waitq_wait_unless(&g_disp_wq, 0, disp_has_pending, NULL);
     }
 }
 #endif
@@ -387,6 +420,9 @@ int nx_dispatcher_init(void)
      * nx_dispatcher_pump_once explicitly. */
     return NX_OK;
 #else
+    nx_waitq_init(&g_disp_wq);
+    atomic_store_explicit(&g_disp_pending, 0, memory_order_release);
+
     if (g_disp_kthread_spawned) return NX_OK;
     struct nx_task *t = sched_spawn_kthread("nx_disp",
                                             nx_dispatcher_kthread_entry,
@@ -418,6 +454,9 @@ void nx_dispatcher_reset(void)
      * fixtures and a leaked entry from one test would skew the next
      * test's "in_use == 0" pre-condition. */
     nx_dispatcher_reply_pool_reset_for_test();
+#if !__STDC_HOSTED__
+    atomic_store_explicit(&g_disp_pending, 0, memory_order_release);
+#endif
 }
 
 #if !__STDC_HOSTED__

@@ -19,6 +19,8 @@
 #include "core/lib/lib.h"
 #include "core/mmu/mmu.h"
 #include "core/sched/task.h"
+#include "core/sched/sched.h"
+#include "interfaces/scheduler.h"
 #endif
 
 /* ---------- The always-present kernel process (pid 0) --------------- */
@@ -307,6 +309,19 @@ void nx_process_exit(int code)
     for (;;) { /* unreachable in tests — callers set up their own loop
                 * via a host fixture before invoking sys_exit. */ }
 #else
+    /* Remove this task from the scheduler runqueue before parking in
+     * the wfe loop.  Without this, the zombie burns a full quantum on
+     * every scheduler rotation (200 ms at 10 Hz / 2-tick quantum),
+     * making the shell slower after every command.  The task struct,
+     * kernel stack, and process struct are NOT freed here — sys_wait
+     * still needs to read exit_code + state.  Full reap-on-wait
+     * (nx_process_destroy) is the follow-up. */
+    {
+        const struct nx_scheduler_ops *ops = sched_ops_for_test();
+        void *self = sched_self_for_test();
+        if (ops && self)
+            ops->dequeue(self, nx_task_current());
+    }
     asm volatile ("msr daifclr, #2" ::: "memory");   /* IRQ-enable */
     for (;;) asm volatile ("wfe");
 #endif

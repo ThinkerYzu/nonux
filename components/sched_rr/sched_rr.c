@@ -107,6 +107,17 @@ static int sched_rr_enqueue(void *self, struct nx_task *task)
     struct sched_rr_state *s = self;
     if (on_queue(s, task)) return NX_EEXIST;
     nx_list_add_tail(&s->runqueue, &task->sched_node);
+#if !__STDC_HOSTED__
+    /* If a non-idle task just became runnable and the CPU is sitting in
+     * idle's WFI loop, mark idle for reschedule so the next IRQ return
+     * switches immediately instead of burning idle's full 200 ms quantum. */
+    {
+        extern struct nx_task g_idle_task;
+        struct nx_task *curr = nx_task_current();
+        if (curr == &g_idle_task && task != &g_idle_task)
+            curr->need_resched = 1;
+    }
+#endif
     return NX_OK;
 }
 
