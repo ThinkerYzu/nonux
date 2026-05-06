@@ -88,4 +88,11 @@ void   nx_dispatcher_reply_pool_reset_for_test(void);
 /* True if `m` is a pointer into the reply pool's static storage. */
 bool   nx_dispatcher_reply_pool_owns_for_test(const struct nx_ipc_message *m);
 
+#if !__STDC_HOSTED__
+/* Return the dispatcher kthread so callers can re-enqueue it after a live
+ * scheduler swap (the swap does not automatically migrate existing kthreads
+ * from the old scheduler's runqueue into the new one). */
+struct nx_task *nx_dispatcher_task_for_test(void);
+#endif
+
 #endif /* NX_FRAMEWORK_DISPATCHER_H */

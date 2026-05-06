@@ -42,7 +42,7 @@
 #include "core/lib/lib.h"
 #endif
 
-#define RAMFS_MAX_FILES  24u
+#define RAMFS_MAX_FILES  32u
                                 /* Bumped 8 → 16 in slice 7.6d.N.4 to
                                  * fit the duplicate `/bin/ls`-as-busybox
                                  * cpio entry alongside the existing

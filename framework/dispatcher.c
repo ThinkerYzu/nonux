@@ -54,7 +54,8 @@
 static struct nx_mpsc_queue g_disp_mpsc;
 static bool                 g_disp_mpsc_initialized;
 #if !__STDC_HOSTED__
-static bool                 g_disp_kthread_spawned;
+static bool            g_disp_kthread_spawned;
+static struct nx_task *g_disp_task;   /* kthread owning the dispatcher loop */
 #endif
 
 static inline struct nx_ipc_message *node_to_msg(struct nx_mpsc_node *n)
@@ -392,6 +393,7 @@ int nx_dispatcher_init(void)
                                             NULL, NULL);
     if (!t) return NX_ENOMEM;
     g_disp_kthread_spawned = true;
+    g_disp_task = t;
     return NX_OK;
 #endif
 }
@@ -417,3 +419,16 @@ void nx_dispatcher_reset(void)
      * test's "in_use == 0" pre-condition. */
     nx_dispatcher_reply_pool_reset_for_test();
 }
+
+#if !__STDC_HOSTED__
+/*
+ * Return the dispatcher kthread so callers (e.g. ktest_live_swap) can
+ * re-enqueue it into a new scheduler after a live swap.  The dispatcher
+ * kthread is spawned at boot into the initial scheduler; a scheduler swap
+ * that does not explicitly migrate it leaves it stranded.
+ */
+struct nx_task *nx_dispatcher_task_for_test(void)
+{
+    return g_disp_task;
+}
+#endif

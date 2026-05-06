@@ -184,7 +184,7 @@ TEST(ramfs_9b_table_full_returns_zero)
     ASSERT(seed != 0);
     ramfs_fs_ops.close(s, seed);
 
-    enum { ATTEMPTS = 128 };
+    enum { ATTEMPTS = 256 };  /* > RAMFS_MAX_OPEN (128 = 4*32) */
     uint32_t ids[ATTEMPTS];
     unsigned n = 0;
     for (int i = 0; i < ATTEMPTS; i++) {

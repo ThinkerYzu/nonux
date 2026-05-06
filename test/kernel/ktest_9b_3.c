@@ -91,6 +91,7 @@ KTEST(char_device_slot_is_active_after_bootstrap)
 
 KTEST(char_device_write_returns_byte_count)
 {
+    nx_console_reset_for_test();  /* drain any stale busybox stdin IPCs */
     struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 
@@ -109,6 +110,7 @@ KTEST(char_device_write_returns_byte_count)
 
 KTEST(char_device_write_zero_len_returns_zero)
 {
+    nx_console_reset_for_test();  /* drain any stale busybox stdin IPCs */
     struct nx_slot *cs = nx_slot_lookup("char_device.serial");
     KASSERT_NOT_NULL(cs);
 

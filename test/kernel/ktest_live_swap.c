@@ -24,6 +24,7 @@
 
 #include "framework/config.h"
 #include "framework/component.h"
+#include "framework/dispatcher.h"
 #include "framework/registry.h"
 #include "core/sched/sched.h"
 #include "core/sched/task.h"
@@ -117,13 +118,16 @@ KTEST(live_swap_tasks_survive_and_behavior_changes)
     KASSERT_EQ_U((uint64_t)rc, (uint64_t)NX_OK);
 
     /*
-     * Dequeue all three tasks before the swap.  This empties the old
-     * scheduler's runqueue so the pause phase finds no live entries and
-     * completes cleanly.  The task structs remain valid.
+     * Dequeue all three tasks (plus the dispatcher kthread) before the
+     * swap.  The pause phase completes cleanly when the old runqueue is
+     * emptied of entries the new scheduler won't inherit.  Task structs
+     * remain valid; re-enqueue into sched_rr after the swap below.
      */
+    struct nx_task *disp = nx_dispatcher_task_for_test();
     ops->dequeue(self, ta);
     ops->dequeue(self, tb);
     ops->dequeue(self, tc);
+    if (disp) ops->dequeue(self, disp);
 
     /*
      * Pre-swap safety: purge any stale EL0 user tasks from the scheduler
@@ -162,7 +166,10 @@ KTEST(live_swap_tasks_survive_and_behavior_changes)
     rc = ops->set_priority(self, ta, 3);
     KASSERT_EQ_U((uint64_t)rc, (uint64_t)NX_EINVAL); /* behaviour changed */
 
-    /* Re-enqueue all three tasks into the new scheduler. */
+    /* Re-enqueue all three tasks and the dispatcher into the new scheduler.
+     * Without this, the dispatcher kthread is stranded (it was in sched_priority's
+     * runqueue, which is now destroyed) and subsequent IPC processing stalls. */
+    if (disp) ops->enqueue(self, disp);
     ops->enqueue(self, ta);
     ops->enqueue(self, tb);
     ops->enqueue(self, tc);

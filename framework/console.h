@@ -153,4 +153,19 @@ void  nx_console_register_pollset(struct nx_pollset_listener *l);
 void  nx_console_unregister_pollset(struct nx_pollset_listener *l);
 short nx_console_readiness(short want);
 
+#if !__STDC_HOSTED__
+/*
+ * Non-blocking read for dispatcher-context handlers.  Returns > 0
+ * (bytes), 0 (EOF / Ctrl-D), or NX_EAGAIN (ring empty, no EOF).
+ * sys_read wraps nx_char_device_read (which routes here) in a pollset
+ * retry loop so EL0 stdin blocking happens in the caller's task context.
+ */
+int nx_console_read_nonblocking(void *buf, size_t cap);
+
+/* Predicate for nx_waitq_wait_unless: non-zero when the ring is
+ * non-empty or EOF is queued (i.e. nx_console_read_nonblocking would
+ * not return NX_EAGAIN). */
+int nx_console_read_ready(void *ctx);
+#endif
+
 #endif /* NX_FRAMEWORK_CONSOLE_H */

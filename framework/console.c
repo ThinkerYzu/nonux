@@ -10,6 +10,7 @@
 #include "core/sched/sched.h" /* nx_task_yield */
 #endif
 #include "framework/process.h"
+#include "framework/registry.h" /* NX_EAGAIN */
 #include "framework/syscall.h"  /* NX_SIGTERM, NX_POLL* */
 #include "framework/pollset.h"
 
@@ -132,6 +133,50 @@ static int console_read_ready_pred(void *ctx)
     if (rx_count() > 0) return 1;
     if (__atomic_load_n(&g_eof_pending, __ATOMIC_ACQUIRE)) return 1;
     return 0;
+}
+
+/*
+ * Non-blocking console read — for use in dispatcher-context handlers
+ * where calling nx_waitq_wait_unless would block the dispatcher kthread.
+ *
+ * Returns:
+ *   > 0       — bytes drained from the RX ring
+ *   0         — EOF (Ctrl-D; g_eof_pending consumed)
+ *   NX_EAGAIN — ring empty and no EOF pending; caller must register a
+ *               pollset listener and retry after the next wake
+ *
+ * sys_read's RESOURCE/char_slot arm wraps calls to nx_char_device_read
+ * (which routes here via the dispatcher) in a pollset retry loop so
+ * EL0 stdin reads block in the caller's task context, not the dispatcher.
+ */
+int nx_console_read_nonblocking(void *buf, size_t cap)
+{
+    if (cap == 0) return 0;
+    if (!buf)     return -1;
+    char *out = (char *)buf;
+    size_t got = 0;
+    while (got < cap) {
+        char c;
+        if (rx_pop_one(&c)) {
+            out[got++] = c;
+            continue;
+        }
+        if (got > 0) break;        /* return what we have */
+        if (__atomic_exchange_n(&g_eof_pending, 0, __ATOMIC_ACQ_REL))
+            return 0;              /* Ctrl-D EOF */
+        return NX_EAGAIN;          /* ring empty; caller waits and retries */
+    }
+    return (int)got;
+}
+
+/*
+ * Public predicate for nx_waitq_wait_unless — returns non-zero when
+ * nx_console_read_nonblocking would not return NX_EAGAIN (ring non-empty
+ * OR EOF queued).  Used by sys_read's stdin retry loop.
+ */
+int nx_console_read_ready(void *ctx)
+{
+    return console_read_ready_pred(ctx);
 }
 #endif
 

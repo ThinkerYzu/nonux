@@ -51,10 +51,10 @@ static int64_t uart_pl011_read(void *self, uint32_t id, void *buf, size_t cap)
     if (cap == 0) return 0;
     if (!buf) return NX_EINVAL;
 #if !__STDC_HOSTED__
-    return (int64_t)nx_console_read(buf, cap);
+    return (int64_t)nx_console_read_nonblocking(buf, cap);
 #else
     (void)buf;
-    return 0;    /* host build: EOF */
+    return 0;
 #endif
 }
 
