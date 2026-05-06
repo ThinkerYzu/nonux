@@ -85,6 +85,14 @@ static inline int nx_scheduler_dispatch(
         msg->reply_payload_len = (uint32_t)sizeof *_r;
         return 0;
     }
+    case NX_SCHEDULER_OP_RUNQUEUE_SIZE: {
+        int _rc = ops->runqueue_size(self);
+        struct nx_scheduler_reply_runqueue_size *_r =
+            (struct nx_scheduler_reply_runqueue_size *)msg->payload;
+        _r->rc = _rc;
+        msg->reply_payload_len = (uint32_t)sizeof *_r;
+        return _rc;
+    }
     default:
         return NX_EINVAL;
     }

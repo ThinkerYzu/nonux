@@ -20,6 +20,7 @@ enum nx_scheduler_op_id {
     NX_SCHEDULER_OP_YIELD = 4,
     NX_SCHEDULER_OP_SET_PRIORITY = 5,
     NX_SCHEDULER_OP_TICK = 6,
+    NX_SCHEDULER_OP_RUNQUEUE_SIZE = 7,
 };
 
 /* Request: nx_scheduler_pick_next() — Return the task that should run next on this CPU, or NULL if the */
@@ -75,6 +76,15 @@ struct nx_scheduler_msg_tick {
 
 struct nx_scheduler_reply_tick {
     int rc; /* always NX_OK; placeholder for void ops */
+};
+
+/* Request: nx_scheduler_runqueue_size() — Return the number of non-idle tasks currently on the runqueue. */
+struct nx_scheduler_msg_runqueue_size {
+    char _nx_no_payload;
+};
+
+struct nx_scheduler_reply_runqueue_size {
+    int rc;
 };
 
 #endif /* NONUX_INTERFACE_SCHEDULER_MSG_H */

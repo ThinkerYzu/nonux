@@ -167,13 +167,32 @@ static void sched_priority_tick(void *self)
     }
 }
 
+static int sched_priority_runqueue_size(void *self)
+{
+    struct sched_priority_state *s = self;
+    int count = 0;
+    for (int p = 0; p < SCHED_PRIORITY_LEVELS; p++) {
+        struct nx_list_node *n;
+        nx_list_for_each(n, &s->queues[p]) {
+#if !__STDC_HOSTED__
+            extern struct nx_task g_idle_task;
+            struct nx_task *t = nx_list_entry(n, struct nx_task, sched_node);
+            if (t == &g_idle_task) continue;
+#endif
+            count++;
+        }
+    }
+    return count;
+}
+
 const struct nx_scheduler_ops sched_priority_scheduler_ops = {
-    .pick_next    = sched_priority_pick_next,
-    .enqueue      = sched_priority_enqueue,
-    .dequeue      = sched_priority_dequeue,
-    .yield        = sched_priority_yield,
-    .set_priority = sched_priority_set_priority,
-    .tick         = sched_priority_tick,
+    .pick_next      = sched_priority_pick_next,
+    .enqueue        = sched_priority_enqueue,
+    .dequeue        = sched_priority_dequeue,
+    .yield          = sched_priority_yield,
+    .set_priority   = sched_priority_set_priority,
+    .tick           = sched_priority_tick,
+    .runqueue_size  = sched_priority_runqueue_size,
 };
 
 /* ------------------------------------------------------------------ */

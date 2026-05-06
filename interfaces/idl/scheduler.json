@@ -56,6 +56,13 @@
       "doc": "Called once per timer tick from the core driver's `sched_tick`\n(slice 4.4).  The policy typically decrements the current task's\nremaining quantum and sets `need_resched` when it reaches zero —\nthe core driver reads `current->need_resched` at IRQ-return time\nand reschedules there.\n\nMust be bounded and non-blocking; runs with preemption disabled\non the interrupted task's kernel stack.",
       "params": [],
       "returns": { "type": "void" }
+    },
+    {
+      "name": "runqueue_size",
+      "op_id": 7,
+      "doc": "Return the number of non-idle tasks currently on the runqueue.\nThe idle task (g_idle_task) is always enqueued as a permanent\nfallback and is excluded from the count so that callers can use\n`runqueue_size() > 0` to mean \"there is real work to do.\"\nIn host-test builds (no idle task) every enqueued task is counted.\nMust be bounded and non-blocking.",
+      "params": [],
+      "returns": { "type": "int_status" }
     }
   ]
 }

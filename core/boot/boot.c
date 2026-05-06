@@ -206,7 +206,10 @@ void boot_main(void)
 #else
     kprintf("[boot] idle: waiting for work.\n\n");
 
-    for (;;)
+    for (;;) {
         asm volatile("wfi");
+        if (sched_runqueue_size() > 0)
+            nx_task_yield();
+    }
 #endif
 }

@@ -187,6 +187,22 @@ static void sched_rr_yield(void *self)
     s->remaining = s->quantum_ticks;
 }
 
+static int sched_rr_runqueue_size(void *self)
+{
+    struct sched_rr_state *s = self;
+    int count = 0;
+    struct nx_list_node *n;
+    nx_list_for_each(n, &s->runqueue) {
+#if !__STDC_HOSTED__
+        extern struct nx_task g_idle_task;
+        struct nx_task *t = nx_list_entry(n, struct nx_task, sched_node);
+        if (t == &g_idle_task) continue;
+#endif
+        count++;
+    }
+    return count;
+}
+
 static int sched_rr_set_priority(void *self, struct nx_task *task, int priority)
 {
     (void)self; (void)priority;
@@ -217,12 +233,13 @@ static void sched_rr_tick(void *self)
 }
 
 const struct nx_scheduler_ops sched_rr_scheduler_ops = {
-    .pick_next    = sched_rr_pick_next,
-    .enqueue      = sched_rr_enqueue,
-    .dequeue      = sched_rr_dequeue,
-    .yield        = sched_rr_yield,
-    .set_priority = sched_rr_set_priority,
-    .tick         = sched_rr_tick,
+    .pick_next      = sched_rr_pick_next,
+    .enqueue        = sched_rr_enqueue,
+    .dequeue        = sched_rr_dequeue,
+    .yield          = sched_rr_yield,
+    .set_priority   = sched_rr_set_priority,
+    .tick           = sched_rr_tick,
+    .runqueue_size  = sched_rr_runqueue_size,
 };
 
 /* --------------------------------------------------------------------

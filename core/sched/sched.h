@@ -112,6 +112,14 @@ void sched_check_resched(void);
 void nx_task_yield(void);
 
 /*
+ * Return the number of non-idle tasks on the runqueue (idle is excluded so
+ * callers can use `> 0` to mean "real work is available").  Returns 0 when
+ * the scheduler is not yet initialised or the policy has no runqueue_size op.
+ * In host-test builds (no idle task) every enqueued task is counted.
+ */
+int sched_runqueue_size(void);
+
+/*
  * Spawn a kernel thread and enqueue it on the scheduler.  `kstack_pages`
  * of PMM memory are allocated.  On success the returned task is ready
  * to run and the scheduler will pick it up on the next reschedule.

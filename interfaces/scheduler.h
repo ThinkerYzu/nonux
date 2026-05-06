@@ -107,6 +107,16 @@ struct nx_scheduler_ops {
      * on the interrupted task's kernel stack.
      */
     void (*tick)(void *self);
+
+    /*
+     * Return the number of non-idle tasks currently on the runqueue.
+     * The idle task (g_idle_task) is always enqueued as a permanent
+     * fallback and is excluded from the count so that callers can use
+     * `runqueue_size() > 0` to mean "there is real work to do."
+     * In host-test builds (no idle task) every enqueued task is counted.
+     * Must be bounded and non-blocking.
+     */
+    int (*runqueue_size)(void *self);
 };
 
 #endif /* NONUX_INTERFACE_SCHEDULER_H */

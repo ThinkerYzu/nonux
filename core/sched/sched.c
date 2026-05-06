@@ -246,6 +246,12 @@ void sched_check_resched(void)
     nx_preempt_enable();
 }
 
+int sched_runqueue_size(void)
+{
+    if (!g_sched_ops || !g_sched_ops->runqueue_size) return 0;
+    return g_sched_ops->runqueue_size(g_sched_self);
+}
+
 void nx_task_yield(void)
 {
     struct nx_task *curr = nx_task_current();
