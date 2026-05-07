@@ -16,7 +16,7 @@
  * child" / "wrong slot value" / "right argv but wrong argc".
  */
 
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

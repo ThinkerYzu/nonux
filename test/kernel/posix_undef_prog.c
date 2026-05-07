@@ -15,7 +15,7 @@
  * not user-program behaviour.  This demo only exercises the EL0 path.
  */
 
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

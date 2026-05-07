@@ -26,7 +26,7 @@
  * matching ktest can pinpoint regressions.
  */
 
-#include "components/libnxlibc/posix.h"
+#include "lib/libnxlibc/posix.h"
 
 void __attribute__((noreturn)) _start(void)
 {

@@ -25,7 +25,7 @@
  *      table (the forked child, which calls nx_posix_exit(23)).
  *   6. Dequeue the host task.
  *
- * If the C-level wrappers in `components/libnxlibc/posix.h`
+ * If the C-level wrappers in `lib/libnxlibc/posix.h`
  * emit the wrong SVC numbers or mangle the ABI, either the
  * markers won't appear or the exit code won't match — both
  * make the test fail loudly.

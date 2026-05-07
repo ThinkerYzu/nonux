@@ -3,7 +3,7 @@
  *
  * Loads the C-compiled `posix_ppoll_prog.elf` (which uses the
  * `nx_posix_pipe / write / read / close / ppoll` wrappers from
- * `components/libnxlibc/posix.h`) into a fresh process, drops
+ * `lib/libnxlibc/posix.h`) into a fresh process, drops
  * to EL0, and verifies the live log gains `[ppoll-ok]` + the
  * process ends EXITED with exit_code == 29.
  *

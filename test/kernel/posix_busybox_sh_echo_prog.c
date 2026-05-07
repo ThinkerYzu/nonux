@@ -53,7 +53,7 @@
  *          echo IS a builtin so this would be very strange).
  */
 
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

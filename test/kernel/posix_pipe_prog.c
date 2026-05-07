@@ -18,7 +18,7 @@
  * (echo | cat) or a dedicated fork-inherit slice before that.
  */
 
-#include "components/libnxlibc/posix.h"
+#include "lib/libnxlibc/posix.h"
 
 static int bufeq(const char *a, const char *b, nx_posix_ssize_t n)
 {

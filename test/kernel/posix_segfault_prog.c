@@ -14,7 +14,7 @@
  * `[segv-ok]` — that's the contract this demo locks in.
  */
 
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

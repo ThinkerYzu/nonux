@@ -31,7 +31,7 @@
  * stack from its first instruction.
  */
 
-#include "components/libnxlibc/posix.h"
+#include "lib/libnxlibc/posix.h"
 
 void __attribute__((noreturn)) _start(void)
 {

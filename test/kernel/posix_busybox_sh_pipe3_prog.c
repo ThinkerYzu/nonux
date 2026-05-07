@@ -29,7 +29,7 @@
  * fork, never before).  Encoded handles now stay stable across fork.
  */
 
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

@@ -2,7 +2,7 @@
  * Slice 7.6c.0 — EL0 C demo using POSIX `int main(int argc, char
  * **argv)` entry instead of `_start`.
  *
- * Linked with `components/libnxlibc/crt0.S` whose `_start` synthesises
+ * Linked with `lib/libnxlibc/crt0.S` whose `_start` synthesises
  * `argc = 1, argv = { "nonux", NULL }, envp = NULL` and calls
  * `main(argc, argv, envp)`, then `exit(main_rv)`.  Demo:
  *
@@ -21,7 +21,7 @@
  * marker check fail loudly.
  */
 
-#include "components/libnxlibc/posix.h"
+#include "lib/libnxlibc/posix.h"
 
 int main(int argc, char **argv, char **envp)
 {

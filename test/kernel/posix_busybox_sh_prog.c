@@ -58,7 +58,7 @@
  * `[bbsh-status=NN]` marker and triaged in the session log.
  */
 
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 int main(int argc, char **argv, char **envp)
 {

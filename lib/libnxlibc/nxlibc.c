@@ -12,8 +12,8 @@
  * Slice 7.6c.1.
  */
 
-#include "components/libnxlibc/posix.h"
-#include "components/libnxlibc/nxlibc.h"
+#include "lib/libnxlibc/posix.h"
+#include "lib/libnxlibc/nxlibc.h"
 
 void __attribute__((noreturn)) nxlibc_exit(int status)
 {

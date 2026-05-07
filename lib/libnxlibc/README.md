@@ -16,7 +16,7 @@ target nonux without hand-rolling `svc #0` asm.
   lives entirely on the EL0 side of the boundary.
 - **Bound by default:** *no* — **not** referenced in `kernel.json`
   and **not** linked into `kernel.bin`.  EL0 C programs `#include
-  "components/libnxlibc/posix.h"` directly; the kernel stays
+  "lib/libnxlibc/posix.h"` directly; the kernel stays
   unaware.
 - **Dependencies:** none.
 - **Worker threads:** none.

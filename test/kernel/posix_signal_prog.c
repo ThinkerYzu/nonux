@@ -14,7 +14,7 @@
  * path eventually eats the signal on the child's behalf.
  */
 
-#include "components/libnxlibc/posix.h"
+#include "lib/libnxlibc/posix.h"
 
 static int g_dummy;  /* forces the busy loop to have side-effects
                       * so -O2 can't optimise it away. */
