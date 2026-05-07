@@ -21,6 +21,7 @@ enum nx_scheduler_op_id {
     NX_SCHEDULER_OP_SET_PRIORITY = 5,
     NX_SCHEDULER_OP_TICK = 6,
     NX_SCHEDULER_OP_RUNQUEUE_SIZE = 7,
+    NX_SCHEDULER_OP_REAP_TASK = 8,
 };
 
 /* Request: nx_scheduler_pick_next() — Return the task that should run next on this CPU, or NULL if the */
@@ -85,6 +86,15 @@ struct nx_scheduler_msg_runqueue_size {
 
 struct nx_scheduler_reply_runqueue_size {
     int rc;
+};
+
+/* Request: nx_scheduler_reap_task() — Destroy a zombie task that has already been dequeued by nx_process_exit. */
+struct nx_scheduler_msg_reap_task {
+    uint64_t task;
+};
+
+struct nx_scheduler_reply_reap_task {
+    int rc; /* always NX_OK; placeholder for void ops */
 };
 
 #endif /* NONUX_INTERFACE_SCHEDULER_MSG_H */

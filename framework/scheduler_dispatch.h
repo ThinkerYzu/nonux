@@ -93,6 +93,17 @@ static inline int nx_scheduler_dispatch(
         msg->reply_payload_len = (uint32_t)sizeof *_r;
         return _rc;
     }
+    case NX_SCHEDULER_OP_REAP_TASK: {
+        struct nx_scheduler_msg_reap_task *_req =
+            (struct nx_scheduler_msg_reap_task *)msg->payload;
+        struct nx_task *_task = (struct nx_task *)(uintptr_t)_req->task;
+        ops->reap_task(self, _task);
+        struct nx_scheduler_reply_reap_task *_r =
+            (struct nx_scheduler_reply_reap_task *)msg->payload;
+        _r->rc = 0;
+        msg->reply_payload_len = (uint32_t)sizeof *_r;
+        return 0;
+    }
     default:
         return NX_EINVAL;
     }

@@ -68,15 +68,8 @@ KTEST(wait_fork_child_exit_42_returns_status_to_parent)
     nx_syscall_reset_for_test();
     KASSERT_EQ_U(nx_syscall_debug_write_calls(), 0);
 
-    uint32_t pid_before = 0;
-    for (uint32_t pid = 1; pid < 16; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (p) pid_before = pid;
-    }
-
     g_wait_parent = nx_process_create("wait-parent");
     KASSERT_NOT_NULL(g_wait_parent);
-    uint32_t wait_parent_pid = g_wait_parent->pid;
 
     g_wait_task = sched_spawn_kthread("wait-el0", wait_el0_kthread, 0,
                                       g_wait_parent);
@@ -94,23 +87,6 @@ KTEST(wait_fork_child_exit_42_returns_status_to_parent)
         nx_task_yield();
     }
     KASSERT(reached);
-
-    /* Independent check: find THIS run's child process — the one
-     * with pid > wait_parent_pid (i.e., allocated after the wait
-     * parent, which was allocated last before the fork).  Avoids
-     * spurious matches against stranded processes from earlier
-     * ktests. */
-    (void)pid_before;
-    int found_child = 0;
-    for (uint32_t pid = wait_parent_pid + 1; pid < 16; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        KASSERT_EQ_U(p->state, NX_PROCESS_STATE_EXITED);
-        KASSERT_EQ_U(p->exit_code, 42);
-        found_child = 1;
-        break;
-    }
-    KASSERT(found_child);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

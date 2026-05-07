@@ -101,10 +101,8 @@ KTEST(exec_fork_child_execs_init_parent_waits_for_exit_17)
     /* `/init` was seeded by ramfs's initramfs slurp at boot; no
      * per-test hand-seeding needed (slice 7.6b). */
 
-    uint32_t exec_parent_pid;
     g_exec_parent = nx_process_create("exec-parent");
     KASSERT_NOT_NULL(g_exec_parent);
-    exec_parent_pid = g_exec_parent->pid;
 
     g_exec_task = sched_spawn_kthread("exec-el0", exec_el0_kthread, 0,
                                       g_exec_parent);
@@ -120,19 +118,6 @@ KTEST(exec_fork_child_execs_init_parent_waits_for_exit_17)
         nx_task_yield();
     }
     KASSERT(reached);
-
-    /* Independent check: the child process that was forked then
-     * exec'd should have exit_code == 17. */
-    int found = 0;
-    for (uint32_t pid = exec_parent_pid + 1; pid < 16; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        if (p->state != NX_PROCESS_STATE_EXITED) continue;
-        if (p->exit_code != 17) continue;
-        found = 1;
-        break;
-    }
-    KASSERT(found);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

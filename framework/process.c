@@ -255,15 +255,16 @@ void nx_process_exit(int code)
      * still holds its dup3'd stdout handle.
      *
      * CONSOLE entries are singletons (no per-handle destructor) — we
-     * close their slots so the table is clean if a future reaper
-     * walks it, but the underlying object pointer doesn't need
-     * decrementing.  FILE/DIR entries are deferred to a real reap-
-     * on-wait — they'd need vfs dispatch + kheap free, but the
-     * v1 ramfs leaks them anyway since wait() doesn't free the
-     * process struct.
+     * close their slots so the table is clean; the underlying object
+     * pointer doesn't need decrementing.  FILE/DIR entries are closed
+     * via nx_handle_close; v1 ramfs has no per-inode refcount so that
+     * is sufficient.
      *
-     * The process struct itself is NOT freed here — wait() needs the
-     * exit_code + state visible.  Real reap-on-wait is still deferred.
+     * The process struct itself is NOT freed here — sys_wait needs to
+     * read exit_code + state first.  sys_wait calls nx_task_destroy
+     * (frees the task struct + kernel stack) then nx_process_destroy
+     * (frees the process struct, process table slot, MMU address space)
+     * after collecting the exit status.
      */
     for (size_t i = 0; i < NX_HANDLE_TABLE_CAPACITY; i++) {
         struct nx_handle_entry *e = &p->handles.entries[i];
@@ -338,7 +339,6 @@ struct nx_process *nx_process_find_exited_child(
         struct nx_process *p = g_process_table[i];
         if (!p) continue;
         if (p->parent_pid != parent->pid) continue;
-        if (p->reaped) continue;   /* skip already-waited zombies */
         if (p->state == NX_PROCESS_STATE_EXITED) return p;
         if (p->state == NX_PROCESS_STATE_ACTIVE && !active) active = p;
     }

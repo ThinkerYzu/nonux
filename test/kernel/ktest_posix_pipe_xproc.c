@@ -65,10 +65,8 @@ KTEST(posix_pipe_xproc_parent_writes_child_reads_via_inherited_handles)
     void *sself = sched_self_for_test();
     sched_rr_purge_user_tasks(sself, NULL);
 
-    uint32_t host_pid;
     g_xpipe_host = nx_process_create("xpipe-host");
     KASSERT_NOT_NULL(g_xpipe_host);
-    host_pid = g_xpipe_host->pid;
 
     int rc = nx_elf_load_into_process(g_xpipe_host,
                                       __posix_pipe_xproc_prog_blob_start,
@@ -90,19 +88,6 @@ KTEST(posix_pipe_xproc_parent_writes_child_reads_via_inherited_handles)
         nx_task_yield();
     }
     KASSERT(reached);
-
-    /* Independent check: the child should have exited 41.  The
-     * parent process exits 0 once it observes the child's status. */
-    int found = 0;
-    for (uint32_t pid = host_pid + 1; pid < 16; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        if (p->state != NX_PROCESS_STATE_EXITED) continue;
-        if (p->exit_code != 41) continue;
-        found = 1;
-        break;
-    }
-    KASSERT(found);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

@@ -890,6 +890,7 @@ static nx_status_t sys_fork(uint64_t a0, uint64_t a1, uint64_t a2,
         return NX_ENOMEM;
     }
     child_task->process = child;
+    child->main_task    = child_task;
 
     /* Enqueue the child so the scheduler picks it on a future tick.
      * Returning parent-side completes the parent's SVC normally. */
@@ -1017,11 +1018,15 @@ static nx_status_t sys_wait(uint64_t a0, uint64_t a1, uint64_t a2,
         int kstatus = target->exit_code;
         (void)copy_to_user(user_status, &kstatus, sizeof kstatus);
     }
-    /* Slice 7.6d.N.6b: mark as reaped so a subsequent waitpid(-1)
-     * doesn't return the same EXITED child again.  Real reap-on-wait
-     * (free the process struct) is still a follow-up — for now we
-     * just hide the zombie from `nx_process_find_exited_child`. */
-    target->reaped = true;
+    /* Full zombie reap: destroy task struct + kernel stack via the
+     * scheduler's reap_task op (safe on single-CPU — the parent is
+     * on-CPU so the zombie cannot be), then free process struct,
+     * handle table, process table slot, and MMU address space.
+     * main_task is NULL for processes not created via fork (test
+     * fixtures etc.); sched_reap_task is a no-op on NULL. */
+    struct nx_task *zombie_task = target->main_task;
+    sched_reap_task(zombie_task);
+    nx_process_destroy(target);
     return (nx_status_t)pid;
 #endif
 }

@@ -74,10 +74,8 @@ KTEST(sys_exec_pushes_argv_and_child_observes_strings_via_main)
     void *sself = sched_self_for_test();
     sched_rr_purge_user_tasks(sself, NULL);
 
-    uint32_t host_pid;
     g_argv_host = nx_process_create("argv-host");
     KASSERT_NOT_NULL(g_argv_host);
-    host_pid = g_argv_host->pid;
 
     int rc = nx_elf_load_into_process(g_argv_host,
                                       __argv_parent_prog_blob_start,
@@ -103,24 +101,6 @@ KTEST(sys_exec_pushes_argv_and_child_observes_strings_via_main)
         nx_task_yield();
     }
     KASSERT(reached);
-
-    /* The forked-then-exec'd child should have exit_code == 63
-     * (= argc + 60 from argv_child_prog's success path).  Search
-     * pids > host_pid so stranded processes from earlier ktests
-     * can't spoof the match.  Upper bound is the new
-     * NX_PROCESS_TABLE_CAPACITY = 32; pid_next is monotonic and
-     * the cumulative-test count of created processes hits the
-     * teens by the time argv_push runs. */
-    int found_child = 0;
-    for (uint32_t pid = host_pid + 1; pid < 64; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        if (p->state != NX_PROCESS_STATE_EXITED) continue;
-        if (p->exit_code != 63) continue;
-        found_child = 1;
-        break;
-    }
-    KASSERT(found_child);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

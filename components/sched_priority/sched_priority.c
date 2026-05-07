@@ -185,6 +185,12 @@ static int sched_priority_runqueue_size(void *self)
     return count;
 }
 
+static void sched_priority_reap_task(void *self, struct nx_task *t)
+{
+    (void)self;
+    nx_task_destroy(t);
+}
+
 const struct nx_scheduler_ops sched_priority_scheduler_ops = {
     .pick_next      = sched_priority_pick_next,
     .enqueue        = sched_priority_enqueue,
@@ -193,6 +199,7 @@ const struct nx_scheduler_ops sched_priority_scheduler_ops = {
     .set_priority   = sched_priority_set_priority,
     .tick           = sched_priority_tick,
     .runqueue_size  = sched_priority_runqueue_size,
+    .reap_task      = sched_priority_reap_task,
 };
 
 /* ------------------------------------------------------------------ */

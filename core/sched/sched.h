@@ -120,6 +120,14 @@ void nx_task_yield(void);
 int sched_runqueue_size(void);
 
 /*
+ * Destroy a zombie task via the active scheduler's reap_task op.
+ * The task must already be dequeued (nx_process_exit guarantees this).
+ * Falls back to nx_task_destroy directly when no scheduler is active
+ * (early boot, host test stubs).  NULL is a no-op.
+ */
+void sched_reap_task(struct nx_task *t);
+
+/*
  * Spawn a kernel thread and enqueue it on the scheduler.  `kstack_pages`
  * of PMM memory are allocated.  On success the returned task is ready
  * to run and the scheduler will pick it up on the next reschedule.

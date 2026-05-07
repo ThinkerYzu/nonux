@@ -117,6 +117,29 @@ struct nx_scheduler_ops {
      * Must be bounded and non-blocking.
      */
     int (*runqueue_size)(void *self);
+
+    /*
+     * Destroy a zombie task that has already been dequeued by nx_process_exit.
+     * Unlike every other op that takes a task parameter (which borrow the
+     * pointer and never free it), reap_task TRANSFERS ownership: the
+     * scheduler is responsible for calling nx_task_destroy(task) to free
+     * the task struct, kernel stack, and caller-slot registry entry.
+     *
+     * The caller guarantees:
+     *   - task has been dequeued from the runqueue (nx_process_exit did this).
+     *   - No CPU is executing on task's kernel stack (single-CPU invariant:
+     *     if the caller is running, the zombie cannot be).
+     *   - task->process has already been destroyed by nx_process_destroy.
+     *
+     * The op exists on the scheduler interface — rather than in the core
+     * driver directly — so that policy components can perform any
+     * per-scheduler bookkeeping (counters, NUMA affinity, etc.) before
+     * freeing, and so the destruction path is visible alongside the rest
+     * of the task lifecycle (enqueue / dequeue / reap).
+     *
+     * Returns void; NULL task is a no-op.
+     */
+    void (*reap_task)(void *self, struct nx_task *task);
 };
 
 #endif /* NONUX_INTERFACE_SCHEDULER_H */

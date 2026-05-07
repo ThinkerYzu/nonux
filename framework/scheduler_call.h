@@ -24,5 +24,6 @@ int nx_scheduler_set_priority(struct nx_slot *slot, struct nx_task *task,
                               int priority);
 void nx_scheduler_tick(struct nx_slot *slot);
 int nx_scheduler_runqueue_size(struct nx_slot *slot);
+void nx_scheduler_reap_task(struct nx_slot *slot, struct nx_task *task);
 
 #endif /* NONUX_FRAMEWORK_SCHEDULER_CALL_H */

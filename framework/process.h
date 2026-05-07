@@ -8,6 +8,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Forward declaration — avoids a circular include between process.h and
+ * task.h (task.h includes process.h for the process pointer).  Users that
+ * need the full struct nx_task definition must include task.h themselves. */
+struct nx_task;
+
 /*
  * Process framework — Phase 7 slice 7.1.
  *
@@ -58,13 +63,6 @@ struct nx_process {
     char                    name[NX_PROCESS_NAME_MAX];
     enum nx_process_state   state;
     int                     exit_code;
-    /* Slice 7.6d.N.6b: set to true when `sys_wait` has already
-     * delivered this process's exit status to its parent.  Subsequent
-     * `waitpid(-1)` calls skip reaped children (otherwise they'd see
-     * the same EXITED child forever, since v1 doesn't free zombies).
-     * Real reap-on-wait would free the storage entirely; for now we
-     * just hide the zombie from waitpid. */
-    bool                    reaped;
     struct nx_handle_table  handles;
     /*
      * TTBR0 root (slice 7.2).  Physical address of the L1 page table
@@ -110,6 +108,15 @@ struct nx_process {
      * `out of memory` before reaching even its first builtin.
      */
     uint64_t                mmap_bump;
+    /*
+     * Back-reference to the task that runs this process's EL0 code.
+     * Set by sys_fork immediately after nx_task_create_forked so that
+     * sys_wait can call nx_task_destroy on the zombie task after
+     * collecting the exit status.  NULL for processes not created via
+     * fork (test fixtures that call nx_process_create directly, init
+     * processes, etc.) — nx_task_destroy is a no-op on NULL.
+     */
+    struct nx_task         *main_task;
     /*
      * Slice 7.8c — wait-for-child wakeup queue.  Any time a process
      * exits (via `nx_process_exit`), the framework wakes

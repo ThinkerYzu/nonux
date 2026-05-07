@@ -252,6 +252,15 @@ int sched_runqueue_size(void)
     return g_sched_ops->runqueue_size(g_sched_self);
 }
 
+void sched_reap_task(struct nx_task *t)
+{
+    if (!t) return;
+    if (g_sched_ops && g_sched_ops->reap_task)
+        g_sched_ops->reap_task(g_sched_self, t);
+    else
+        nx_task_destroy(t);
+}
+
 void nx_task_yield(void)
 {
     struct nx_task *curr = nx_task_current();

@@ -87,20 +87,6 @@ KTEST(posix_segfault_child_data_abort_becomes_sigsegv_exit_139)
     KASSERT(found);
     KASSERT(nx_syscall_debug_write_calls() >= 3);
 
-    /* Independent check: a child process with exit_code = 128 +
-     * SIGSEGV (139) should be in the table.  Parent exits 0; child
-     * dies 139 via fault conversion. */
-    int child_found = 0;
-    for (uint32_t pid = parent_pid + 1; pid < 64; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        if (p->state != NX_PROCESS_STATE_EXITED) continue;
-        if (p->exit_code != 128 + 11) continue;
-        child_found = 1;
-        break;
-    }
-    KASSERT(child_found);
-
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();
     ops->dequeue(self, g_segv_task);

@@ -85,18 +85,6 @@ KTEST(posix_undef_child_executes_udf_becomes_sigill_exit_132)
     KASSERT(found);
     KASSERT(nx_syscall_debug_write_calls() >= 3);
 
-    /* Independent check: child exit_code = 128 + SIGILL (132). */
-    int child_found = 0;
-    for (uint32_t pid = parent_pid + 1; pid < 64; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        if (p->state != NX_PROCESS_STATE_EXITED) continue;
-        if (p->exit_code != 128 + 4) continue;
-        child_found = 1;
-        break;
-    }
-    KASSERT(child_found);
-
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();
     ops->dequeue(self, g_undef_task);

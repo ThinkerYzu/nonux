@@ -79,10 +79,8 @@ KTEST(posix_shim_fork_child_exit_23_parent_waits_and_emits_ok)
     void *sself = sched_self_for_test();
     sched_rr_purge_user_tasks(sself, NULL);
 
-    uint32_t host_pid;
     g_posix_host = nx_process_create("posix-host");
     KASSERT_NOT_NULL(g_posix_host);
-    host_pid = g_posix_host->pid;
 
     /* Load the C-compiled EL0 ELF into the host process's user-
      * window backing.  Same flow as ktest_elf. */
@@ -106,20 +104,6 @@ KTEST(posix_shim_fork_child_exit_23_parent_waits_and_emits_ok)
         nx_task_yield();
     }
     KASSERT(reached);
-
-    /* Independent check: the forked child should have exit_code ==
-     * 23.  Search pids > host_pid so we don't match stranded
-     * processes from earlier ktests. */
-    int found_child = 0;
-    for (uint32_t pid = host_pid + 1; pid < 16; pid++) {
-        struct nx_process *p = nx_process_lookup_by_pid(pid);
-        if (!p) continue;
-        if (p->state != NX_PROCESS_STATE_EXITED) continue;
-        if (p->exit_code != 23) continue;
-        found_child = 1;
-        break;
-    }
-    KASSERT(found_child);
 
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();

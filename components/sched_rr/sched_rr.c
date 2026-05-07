@@ -232,6 +232,12 @@ static void sched_rr_tick(void *self)
     }
 }
 
+static void sched_rr_reap_task(void *self, struct nx_task *t)
+{
+    (void)self;
+    nx_task_destroy(t);
+}
+
 const struct nx_scheduler_ops sched_rr_scheduler_ops = {
     .pick_next      = sched_rr_pick_next,
     .enqueue        = sched_rr_enqueue,
@@ -240,6 +246,7 @@ const struct nx_scheduler_ops sched_rr_scheduler_ops = {
     .set_priority   = sched_rr_set_priority,
     .tick           = sched_rr_tick,
     .runqueue_size  = sched_rr_runqueue_size,
+    .reap_task      = sched_rr_reap_task,
 };
 
 /* --------------------------------------------------------------------
