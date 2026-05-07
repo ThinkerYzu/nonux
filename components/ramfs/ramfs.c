@@ -352,6 +352,11 @@ static int64_t ramfs_op_seek(void *self, uint32_t id,
  * even when several stored paths project to the same first segment
  * (e.g. `/bin/sh` and `/bin/cat` both project to `bin` when iterating
  * `/`).  O(cookie²) per call — acceptable for v1's RAMFS_MAX_FILES = 24.
+ *
+ * Cookie layout (POSIX §2.2.1 requires "." and ".."):
+ *   cookie 0 → "."   (self)
+ *   cookie 1 → ".."  (parent)
+ *   cookie ≥ 2 → real file-table entries; file[i] uses cookie i+2
  */
 static int ramfs_match_child(const char *name, const char *dir_path,
                              int dir_is_root, size_t dir_len,
@@ -381,11 +386,30 @@ static int ramfs_op_readdir(void *self, const char *dir_path,
     if (dir_path[0] != '/') return NX_EINVAL;
     struct ramfs_state *s = self;
 
+    /* Synthetic "." and ".." — cookies 0 and 1. */
+    if (*cookie == 0) {
+        out->name_len = 1;
+        out->name[0] = '.';
+        out->name[1] = '\0';
+        *cookie = 1;
+        return NX_OK;
+    }
+    if (*cookie == 1) {
+        out->name_len = 2;
+        out->name[0] = '.';
+        out->name[1] = '.';
+        out->name[2] = '\0';
+        *cookie = 2;
+        return NX_OK;
+    }
+
+    /* Real file-table entries start at cookie 2.  file[i] is yielded
+     * when the search starts at cookie i+2; after yielding, cookie = i+3. */
     size_t dir_len = 0;
     while (dir_path[dir_len] != '\0') dir_len++;
     int dir_is_root = (dir_len == 1);
 
-    for (uint32_t i = *cookie; i < RAMFS_MAX_FILES; i++) {
+    for (uint32_t i = *cookie - 2; i < RAMFS_MAX_FILES; i++) {
         if (!s->files[i].in_use) continue;
 
         const char *seg;
@@ -414,10 +438,10 @@ static int ramfs_op_readdir(void *self, const char *dir_path,
         out->name_len = (uint32_t)seg_len;
         memcpy(out->name, seg, seg_len);
         out->name[seg_len] = '\0';
-        *cookie = i + 1;
+        *cookie = i + 3;
         return NX_OK;
     }
-    *cookie = RAMFS_MAX_FILES;
+    *cookie = RAMFS_MAX_FILES + 2;
     return NX_ENOENT;
 }
 

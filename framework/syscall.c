@@ -408,6 +408,50 @@ static nx_status_t sys_channel_recv(uint64_t a0, uint64_t a1, uint64_t a2,
  */
 
 /*
+ * Resolve "." and ".." segments in an absolute path in-place.
+ * Examples: "/." → "/", "/.." → "/", "/foo/.." → "/",
+ *           "/foo/./bar" → "/foo/bar".  Needed so that the dirent
+ * names "." and ".." yielded by readdir can be stat'd by busybox
+ * as "/." and "/.." without hitting ENOENT in the FS driver.
+ */
+static void path_normalize(char *path)
+{
+    if (!path || path[0] != '/') return;
+
+    char    out[NX_PATH_MAX];
+    uint8_t stk[NX_PATH_MAX / 2]; /* position in out[] before each segment */
+    int     stkn = 0;
+    size_t  oi   = 0;
+
+    out[oi++] = '/';
+
+    const char *p = path + 1;
+    while (*p) {
+        while (*p == '/') p++;   /* skip repeated slashes */
+        if (!*p) break;
+
+        const char *seg    = p;
+        while (*p && *p != '/') p++;
+        size_t      seglen = (size_t)(p - seg);
+
+        if (seglen == 1 && seg[0] == '.') {
+            /* "." — stay in current directory */
+        } else if (seglen == 2 && seg[0] == '.' && seg[1] == '.') {
+            /* ".." — go up one level (stop at root) */
+            if (stkn > 0) oi = stk[--stkn];
+        } else {
+            /* Real path segment */
+            if (stkn < (int)(sizeof stk)) stk[stkn++] = (uint8_t)oi;
+            if (oi > 1 && oi < NX_PATH_MAX - 1) out[oi++] = '/';
+            for (size_t i = 0; i < seglen && oi < NX_PATH_MAX - 1; i++)
+                out[oi++] = seg[i];
+        }
+    }
+    out[oi] = '\0';
+    for (size_t i = 0; i <= oi; i++) path[i] = out[i];
+}
+
+/*
  * Slice 7.6d.N.5 / 7.7b.1 — directory cursor.  Carries the readdir
  * cookie plus the directory's absolute path so sys_getdents64 can
  * pass `path` to the hierarchical `vops->readdir` op.  Allocated by
@@ -431,6 +475,7 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return rc;
+    path_normalize(kpath);
 
     /* Slice 8.0c: use the slot directly (blocking-call path in kernel). */
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
@@ -1821,6 +1866,7 @@ static nx_status_t sys_fstatat(uint64_t a0, uint64_t a1, uint64_t a2,
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return NX_LINUX_EINVAL;
+    path_normalize(kpath);
 
     /* Slice 7.7b.1: ask the vfs layer for kind+size in one call. */
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
@@ -1955,7 +2001,10 @@ static nx_status_t sys_getdents64(uint64_t a0, uint64_t a1, uint64_t a2,
         e->d_ino   = cur->cookie;             /* opaque-but-stable */
         e->d_off   = cur->cookie;             /* same — ls doesn't use */
         e->d_reclen = (uint16_t)reclen;
-        e->d_type  = NX_LINUX_DT_REG;         /* v1: all-regular */
+        /* DT_DIR for "." and ".." (always dirs); DT_REG for everything else. */
+        int is_dot = (name_len == 1 && src[0] == '.') ||
+                     (name_len == 2 && src[0] == '.' && src[1] == '.');
+        e->d_type  = is_dot ? NX_LINUX_DT_DIR : NX_LINUX_DT_REG;
         memcpy(e->d_name, src, name_len);
         e->d_name[name_len] = '\0';
         /* Zero any alignment padding so user reads are deterministic. */

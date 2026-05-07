@@ -208,9 +208,17 @@ void nx_conformance_fs_readdir_on_empty_fs_returns_enoent(
     void *self = f->create();
     ASSERT_NOT_NULL(self);
 
+    /* Drain "." and ".." if the driver yields them (POSIX-compliant drivers
+     * like ramfs do; simpler stubs may go straight to ENOENT). */
     uint32_t cookie = 0;
     struct nx_fs_dirent ent;
-    int rc = f->ops->readdir(self, "/", &cookie, &ent);
+    int rc = NX_OK;
+    for (int n = 0; n < 4; n++) {
+        rc = f->ops->readdir(self, "/", &cookie, &ent);
+        if (rc != NX_OK) break;
+        /* Only dot entries are valid on an otherwise-empty filesystem. */
+        ASSERT(ent.name_len >= 1 && ent.name[0] == '.');
+    }
     ASSERT_EQ_U(rc, NX_ENOENT);
 
     f->destroy(self);
@@ -233,11 +241,15 @@ void nx_conformance_fs_readdir_yields_created_files_then_enoent(
 
     int seen[3] = { 0, 0, 0 };
     uint32_t cookie = 0;
-    for (int iter = 0; iter < 10; iter++) {
+    /* +2 slots for "." and ".." that POSIX-compliant drivers prepend. */
+    for (int iter = 0; iter < 12; iter++) {
         struct nx_fs_dirent ent;
         int rc = f->ops->readdir(self, "/", &cookie, &ent);
         if (rc == NX_ENOENT) break;
         ASSERT_EQ_U(rc, NX_OK);
+
+        /* Skip "." and ".." — POSIX-compliant drivers yield them first. */
+        if (ent.name_len >= 1 && ent.name[0] == '.') continue;
 
         int matched = 0;
         for (int i = 0; i < 3; i++) {
