@@ -14,6 +14,7 @@
  *
  * Number-only mapping; argument layouts must already match.  Mapped
  * syscalls today:
+ *   __NR_getcwd      (17)  -> NX_SYS_GETCWD         (47)
  *   __NR_dup3        (24)  -> NX_SYS_DUP3          (24)   [flags ignored]
  *   __NR_fcntl       (25)  -> NX_SYS_FCNTL         (26)
  *   __NR_ioctl       (29)  -> NX_SYS_IOCTL         (39)   [TCGETS/TCSETS/TIOCGWINSZ]
@@ -68,10 +69,12 @@
 static inline long __nx_translate(long n)
 {
 	switch (n) {
+	case 17:  return 47;  /* __NR_getcwd      -> NX_SYS_GETCWD */
 	case 24:  return 24;  /* __NR_dup3        -> NX_SYS_DUP3   [flags ignored] */
 	case 25:  return 26;  /* __NR_fcntl       -> NX_SYS_FCNTL  [F_DUPFD + stubs] */
 	case 29:  return 39;  /* __NR_ioctl       -> NX_SYS_IOCTL  [TCGETS/TCSETS/TIOCGWINSZ] */
 	case 34:  return 40;  /* __NR_mkdirat     -> NX_SYS_MKDIRAT [slice 7.7b.1] */
+	case 49:  return 46;  /* __NR_chdir       -> NX_SYS_CHDIR */
 	case 56:  return 23;  /* __NR_openat      -> NX_SYS_OPENAT */
 	case 57:  return 2;   /* __NR_close       -> NX_SYS_HANDLE_CLOSE */
 	case 59:  return 15;  /* __NR_pipe2       -> NX_SYS_PIPE   [flags ignored] */

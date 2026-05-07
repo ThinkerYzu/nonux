@@ -1053,10 +1053,10 @@ musl-clean:
 # at third_party/musl/_sysroot/ (populated lazily — install-headers
 # for include/, symlinks back to lib/ for the libs).
 #
-# busybox is intentionally NOT a dep of `make test` yet; the build
-# takes ~30 s and the artefact isn't consumed by any ktest in 7.6d.1.
-# It becomes a test dep when 7.6d.2 first execs it from a libnxlibc
-# parent.
+# busybox itself is a transitive dep of `make test` via
+# kernel-test.bin → initramfs.cpio → $(BUSYBOX_BIN).  kernel-busybox.bin
+# is now also an explicit dep (see test target) so that
+# initramfs-busybox.cpio stays in sync with busybox after musl changes.
 BUSYBOX_DIR    := third_party/busybox
 BUSYBOX_BIN    := $(BUSYBOX_DIR)/busybox
 BUSYBOX_CONFIG := $(BUSYBOX_DIR)/configs/nonux_defconfig
@@ -1096,7 +1096,13 @@ test/kernel/posix_musl_prog_blob.o: test/kernel/posix_musl_prog_blob.S \
                                     test/kernel/posix_musl_prog.elf
 
 # Tests
-test: verify-registry verify-iface-fresh test-tools test-host test-kernel musl-libc
+#
+# kernel-busybox.bin is listed explicitly so that `make test` keeps the
+# interactive (busybox-init) kernel up to date alongside the ktest kernel.
+# Without it, musl/busybox changes are reflected in kernel-test.bin (via
+# initramfs.cpio) but initramfs-busybox.cpio stays stale until
+# `make test-interactive` or `make run-busybox` is run separately.
+test: verify-registry verify-iface-fresh test-tools test-host test-kernel kernel-busybox.bin musl-libc
 
 test-host:
 	$(MAKE) -C test/host

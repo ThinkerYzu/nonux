@@ -462,6 +462,30 @@ enum nx_syscall_number {
                                   *  changing the mode, then resumes it and
                                   *  flushes the hold queue via the new mode. */
 
+    NX_SYS_CHDIR          = 46,  /* (const char *path) → 0 / Linux -errno.
+                                  *  Changes the per-process current working
+                                  *  directory.  `path` may be absolute or
+                                  *  relative; relative paths are resolved
+                                  *  against the current CWD.  Verifies the
+                                  *  resolved path exists and is a directory
+                                  *  via vfs stat before updating the CWD.
+                                  *  Returns 0 on success, Linux -ENOENT if
+                                  *  the path doesn't exist, Linux -ENOTDIR
+                                  *  if it exists but is not a directory, or
+                                  *  Linux -EINVAL on bad args.
+                                  *  Mapped from Linux `__NR_chdir = 49`. */
+    NX_SYS_GETCWD         = 47,  /* (char *buf, size_t size) → nbytes / Linux -errno.
+                                  *  Copies the current working directory
+                                  *  string (including the terminating NUL)
+                                  *  into `buf`.  Returns the number of bytes
+                                  *  written (strlen(cwd)+1) on success, or
+                                  *  Linux -EINVAL if buf is NULL, size is 0,
+                                  *  or the CWD (including NUL) does not fit
+                                  *  in `size` bytes.  musl's getcwd(3)
+                                  *  treats any non-negative return as success
+                                  *  and returns `buf` to the caller.
+                                  *  Mapped from Linux `__NR_getcwd = 17`. */
+
     NX_SYSCALL_COUNT,            /* sentinel — keep last */
 };
 

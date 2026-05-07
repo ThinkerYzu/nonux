@@ -97,6 +97,8 @@ void nx_syscall_reset_for_test(void)
      * `nx_process_reset_for_test` to wipe the whole table universe. */
     struct nx_process *p = nx_process_current();
     nx_handle_table_init(&p->handles);
+    p->cwd[0] = '/';
+    p->cwd[1] = '\0';
     __atomic_store_n(&g_debug_write_calls, 0, __ATOMIC_RELAXED);
     nx_console_reset_for_test();
 }
@@ -451,6 +453,36 @@ static void path_normalize(char *path)
     for (size_t i = 0; i <= oi; i++) path[i] = out[i];
 }
 
+/* Resolve kpath in-place: if already absolute, just normalize it; if
+ * relative, prepend the current process's CWD first, then normalize.
+ * After return, kpath is always an absolute, normalized string within
+ * NX_PATH_MAX bytes. */
+static void path_make_absolute(char kpath[NX_PATH_MAX])
+{
+    if (kpath[0] == '/') { path_normalize(kpath); return; }
+
+    struct nx_process *proc = nx_process_current();
+    const char *cwd = (proc->cwd[0] == '/') ? proc->cwd : "/";
+
+    /* Build: cwd + '/' + kpath into a scratch buffer. */
+    char tmp[NX_PATH_MAX];
+    size_t oi = 0;
+
+    /* Copy cwd, stripping any trailing slash (unless cwd is just "/"). */
+    size_t ci = 0;
+    while (cwd[ci] && oi < NX_PATH_MAX - 1) tmp[oi++] = cwd[ci++];
+    while (oi > 1 && tmp[oi - 1] == '/') oi--;
+
+    if (oi < NX_PATH_MAX - 1) tmp[oi++] = '/';
+
+    for (size_t ki = 0; kpath[ki] && oi < NX_PATH_MAX - 1; ki++)
+        tmp[oi++] = kpath[ki];
+    tmp[oi] = '\0';
+
+    for (size_t i = 0; i <= oi; i++) kpath[i] = tmp[i];
+    path_normalize(kpath);
+}
+
 /*
  * Slice 7.6d.N.5 / 7.7b.1 — directory cursor.  Carries the readdir
  * cookie plus the directory's absolute path so sys_getdents64 can
@@ -475,7 +507,7 @@ static nx_status_t sys_open(uint64_t a0, uint64_t a1, uint64_t a2,
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return rc;
-    path_normalize(kpath);
+    path_make_absolute(kpath);
 
     /* Slice 8.0c: use the slot directly (blocking-call path in kernel). */
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
@@ -1866,7 +1898,7 @@ static nx_status_t sys_fstatat(uint64_t a0, uint64_t a1, uint64_t a2,
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return NX_LINUX_EINVAL;
-    path_normalize(kpath);
+    path_make_absolute(kpath);
 
     /* Slice 7.7b.1: ask the vfs layer for kind+size in one call. */
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
@@ -2095,6 +2127,7 @@ static nx_status_t sys_mkdirat(uint64_t a0, uint64_t a1, uint64_t a2,
     char kpath[NX_PATH_MAX];
     int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
     if (rc != NX_OK) return NX_LINUX_EINVAL;
+    path_make_absolute(kpath);
 
     struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
     if (!vfs_slot) return NX_LINUX_EINVAL;
@@ -2918,6 +2951,80 @@ static nx_status_t sys_config_rewire(uint64_t a0, uint64_t a1, uint64_t a2,
                                                  (enum nx_conn_mode)mode);
 }
 
+/* ---------- CWD syscalls (NX_SYS_CHDIR / NX_SYS_GETCWD) ------------- */
+
+#define NX_LINUX_ENOTDIR (-20)
+
+/*
+ * NX_SYS_CHDIR — (const char *path) → 0 / Linux -errno.
+ *
+ * Resolves `path` against the current CWD (relative or absolute),
+ * verifies via vfs stat that the result is a directory, then stores
+ * it as the new per-process CWD.
+ *
+ * Mapped from Linux __NR_chdir = 49.
+ */
+static nx_status_t sys_chdir(uint64_t a0, uint64_t a1, uint64_t a2,
+                              uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    const char *user_path = (const char *)(uintptr_t)a0;
+
+    char kpath[NX_PATH_MAX];
+    int rc = copy_path_from_user(kpath, NX_PATH_MAX, user_path);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+    path_make_absolute(kpath);
+
+    struct nx_slot *vfs_slot = nx_slot_lookup("vfs");
+    if (!vfs_slot) return NX_LINUX_EINVAL;
+
+    struct nx_fs_stat st;
+    rc = nx_vfs_stat(vfs_slot, kpath, &st);
+    if (rc == NX_ENOENT) return NX_LINUX_ENOENT;
+    if (rc != NX_OK)     return NX_LINUX_EINVAL;
+    if (st.kind != NX_FS_KIND_DIR) return NX_LINUX_ENOTDIR;
+
+    struct nx_process *proc = nx_process_current();
+    size_t i = 0;
+    for (; i < NX_PROCESS_CWD_MAX - 1 && kpath[i]; i++)
+        proc->cwd[i] = kpath[i];
+    proc->cwd[i] = '\0';
+    return 0;
+}
+
+/*
+ * NX_SYS_GETCWD — (char *buf, size_t size) → nbytes / Linux -errno.
+ *
+ * Copies the current working directory (including the terminating NUL)
+ * into the user-supplied buffer.  Returns the number of bytes written
+ * on success.  musl's getcwd(3) checks only that the return value is
+ * non-negative and returns `buf` to the caller.
+ *
+ * Mapped from Linux __NR_getcwd = 17.
+ */
+static nx_status_t sys_getcwd(uint64_t a0, uint64_t a1, uint64_t a2,
+                               uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    char   *user_buf = (char *)(uintptr_t)a0;
+    size_t  size     = (size_t)a1;
+
+    if (!user_buf || size == 0) return NX_LINUX_EINVAL;
+
+    struct nx_process *proc = nx_process_current();
+    const char *cwd = (proc->cwd[0] == '/') ? proc->cwd : "/";
+
+    size_t len = 0;
+    while (cwd[len]) len++;
+    len++;   /* include NUL */
+
+    if (len > size) return NX_LINUX_EINVAL;
+
+    int rc = copy_to_user(user_buf, cwd, len);
+    if (rc != NX_OK) return NX_LINUX_EINVAL;
+    return (nx_status_t)len;
+}
+
 /* ---------- Dispatch table ------------------------------------------- */
 
 static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
@@ -2967,6 +3074,8 @@ static const syscall_fn g_syscall_table[NX_SYSCALL_COUNT] = {
     [NX_SYS_CONFIG_QUERY]   = sys_config_query,
     [NX_SYS_CONFIG_SWAP]    = sys_config_swap,
     [NX_SYS_CONFIG_REWIRE]  = sys_config_rewire,
+    [NX_SYS_CHDIR]          = sys_chdir,
+    [NX_SYS_GETCWD]         = sys_getcwd,
 };
 
 /* ---------- Entry point ---------------------------------------------- */

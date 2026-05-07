@@ -41,6 +41,7 @@ struct nx_process g_kernel_process = {
      * process has no real parent — nothing waits on its exit. */
     .exit_waitq = { { { &g_kernel_process.exit_waitq.waiters.n,
                          &g_kernel_process.exit_waitq.waiters.n } } },
+    .cwd        = "/",
 };
 
 /* ---------- Process bookkeeping ------------------------------------- */
@@ -120,6 +121,8 @@ struct nx_process *nx_process_create(const char *name)
 
     nx_handle_table_init(&p->handles);
     nx_waitq_init(&p->exit_waitq);   /* slice 7.8c — wake parent on exit */
+    p->cwd[0] = '/';
+    p->cwd[1] = '\0';
 
     /*
      * Slice 9b.2: pre-install three RESOURCE handles at the head of the
@@ -385,6 +388,9 @@ struct nx_process *nx_process_fork(struct nx_process *parent)
      * mmu_copy_user_backing, and the child's mallocng inherits the
      * same view of "what's been allocated". */
     child->mmap_bump = parent->mmap_bump;
+    /* Inherit the parent's CWD — POSIX fork() preserves the working
+     * directory in the child. */
+    memcpy(child->cwd, parent->cwd, NX_PROCESS_CWD_MAX);
     /* Handle table left empty — see the header comment for rationale. */
     return child;
 }
@@ -402,4 +408,6 @@ void nx_process_reset_for_test(void)
     nx_handle_table_init(&g_kernel_process.handles);
     g_kernel_process.state     = NX_PROCESS_STATE_ACTIVE;
     g_kernel_process.exit_code = 0;
+    g_kernel_process.cwd[0]   = '/';
+    g_kernel_process.cwd[1]   = '\0';
 }

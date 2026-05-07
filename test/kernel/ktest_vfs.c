@@ -19,11 +19,23 @@
 #include "core/sched/task.h"
 #include "framework/bootstrap.h"
 #include "framework/component.h"
+#include "framework/process.h"
 #include "framework/registry.h"
 #include "framework/syscall.h"
 #include "interfaces/fs.h"
 #include "interfaces/scheduler.h"
 #include "interfaces/vfs.h"
+
+/* ---------- Inline SVC helper for getcwd ktest ----------------------- */
+
+static inline long ktest_svc2(uint64_t num, uint64_t a0, uint64_t a1)
+{
+    register long     x0 __asm__("x0") = (long)a0;
+    register uint64_t x1 __asm__("x1") = a1;
+    register uint64_t x8 __asm__("x8") = num;
+    __asm__ __volatile__("svc #0" : "+r"(x0) : "r"(x8), "r"(x1) : "memory");
+    return x0;
+}
 
 /* ---------- Slot presence + lifecycle -------------------------------- */
 
@@ -298,4 +310,57 @@ KTEST(el0_readdir_walks_root_and_emits_names_then_marker)
     const struct nx_scheduler_ops *ops = sched_ops_for_test();
     void *self = sched_self_for_test();
     ops->dequeue(self, g_readdir_el0_task);
+}
+
+/* ---------- sys_getcwd kernel test ----------------------------------- *
+ *
+ * sys_chdir requires nx_vfs_stat (blocking IPC), which cannot be called
+ * from the synchronous ktest body (TPIDR_EL1 is 0 there; only kthreads
+ * spawned by sched_spawn_kthread have a live task pointer).  Accordingly:
+ *
+ *   - The CWD field is set directly (bypassing sys_chdir) to prove the
+ *     field is plumbed into the process struct correctly.
+ *   - sys_getcwd is exercised via SVC — it only does copy_to_user, no
+ *     IPC, so it works from within the ktest body.
+ *   - The full sys_chdir path (IPC + ENOENT + ENOTDIR) is covered by the
+ *     host test suite.
+ *
+ * Test flow:
+ *   1. nx_syscall_reset_for_test() sets CWD to "/".
+ *   2. sys_getcwd via SVC → confirms initial CWD is "/".
+ *   3. Directly set proc->cwd to "/ktest_cwd_dir".
+ *   4. sys_getcwd → confirms the updated value is returned.
+ *   5. Reset CWD to "/" so later ktests don't see a stale value.
+ */
+
+KTEST(sys_getcwd_returns_per_process_cwd)
+{
+    nx_syscall_reset_for_test();   /* sets proc->cwd = "/" */
+
+    /* Place the getcwd output buffer in the user window so
+     * copy_to_user passes its bounds check. */
+    uint64_t base = mmu_user_window_base();
+    char *ubuf = (char *)(uintptr_t)base;
+
+    /* 2. getcwd → "/" */
+    long rc = ktest_svc2(NX_SYS_GETCWD, (uint64_t)(uintptr_t)ubuf, 128);
+    KASSERT(rc >= 1);
+    KASSERT(ubuf[0] == '/' && ubuf[1] == '\0');
+
+    /* 3. Directly update CWD to a multi-component path. */
+    struct nx_process *proc = nx_process_current();
+    const char *newcwd = "/ktest_cwd_dir";
+    size_t i = 0;
+    while (newcwd[i] && i < NX_PROCESS_CWD_MAX - 1)
+        { proc->cwd[i] = newcwd[i]; i++; }
+    proc->cwd[i] = '\0';
+
+    /* 4. getcwd must now return "/ktest_cwd_dir". */
+    rc = ktest_svc2(NX_SYS_GETCWD, (uint64_t)(uintptr_t)ubuf, 128);
+    KASSERT(rc >= 1);
+    KASSERT(ubuf[0] == '/' && ubuf[1] == 'k');   /* starts with "/k" */
+
+    /* 5. Reset CWD. */
+    proc->cwd[0] = '/';
+    proc->cwd[1] = '\0';
 }

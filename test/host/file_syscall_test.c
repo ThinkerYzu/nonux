@@ -22,7 +22,9 @@
  *   3. sys_handle_close on a HANDLE_FILE runs the vfs close — verified
  *      by the fake driver's close_calls counter.
  *   4. No-VFS / no-filesystem compositions bounce back with NX_ENOENT.
- *   5. Relative paths + oversize paths are rejected cleanly.
+ *   5. Relative paths are resolved against the per-process CWD before
+ *      dispatch; oversize paths are rejected cleanly.
+ *   6. sys_chdir / sys_getcwd update and retrieve the per-process CWD.
  */
 
 #include "test_runner.h"
@@ -739,5 +741,162 @@ TEST(sys_handle_close_file_after_unmount_still_closes_handle_slot)
     struct nx_handle_table *t = nx_syscall_current_table();
     ASSERT_EQ_U(nx_handle_lookup(t, (nx_handle_t)h, 0, 0, 0), NX_ENOENT);
 
+    fixture_teardown(&fx);
+}
+
+/* ---------- CWD tests (sys_chdir / sys_getcwd) ----------------------- */
+
+TEST(sys_getcwd_returns_initial_cwd_as_root)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    char buf[128];
+    memset(buf, 0xAB, sizeof buf);
+    int64_t rc = dispatch(&tf, NX_SYS_GETCWD, (uint64_t)(uintptr_t)buf,
+                          sizeof buf, 0);
+    /* Returns number of bytes written (strlen("/") + 1 == 2). */
+    ASSERT(rc >= 1);
+    ASSERT_EQ_U(buf[0], '/');
+    ASSERT_EQ_U(buf[1], '\0');
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_getcwd_null_buf_returns_einval)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    int64_t rc = dispatch(&tf, NX_SYS_GETCWD, 0, 128, 0);
+    ASSERT(rc < 0);
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_getcwd_zero_size_returns_einval)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    char buf[128];
+    int64_t rc = dispatch(&tf, NX_SYS_GETCWD, (uint64_t)(uintptr_t)buf, 0, 0);
+    ASSERT(rc < 0);
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_chdir_to_root_succeeds_and_getcwd_confirms)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* chdir to "/" — fake_stat reports it as a directory. */
+    int64_t rc = dispatch(&tf, NX_SYS_CHDIR, (uint64_t)(uintptr_t)"/", 0, 0);
+    ASSERT_EQ_U((int64_t)0, rc);
+
+    char buf[128];
+    rc = dispatch(&tf, NX_SYS_GETCWD, (uint64_t)(uintptr_t)buf, sizeof buf, 0);
+    ASSERT(rc >= 1);
+    ASSERT_EQ_U(buf[0], '/');
+    ASSERT_EQ_U(buf[1], '\0');
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_chdir_to_nonexistent_path_returns_enoent)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* "/no_such_dir" doesn't exist in the fake FS — stat returns ENOENT. */
+    int64_t rc = dispatch(&tf, NX_SYS_CHDIR,
+                          (uint64_t)(uintptr_t)"/no_such_dir", 0, 0);
+    ASSERT_EQ_U((int64_t)-2, rc);   /* Linux ENOENT = 2 */
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_chdir_to_file_returns_enotdir)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* Create a regular file, then try to chdir into it. */
+    dispatch(&tf, NX_SYS_OPEN, (uint64_t)(uintptr_t)"/afile",
+             NX_VFS_OPEN_WRITE | NX_VFS_OPEN_CREATE, 0);
+
+    int64_t rc = dispatch(&tf, NX_SYS_CHDIR,
+                          (uint64_t)(uintptr_t)"/afile", 0, 0);
+    ASSERT_EQ_U((int64_t)-20, rc);   /* Linux ENOTDIR = 20 */
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_chdir_null_path_returns_einval)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    int64_t rc = dispatch(&tf, NX_SYS_CHDIR, 0, 0, 0);
+    ASSERT(rc < 0);
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_open_relative_path_resolved_against_cwd)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* Create "/myfile". */
+    int64_t h = dispatch(&tf, NX_SYS_OPEN, (uint64_t)(uintptr_t)"/myfile",
+                         NX_VFS_OPEN_WRITE | NX_VFS_OPEN_CREATE, 0);
+    ASSERT(h > 0);
+    dispatch(&tf, NX_SYS_HANDLE_CLOSE, (uint64_t)h, 0, 0);
+
+    /* CWD is already "/"; open with relative path "myfile" must succeed. */
+    int64_t h2 = dispatch(&tf, NX_SYS_OPEN, (uint64_t)(uintptr_t)"myfile",
+                          NX_VFS_OPEN_READ, 0);
+    ASSERT(h2 > 0);
+    dispatch(&tf, NX_SYS_HANDLE_CLOSE, (uint64_t)h2, 0, 0);
+
+    fixture_teardown(&fx);
+}
+
+TEST(sys_fstatat_relative_path_resolved_against_cwd)
+{
+    struct fixture fx;
+    fixture_setup(&fx);
+    struct trap_frame_host tf;
+
+    /* Create "/statme" and leave it open so fake_stat can find it
+     * (fake_close sets in_use=0; stat scans in_use entries only). */
+    int64_t h = dispatch(&tf, NX_SYS_OPEN, (uint64_t)(uintptr_t)"/statme",
+                         NX_VFS_OPEN_WRITE | NX_VFS_OPEN_CREATE, 0);
+    ASSERT(h > 0);
+
+    /* stat with relative path — dirfd (a0) AT_FDCWD, path at a1. */
+    char statbuf[128];
+    memset(statbuf, 0, sizeof statbuf);
+    reset_frame(&tf);
+    tf.x[8] = NX_SYS_FSTATAT;
+    tf.x[0] = (uint64_t)(uintptr_t)(-100); /* AT_FDCWD — ignored */
+    tf.x[1] = (uint64_t)(uintptr_t)"statme";
+    tf.x[2] = (uint64_t)(uintptr_t)statbuf;
+    tf.x[3] = 0;
+    CALL_DISPATCH(&tf);
+    int64_t rc = (int64_t)tf.x[0];
+    ASSERT_EQ_U((int64_t)0, rc);
+
+    dispatch(&tf, NX_SYS_HANDLE_CLOSE, (uint64_t)h, 0, 0);
     fixture_teardown(&fx);
 }

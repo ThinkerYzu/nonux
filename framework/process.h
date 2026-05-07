@@ -13,6 +13,12 @@
  * need the full struct nx_task definition must include task.h themselves. */
 struct nx_task;
 
+/* Maximum length of the per-process current working directory string
+ * (including the terminating NUL).  Matches NX_PATH_MAX in syscall.h —
+ * kept here as a separate constant so process.h doesn't need to pull in
+ * syscall.h (which is a larger, unrelated header). */
+#define NX_PROCESS_CWD_MAX  128u
+
 /*
  * Process framework — Phase 7 slice 7.1.
  *
@@ -127,6 +133,14 @@ struct nx_process {
      * exit-eligible child by the time they call `wait`.
      */
     struct nx_waitq         exit_waitq;
+    /*
+     * Current working directory (absolute, NUL-terminated).
+     * Initialised to "/" in nx_process_create; inherited across fork;
+     * updated by sys_chdir.  sys_open / sys_openat / sys_fstatat /
+     * sys_mkdirat resolve relative paths against this string before
+     * passing to the VFS layer (which only accepts absolute paths).
+     */
+    char                    cwd[NX_PROCESS_CWD_MAX];
 };
 
 /* Layout within the 8 MiB user window (slice 7.6d.2b grew the
