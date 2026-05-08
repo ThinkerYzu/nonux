@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>README – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {  background-color: #f8f8f8; }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ef2929; } /* Alert */
+    code span.an { color: #8f5902; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #204a87; } /* Attribute */
+    code span.bn { color: #0000cf; } /* BaseN */
+    code span.cf { color: #204a87; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4e9a06; } /* Char */
+    code span.cn { color: #8f5902; } /* Constant */
+    code span.co { color: #8f5902; font-style: italic; } /* Comment */
+    code span.cv { color: #8f5902; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #8f5902; font-weight: bold; font-style: italic; } /* Documentation */
+    code span.dt { color: #204a87; } /* DataType */
+    code span.dv { color: #0000cf; } /* DecVal */
+    code span.er { color: #a40000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #0000cf; } /* Float */
+    code span.fu { color: #204a87; font-weight: bold; } /* Function */
+    code span.im { } /* Import */
+    code span.in { color: #8f5902; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #204a87; font-weight: bold; } /* Keyword */
+    code span.op { color: #ce5c00; font-weight: bold; } /* Operator */
+    code span.ot { color: #8f5902; } /* Other */
+    code span.pp { color: #8f5902; font-style: italic; } /* Preprocessor */
+    code span.sc { color: #ce5c00; font-weight: bold; } /* SpecialChar */
+    code span.ss { color: #4e9a06; } /* SpecialString */
+    code span.st { color: #4e9a06; } /* String */
+    code span.va { color: #000000; } /* Variable */
+    code span.vs { color: #4e9a06; } /* VerbatimString */
+    code span.wa { color: #8f5902; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#test" id="toc-test">test/</a>
+<ul>
+<li><a href="#host" id="toc-host"><code>host/</code></a></li>
+<li><a href="#kernel" id="toc-kernel"><code>kernel/</code></a></li>
+<li><a href="#interactive"
+id="toc-interactive"><code>interactive/</code></a></li>
+<li><a href="#bench" id="toc-bench"><code>bench/</code></a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="test">test/</h1>
+<p>All test code. Three execution tiers — host, kernel (QEMU), and
+interactive — plus a placeholder for benchmarks. Run with:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test              <span class="co"># all tiers (tools + host + kernel)</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test-tools        <span class="co"># Python tool unit tests only</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test-host         <span class="co"># host-side C tests only</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test-kernel       <span class="co"># kernel-side tests under QEMU (semihosting exit)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test-interactive  <span class="co"># scripted busybox shell sessions</span></span></code></pre></div>
+<h2 id="host"><code>host/</code></h2>
+<p>Host-side C unit tests. Compiled for the <strong>build
+machine</strong> (x86-64), not ARM64 — no QEMU needed, runs in
+milliseconds. Tests link against the same framework and component C
+files as the kernel build but with a thin <code>mem_track.c</code> shim
+replacing the kernel allocator so leaks are caught.</p>
+<p>Structure:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Path</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>main.c</code> / <code>test_runner.c/.h</code></td>
+<td>Test harness entry point. Discovers all registered test functions
+and runs them, printing a pass/fail count.</td>
+</tr>
+<tr class="even">
+<td><code>mem_track.c/.h</code></td>
+<td>Heap allocation tracker. Wraps
+<code>malloc</code>/<code>free</code>; fails the test if the count is
+non-zero at teardown.</td>
+</tr>
+<tr class="odd">
+<td><code>*_test.c</code></td>
+<td>One file per module under test (e.g. <code>registry_test.c</code>,
+<code>handle_test.c</code>, <code>syscall_test.c</code>).</td>
+</tr>
+<tr class="even">
+<td><code>slice_*.c</code></td>
+<td>Cross-cutting integration tests keyed to implementation slices
+(e.g. <code>slice_8_0a8_test.c</code>,
+<code>slice_9b_2_test.c</code>).</td>
+</tr>
+<tr class="odd">
+<td><code>conformance/</code></td>
+<td>Component conformance suites. <code>conformance_fs.c/.h</code>,
+<code>conformance_mm.c/.h</code>,
+<code>conformance_scheduler.c/.h</code> define standard test cases that
+every <code>fs</code>/<code>mm</code>/<code>scheduler</code>
+implementation must pass. Tests in <code>component_*_test.c</code> call
+the conformance suite for the component under test.</td>
+</tr>
+<tr class="even">
+<td><code>fixtures/</code></td>
+<td>Small JSON fixtures used by <code>test_validate_config.py</code> and
+<code>test_gen_config.py</code> for tempdir-based end-to-end tests.</td>
+</tr>
+<tr class="odd">
+<td><code>gen/</code></td>
+<td>Copies of generated headers (<code>config.h</code>, per-component
+<code>_deps.h</code>) used by the host build. Kept separate from the
+kernel <code>gen/</code> to allow independent regeneration.</td>
+</tr>
+<tr class="even">
+<td><code>mock_component.h</code></td>
+<td>Macro-based mock component builder. Used by integration tests that
+need a placeholder component to fill a slot without implementing the
+full interface.</td>
+</tr>
+<tr class="odd">
+<td><code>hook_inspector.h</code></td>
+<td>Hook-chain inspector for tests that verify hook registration order
+and call counts.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="kernel"><code>kernel/</code></h2>
+<p>In-kernel tests that boot under QEMU with <code>-semihosting</code>.
+Each <code>ktest_*.c</code> file registers test cases with the
+<code>KTEST_*</code> macros from <code>ktest.h</code>; the main runner
+(<code>ktest_main.c</code>) iterates them in registration order and
+exits via ARM semihosting <code>SYS_EXIT_EXTENDED</code> with a
+pass/fail exit code that QEMU propagates as its own exit status.</p>
+<p>Notable groups:</p>
+<table>
+<colgroup>
+<col style="width: 47%" />
+<col style="width: 52%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Pattern</th>
+<th>Coverage</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>ktest_bootstrap.c</code></td>
+<td>Component graph bring-up and slot wiring</td>
+</tr>
+<tr class="even">
+<td><code>ktest_pmm.c</code>, <code>ktest_mm_buddy.c</code>,
+<code>ktest_mmu.c</code></td>
+<td>Physical and virtual memory</td>
+</tr>
+<tr class="odd">
+<td><code>ktest_sched*.c</code></td>
+<td>Scheduler round-robin, preemption, live swap</td>
+</tr>
+<tr class="even">
+<td><code>ktest_el0.c</code>, <code>ktest_elf.c</code></td>
+<td>EL0 entry and ELF loader</td>
+</tr>
+<tr class="odd">
+<td><code>ktest_posix*.c</code></td>
+<td>POSIX syscall surface (open, read, write, fork, exec, wait, pipe,
+ppoll, signal)</td>
+</tr>
+<tr class="even">
+<td><code>ktest_posix_busybox*.c</code></td>
+<td>Busybox shell commands (echo, cat, ls, mkdir, pipe, redirect,
+trap)</td>
+</tr>
+<tr class="odd">
+<td><code>ktest_posix_musl*.c</code></td>
+<td>musl-linked EL0 programs</td>
+</tr>
+<tr class="even">
+<td><code>ktest_pause.c</code>, <code>ktest_recompose.c</code>,
+<code>ktest_live_swap.c</code></td>
+<td>Component pause/drain/resume and runtime recomposition</td>
+</tr>
+<tr class="odd">
+<td><code>ktest_config.c</code>, <code>ktest_conn_mode.c</code></td>
+<td>Runtime config manager and async↔︎sync mode switching</td>
+</tr>
+<tr class="even">
+<td><code>ktest_9b_3.c</code></td>
+<td>Phase 9b slot-based resource handle routing</td>
+</tr>
+</tbody>
+</table>
+<p>EL0 test programs are compiled separately as AArch64 ELF binaries
+(<code>*_prog.elf</code>) and embedded into <code>kernel-test.bin</code>
+via <code>*_prog_blob.S</code> (<code>.incbin</code> directives). The
+ELF loader in <code>framework/elf.c</code> loads them into the user
+address space at test time.</p>
+<p><code>init_prog.ld</code> is the shared linker script for EL0 test
+programs (base VA <code>0x48000000</code>). <code>banner.txt</code> is
+embedded in the kernel image and printed on boot so QEMU test output is
+recognisable in CI logs.</p>
+<h2 id="interactive"><code>interactive/</code></h2>
+<p>Scripted busybox shell sessions for smoke-testing the full POSIX
+stack end-to-end. Each test is a pair of files:</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>&lt;name&gt;.script</code></td>
+<td>Input fed to the busybox shell line by line via
+<code>tools/qemu-stdin-feed.sh</code></td>
+</tr>
+<tr class="even">
+<td><code>&lt;name&gt;.expected</code></td>
+<td>Expected output; the test runner diffs actual vs. expected</td>
+</tr>
+</tbody>
+</table>
+<p><code>run.sh</code> boots <code>kernel-busybox.bin</code> under QEMU,
+feeds the script, captures output, and compares. Run via
+<code>make test-interactive</code>.</p>
+<p>Current scripts: <code>echo_hello</code>, <code>echo_cat</code>,
+<code>echo_pipe</code>, <code>ls_root</code>, <code>mkdir_tmp</code>,
+<code>ps_smoke</code>, <code>visible_prompt</code>.</p>
+<h2 id="bench"><code>bench/</code></h2>
+<p>Benchmark programs — placeholder for Phase 10. Empty for now;
+<code>make bench</code> will boot a benchmark binary under QEMU and emit
+a reproducible timing report when Phase 10 lands.</p>
+</body>
+</html>

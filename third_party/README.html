@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>README – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#third_party" id="toc-third_party">third_party/</a>
+<ul>
+<li><a href="#busybox" id="toc-busybox"><code>busybox/</code></a></li>
+<li><a href="#musl" id="toc-musl"><code>musl/</code></a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="third_party">third_party/</h1>
+<p>Pre-built third-party binaries and libraries used for integration
+testing. Nothing in this directory is compiled from source during a
+normal <code>make</code> — the binaries are checked in as-is.</p>
+<h2 id="busybox"><code>busybox/</code></h2>
+<p>Statically linked busybox binary for ARM64. Used as the userspace
+shell and utility set in integration tests.</p>
+<p><code>tools/build-busybox.sh</code> documents how to reproduce the
+build (ARM64 static musl config). The resulting binary is packed into
+<code>initramfs-busybox.cpio</code> by
+<code>tools/pack-initramfs.py</code> and embedded in
+<code>kernel-busybox.bin</code> via
+<code>test/kernel/initramfs_busybox_blob.S</code>.</p>
+<p>Tests that run the busybox shell live in
+<code>test/kernel/ktest_posix_busybox*.c</code> and
+<code>test/interactive/</code>.</p>
+<h2 id="musl"><code>musl/</code></h2>
+<p>musl libc headers and pre-built static library for ARM64. Used by EL0
+test programs that need a real libc (formatted I/O, math, etc.) rather
+than the minimal <code>lib/libnxlibc/</code> stubs.</p>
+<p>musl-linked programs are compiled with
+<code>tools/musl-aarch64-gcc.sh</code> (a small wrapper that sets the
+right sysroot and flags) and embedded as blobs in
+<code>test/kernel/</code> alongside their crt0-linked counterparts.</p>
+</body>
+</html>

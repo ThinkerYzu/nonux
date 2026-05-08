@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>README – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#interfaces" id="toc-interfaces">interfaces/</a>
+<ul>
+<li><a href="#generated-vs.-hand-authored"
+id="toc-generated-vs.-hand-authored">Generated
+vs. Hand-authored</a></li>
+<li><a href="#files" id="toc-files">Files</a>
+<ul>
+<li><a href="#interface-headers-interfacesiface.h"
+id="toc-interface-headers-interfacesiface.h">Interface headers
+(<code>interfaces/&lt;iface&gt;.h</code>)</a></li>
+<li><a href="#message-structs-interfacesiface_msg.h"
+id="toc-message-structs-interfacesiface_msg.h">Message structs
+(<code>interfaces/&lt;iface&gt;_msg.h</code>)</a></li>
+<li><a href="#shared-types" id="toc-shared-types">Shared types</a></li>
+</ul></li>
+<li><a href="#idl" id="toc-idl"><code>idl/</code></a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="interfaces">interfaces/</h1>
+<p>Typed interface definitions for every cross-component slot. Each
+interface defines the operation set that a slot implementation must
+provide and the message structs used to carry arguments and return
+values.</p>
+<h2 id="generated-vs.-hand-authored">Generated vs. Hand-authored</h2>
+<p>All headers in this directory (except <code>fs_types.h</code>) are
+<strong>IDL-generated</strong> — they are the deterministic output of
+<code>tools/gen-iface.py</code> reading the JSON files in
+<code>idl/</code>. Do not edit them by hand;
+<code>make verify-iface-fresh</code> diffs the in-tree headers against a
+fresh regeneration and blocks the build on any drift.</p>
+<p><code>fs_types.h</code> is hand-authored shared type definitions
+(<code>struct nx_stat</code>, <code>struct nx_dirent64</code>) included
+by both the <code>fs</code> and <code>vfs</code> interface headers.</p>
+<h2 id="files">Files</h2>
+<h3 id="interface-headers-interfacesiface.h">Interface headers
+(<code>interfaces/&lt;iface&gt;.h</code>)</h3>
+<p>Each <code>&lt;iface&gt;.h</code> declares:</p>
+<ul>
+<li><code>struct nx_&lt;iface&gt;_ops</code> — the vtable a component
+must fill in.</li>
+<li>Constants and forward declarations needed by callers.</li>
+</ul>
+<table>
+<colgroup>
+<col style="width: 29%" />
+<col style="width: 22%" />
+<col style="width: 48%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Header</th>
+<th>Slot</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>char_device.h</code></td>
+<td><code>char_device.*</code></td>
+<td>Read/write/ioctl for a character device (UART, console).</td>
+</tr>
+<tr class="even">
+<td><code>fs.h</code></td>
+<td><code>filesystem.*</code></td>
+<td>File operations: open, read, write, seek, readdir, mkdir, fstat,
+close.</td>
+</tr>
+<tr class="odd">
+<td><code>mm.h</code></td>
+<td><code>memory.*</code></td>
+<td>Physical page allocation: alloc/free by order.</td>
+</tr>
+<tr class="even">
+<td><code>scheduler.h</code></td>
+<td><code>scheduler</code></td>
+<td>Task scheduling: next_task, enqueue, dequeue, set_priority,
+runqueue_size.</td>
+</tr>
+<tr class="odd">
+<td><code>vfs.h</code></td>
+<td><code>vfs</code></td>
+<td>Virtual filesystem routing layer: same operations as
+<code>fs</code>, plus path resolution.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="message-structs-interfacesiface_msg.h">Message structs
+(<code>interfaces/&lt;iface&gt;_msg.h</code>)</h3>
+<p>Each <code>&lt;iface&gt;_msg.h</code> declares:</p>
+<ul>
+<li><code>enum nx_&lt;iface&gt;_op_id</code> — numeric operation
+identifiers carried in IPC messages.</li>
+<li>Per-operation request and reply message structs
+(<code>struct nx_&lt;iface&gt;_&lt;op&gt;_req</code>,
+<code>..._reply</code>).</li>
+</ul>
+<p>These structs are the wire format for async IPC messages and the
+in-band buffers for synchronous <code>nx_slot_call_blocking()</code>
+calls.</p>
+<h3 id="shared-types">Shared types</h3>
+<table>
+<colgroup>
+<col style="width: 57%" />
+<col style="width: 42%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Header</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>fs_types.h</code></td>
+<td>Hand-authored. Defines <code>struct nx_stat</code> (file metadata)
+and <code>struct nx_dirent64</code> (directory entry), shared by
+<code>fs.h</code>, <code>vfs.h</code>, and userspace via
+<code>lib/libnxlibc/posix.h</code>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="idl"><code>idl/</code></h2>
+<p>JSON source files from which all interface headers are generated.</p>
+<table>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Interface</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>char_device.json</code></td>
+<td><code>char_device</code> interface IDL</td>
+</tr>
+<tr class="even">
+<td><code>fs.json</code></td>
+<td><code>fs</code> interface IDL</td>
+</tr>
+<tr class="odd">
+<td><code>mm.json</code></td>
+<td><code>mm</code> interface IDL</td>
+</tr>
+<tr class="even">
+<td><code>scheduler.json</code></td>
+<td><code>scheduler</code> interface IDL</td>
+</tr>
+<tr class="odd">
+<td><code>vfs.json</code></td>
+<td><code>vfs</code> interface IDL</td>
+</tr>
+</tbody>
+</table>
+<p>Each IDL file specifies operations, parameter names and types, and
+whether each parameter is in/out/inout. The type system is a closed set
+of 12 types (<code>u8</code>–<code>u64</code>,
+<code>i8</code>–<code>i64</code>, <code>usize</code>, <code>bool</code>,
+<code>string_in</code>, <code>bytes_in/out</code>,
+<code>struct_in/out/inout</code>, <code>slot_ref</code>,
+<code>opaque_self_handle</code>). See
+<code>tools/idl-meta-schema.json</code> for the JSON schema and
+<code>tools/README.md</code> for generator details.</p>
+</body>
+</html>

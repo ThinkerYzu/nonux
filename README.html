@@ -94,6 +94,8 @@
 <ul>
 <li><a href="#quick-start" id="toc-quick-start">Quick Start</a></li>
 <li><a href="#what-is-this" id="toc-what-is-this">What is this?</a></li>
+<li><a href="#directory-structure"
+id="toc-directory-structure">Directory Structure</a></li>
 <li><a href="#documentation"
 id="toc-documentation">Documentation</a></li>
 <li><a href="#license" id="toc-license">License</a></li>
@@ -103,20 +105,14 @@ id="toc-documentation">Documentation</a></li>
 <h1 id="nonux">nonux</h1>
 <p>A composable, Lego-like microkernel for ARM64. Swap components,
 benchmark designs, let AI build your kernel.</p>
-<p><strong>Status (2026-04-28):</strong> Phases 1–6 complete; Phase 7 in
-progress — <code>make run-busybox</code> boots an interactive busybox
-shell over the QEMU UART with a visible prompt, line editing, pipes, and
-file redirects. <code>make test</code> runs 432 tests (51 python + 277
-host + 104 kernel) green; <code>make test-interactive</code> runs 3/3
-canned shell scripts. The current composition wires five slots:
-<code>char_device.serial ← uart_pl011</code>,
-<code>scheduler ← sched_rr</code>,
-<code>memory.page_alloc ← mm_buddy</code>,
-<code>vfs ← vfs_simple</code>, <code>filesystem.root ← ramfs</code>.
-Framework API reference lives under <a
-href="docs/"><code>docs/</code></a>; git history (<code>git log</code>)
-is the per-slice narrative, with each commit covering one slice
-end-to-end.</p>
+<blockquote>
+<p><strong>Documentation:</strong> <a
+href="https://github.com/ThinkerYzu/nonux-meta">github.com/ThinkerYzu/nonux-meta</a>
+— companion repo with spec, design, implementation guide, handoff
+package, and per-session work logs. Current status, phase progress, and
+test counts live in <a
+href="https://github.com/ThinkerYzu/nonux-meta/blob/master/HANDOFF.html">HANDOFF.md</a>.</p>
+</blockquote>
 <h2 id="quick-start">Quick Start</h2>
 <div class="sourceCode" id="cb1"><pre
 class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Clone</span></span>
@@ -133,7 +129,7 @@ class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="
 <span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="ex">tools/run-qemu.sh</span> <span class="at">-t</span> 5    <span class="co"># timed run (the kernel halts in wfe)</span></span>
 <span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a><span class="co"># Test</span></span>
-<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test                 <span class="co"># 432/432 green</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test                 <span class="co"># 471/471 green</span></span>
 <span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test-interactive     <span class="co"># canned scripts piped into the busybox shell</span></span>
 <span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a><span class="co"># Validate config</span></span>
@@ -154,6 +150,88 @@ with memory tracking</li>
 <li><strong>Hot-swappable</strong> — replace components at runtime</li>
 <li><strong>Permissively licensed</strong> — MIT</li>
 </ul>
+<h2 id="directory-structure">Directory Structure</h2>
+<table>
+<colgroup>
+<col style="width: 64%" />
+<col style="width: 35%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Directory</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><a href="core/README.html"><code>core/</code></a></td>
+<td>Platform primitives: boot entry, CPU/exception vectors, IRQ/GIC
+driver, MMU, PMM, kernel heap, wait-queues, timer. ARM64-specific; no
+framework dependency.</td>
+</tr>
+<tr class="even">
+<td><a href="framework/README.html"><code>framework/</code></a></td>
+<td>Component framework: registry, lifecycle, async IPC router,
+dispatcher kthread, sync slot-call, hook chains, ELF loader, syscall
+dispatch, process/handle tables, recomposition orchestrator, runtime
+config manager. IDL-generated call/dispatch shims also live here.</td>
+</tr>
+<tr class="odd">
+<td><a href="components/README.html"><code>components/</code></a></td>
+<td>Pluggable implementations that fill kernel slots:
+<code>sched_rr</code>, <code>sched_priority</code>,
+<code>mm_buddy</code>, <code>ramfs</code>, <code>procfs</code>,
+<code>vfs_simple</code>, <code>uart_pl011</code>,
+<code>posix_shim</code>. Each has a <code>manifest.json</code> and a
+<code>README.md</code>.</td>
+</tr>
+<tr class="even">
+<td><a href="interfaces/README.html"><code>interfaces/</code></a></td>
+<td>IDL-generated interface headers (<code>*.h</code>,
+<code>*_msg.h</code>) for every slot type. JSON IDL sources live in
+<code>interfaces/idl/</code>. Do not edit the generated headers
+directly.</td>
+</tr>
+<tr class="odd">
+<td><a href="lib/README.html"><code>lib/</code></a></td>
+<td>Userspace libraries for EL0 programs. Currently:
+<code>libnxlibc/</code> — header-only POSIX syscall wrappers +
+<code>crt0.S</code> + thin C helpers. Not linked into
+<code>kernel.bin</code>.</td>
+</tr>
+<tr class="even">
+<td><a href="gen/README.html"><code>gen/</code></a></td>
+<td>Build-time generated files: <code>config.h</code>,
+<code>sources.mk</code>, <code>slot_table.c</code>, and per-component
+<code>*_deps.h</code>. Outputs of <code>tools/gen-config.py</code> — do
+not edit by hand.</td>
+</tr>
+<tr class="odd">
+<td><a href="test/README.html"><code>test/</code></a></td>
+<td>All tests: <code>host/</code> (native C unit tests),
+<code>kernel/</code> (in-QEMU ktests + EL0 program blobs),
+<code>interactive/</code> (scripted busybox shell sessions),
+<code>bench/</code> (Phase 10 placeholder).</td>
+</tr>
+<tr class="even">
+<td><a href="tools/README.html"><code>tools/</code></a></td>
+<td>Build toolchain: <code>gen-config.py</code>,
+<code>gen-iface.py</code>, <code>validate-config.py</code>,
+<code>verify-registry.py</code>, <code>run-qemu.sh</code>, JSON schemas,
+and tool unit tests.</td>
+</tr>
+<tr class="odd">
+<td><a href="docs/README.html"><code>docs/</code></a></td>
+<td>Framework API reference docs: registry, component lifecycle, IPC
+router, hook framework, bootstrap.</td>
+</tr>
+<tr class="even">
+<td><a href="third_party/README.html"><code>third_party/</code></a></td>
+<td>Pre-built third-party binaries: busybox (ARM64 static) and musl libc
+headers/library for EL0 integration tests.</td>
+</tr>
+</tbody>
+</table>
 <h2 id="documentation">Documentation</h2>
 <p>Framework API reference (types, functions, examples) lives alongside
 the code under <a href="docs/"><code>docs/</code></a>:</p>
@@ -169,8 +247,8 @@ dependency injection.</li>
 <li><a href="docs/framework-hooks.html">Hook framework</a> —
 per-hook-point chains, typed contexts, mark-then-sweep unregister.</li>
 <li><a href="tools/README.html">Tool chain</a> —
-<code>gen-config.py</code>, <code>validate-config.py</code>,
-<code>verify-registry.py</code>.</li>
+<code>gen-config.py</code>, <code>gen-iface.py</code>,
+<code>validate-config.py</code>, <code>verify-registry.py</code>.</li>
 </ul>
 <p>Start at <a href="docs/README.html"><code>docs/README.md</code></a> for
 the index and the shared error-code table.</p>

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>README – -</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="../../kb-html/codehilite.css" />
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#framework" id="toc-framework">framework/</a>
+<ul>
+<li><a href="#files" id="toc-files">Files</a>
+<ul>
+<li><a href="#composition-core" id="toc-composition-core">Composition
+core</a></li>
+<li><a href="#ipc" id="toc-ipc">IPC</a></li>
+<li><a href="#interface-call-and-dispatch-shims-idl-generated"
+id="toc-interface-call-and-dispatch-shims-idl-generated">Interface call
+and dispatch shims (IDL-generated)</a></li>
+<li><a href="#os-services" id="toc-os-services">OS services</a></li>
+<li><a href="#el0-facing-support" id="toc-el0-facing-support">EL0-facing
+support</a></li>
+</ul></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="framework">framework/</h1>
+<p>The component framework: the glue between the kernel core and the
+swappable components. Every subsystem (scheduler, memory manager, VFS,
+drivers) plugs into the framework via a slot; the framework manages
+their lifecycle, IPC, hooks, and the runtime component graph.</p>
+<p>Reference documentation lives in <a
+href="../docs/"><code>docs/</code></a>: <a
+href="../docs/framework-registry.html">Registry</a> | <a
+href="../docs/framework-components.html">Component lifecycle</a> | <a
+href="../docs/framework-ipc.html">IPC router</a> | <a
+href="../docs/framework-hooks.html">Hook framework</a> | <a
+href="../docs/framework-bootstrap.html">Bootstrap</a>.</p>
+<h2 id="files">Files</h2>
+<h3 id="composition-core">Composition core</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>bootstrap.c/.h</code></td>
+<td><code>nx_framework_bootstrap()</code>. Called once at boot from
+<code>core/boot/boot.c</code>. Walks the <code>nx_components</code>
+linker section, registers all slots and components, resolves
+dependencies, then runs <code>init</code>→<code>enable</code> in
+topological order. Dumps the composition on success.</td>
+</tr>
+<tr class="even">
+<td><code>registry.c/.h</code></td>
+<td>Component graph registry. Tracks every slot, component, and
+connection. The single source of truth for “what is the kernel built
+from right now?” Emits events, maintains an append-only change log, and
+exposes JSON snapshots. All hot-swap and recomposition operations go
+through the registry.</td>
+</tr>
+<tr class="odd">
+<td><code>component.c/.h</code></td>
+<td>Six-verb lifecycle state machine
+(<code>INIT → READY → ACTIVE ↔︎ PAUSED → DISABLED → DESTROYED</code>).
+The <code>NX_COMPONENT_REGISTER</code> macro embeds a component
+descriptor in the <code>nx_components</code> linker section.
+<code>nx_resolve_deps()</code> wires each component’s
+<code>requires</code>/<code>optional</code> slots at boot.</td>
+</tr>
+<tr class="even">
+<td><code>recompose.c/.h</code></td>
+<td>Runtime recomposition orchestrator (<code>nx_recompose()</code>).
+Builds a topological pause order from registry edges (Kahn’s algorithm),
+pauses and drains affected components, rewires connections, resumes.
+Rolls back on any pause failure. Used by <code>config.c</code> for live
+component swaps.</td>
+</tr>
+<tr class="odd">
+<td><code>config.c/.h</code></td>
+<td>Runtime configuration manager. <code>nx_config_open()</code>,
+<code>nx_config_query_snapshot()</code>,
+<code>nx_config_swap_component()</code>. Backed by three EL0 syscalls
+(<code>NX_SYS_CONFIG_OPEN</code>, <code>NX_SYS_CONFIG_QUERY</code>,
+<code>NX_SYS_CONFIG_SWAP</code>, <code>NX_SYS_CONFIG_REWIRE</code>).
+Userspace drives live scheduler swaps and async↔︎sync connection-mode
+switches through this interface.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ipc">IPC</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>ipc.c/.h</code></td>
+<td>Async IPC router. <code>nx_ipc_send()</code> enqueues a message into
+the destination slot’s inbox; <code>nx_ipc_dispatch()</code> drains one
+message and calls the component’s <code>handle_msg</code> op. Per-edge
+hold queues buffer messages while a slot is paused. Routes capabilities
+(<code>slot_ref</code>) with borrow/transfer ownership tracking.</td>
+</tr>
+<tr class="even">
+<td><code>dispatcher.c/.h</code></td>
+<td>Async IPC dispatcher kthread. Drains the MPSC inbox
+(<code>core/lib/mpsc.h</code>) on a dedicated kthread.
+<code>nx_dispatcher_enqueue()</code> is safe from any context (IRQ,
+kthread, EL0 exception); the dispatcher kthread is the only
+<code>nx_ipc_dispatch()</code> caller. Implements pause-drain: waits
+until <code>in_flight_calls == 0</code> before allowing a slot
+swap.</td>
+</tr>
+<tr class="odd">
+<td><code>slot_call.c/.h</code></td>
+<td><code>nx_slot_call_blocking()</code> — synchronous cross-slot call
+primitive. Sends a message with
+<code>NX_MSG_FLAG_REPLY_REQUESTED</code>; blocks the caller on
+<code>task-&gt;reply_waitq</code> until the callee writes back into
+<code>task-&gt;in_flight_reply_buf</code>. Used by all generated
+<code>*_call.h</code> wrappers.</td>
+</tr>
+<tr class="even">
+<td><code>channel.c/.h</code></td>
+<td>In-kernel IPC channel (bidirectional, blocking). Provides a
+higher-level pipe-like primitive layered on the wait-queue and used by
+the pipe syscall implementation.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="interface-call-and-dispatch-shims-idl-generated">Interface call
+and dispatch shims (IDL-generated)</h3>
+<p>Each interface has four generated artefacts; the <code>_call.h</code>
+and <code>_dispatch.h</code> files live here because they are
+kernel-framework code, not interface definitions.</p>
+<table>
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 47%" />
+<col style="width: 26%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Interface</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>char_device_call.c/.h</code></td>
+<td><code>char_device</code></td>
+<td><code>nx_char_device_read()</code> /
+<code>nx_char_device_write()</code> blocking wrappers. Used by
+<code>syscall.c</code> for <code>sys_read</code>/<code>sys_write</code>
+on <code>NX_HANDLE_RESOURCE</code> console FDs.</td>
+</tr>
+<tr class="even">
+<td><code>char_device_dispatch.h</code></td>
+<td><code>char_device</code></td>
+<td>Receiver-side <code>handle_msg</code> dispatch template included by
+<code>uart_pl011</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>char_device_isr.h</code></td>
+<td><code>char_device</code></td>
+<td>ISR entry-point template for IRQ-driven char devices.</td>
+</tr>
+<tr class="even">
+<td><code>fs_call.c/.h</code></td>
+<td><code>fs</code></td>
+<td><code>nx_fs_*</code> blocking wrappers. Used by
+<code>vfs_simple</code> when calling down into <code>ramfs</code> /
+<code>procfs</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>fs_dispatch.h</code></td>
+<td><code>fs</code></td>
+<td>Receiver-side dispatch template included by <code>ramfs</code> and
+<code>procfs</code>.</td>
+</tr>
+<tr class="even">
+<td><code>mm_call.h</code></td>
+<td><code>mm</code></td>
+<td>Blocking wrappers for the physical-page-allocator interface.</td>
+</tr>
+<tr class="odd">
+<td><code>mm_dispatch.h</code></td>
+<td><code>mm</code></td>
+<td>Receiver-side dispatch template included by
+<code>mm_buddy</code>.</td>
+</tr>
+<tr class="even">
+<td><code>scheduler_call.h</code></td>
+<td><code>scheduler</code></td>
+<td>Blocking wrappers for the scheduler interface
+(<code>next_task</code>, <code>set_priority</code>, etc.).</td>
+</tr>
+<tr class="odd">
+<td><code>scheduler_dispatch.h</code></td>
+<td><code>scheduler</code></td>
+<td>Receiver-side dispatch template included by <code>sched_rr</code>
+and <code>sched_priority</code>.</td>
+</tr>
+<tr class="even">
+<td><code>vfs_call.c/.h</code></td>
+<td><code>vfs</code></td>
+<td><code>nx_vfs_*</code> blocking wrappers. Used by
+<code>syscall.c</code> for <code>sys_open</code>, <code>sys_read</code>,
+<code>sys_write</code>, etc.</td>
+</tr>
+<tr class="odd">
+<td><code>vfs_dispatch.h</code></td>
+<td><code>vfs</code></td>
+<td>Receiver-side dispatch template included by
+<code>vfs_simple</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="os-services">OS services</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>syscall.c/.h</code></td>
+<td>EL0 syscall dispatch table. The exception handler calls
+<code>nx_syscall_dispatch(nr, args)</code> which fans out to the
+per-syscall handler. All <code>NX_SYS_*</code> numbers are defined in
+<code>syscall.h</code>. Handlers call into VFS, process, and config via
+the typed slot-call wrappers.</td>
+</tr>
+<tr class="even">
+<td><code>process.c/.h</code></td>
+<td>Process data structures and lifecycle.
+<code>struct nx_process</code> holds the handle table, VMA list (Phase
+9), working directory, PID, and child/wait lists.
+<code>nx_process_create()</code>, <code>nx_process_fork()</code>,
+<code>nx_process_exec()</code>, <code>nx_process_destroy()</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>handle.c/.h</code></td>
+<td>Per-process handle table. Typed handles with per-handle permission
+bits. <code>NX_HANDLE_RESOURCE</code> handles carry a
+<code>{ rights, id, target_slot* }</code> entry; the component that owns
+the object decodes <code>id</code> from its own object table. No global
+type-switch.</td>
+</tr>
+<tr class="even">
+<td><code>hook.c/.h</code></td>
+<td>Hook framework. Components register callbacks on named hook points
+(<code>NX_HOOK_SYSCALL_ENTER</code>, <code>_EXIT</code>, etc.); hooks
+fire in priority order. <code>nx_hook_context</code> exposes typed
+fields for each hook point. ENTER hooks can abort the syscall body; EXIT
+hooks can override the return value.</td>
+</tr>
+<tr class="odd">
+<td><code>elf.c/.h</code></td>
+<td>Minimal ELF64 loader. Reads PT_LOAD segments from an in-memory blob,
+maps them into the user address space, and returns the entry point. Used
+by <code>sys_exec</code> to load EL0 programs.</td>
+</tr>
+<tr class="even">
+<td><code>console.c/.h</code></td>
+<td>Kernel console output. Routes <code>console_putchar()</code> /
+<code>console_write()</code> through the <code>char_device.serial</code>
+slot. Provides the <code>nx_console_write()</code> function used by
+<code>uart_pl011</code> for kernel-path writes.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="el0-facing-support">EL0-facing support</h3>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>pollset.h</code></td>
+<td><code>struct nx_pollset</code> and related types for
+<code>NX_SYS_PPOLL</code>. Shared between <code>syscall.c</code> and
+<code>channel.c</code>.</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>
