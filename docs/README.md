@@ -5,6 +5,12 @@ is self-contained — types, functions, return codes, invariants,
 example usage — and is kept in sync with the real headers. Headers
 are the normative source; docs track them.
 
+## Background
+
+| Doc                                      | Topic                                                                                  |
+|------------------------------------------|----------------------------------------------------------------------------------------|
+| [Boot and linker](boot-and-linker.md)    | What a bootloader is, how QEMU's `-kernel` mode plays that role, the ARM64 entry contract, what `core/boot/linker.ld` controls, the timeline from `0x40080000` to `boot_main()`. |
+
 ## Modules
 
 | Doc                                      | Header                  | Role                                                                    |
