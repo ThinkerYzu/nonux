@@ -451,6 +451,118 @@ purpose in our linker script (next section).
 
 ---
 
+## Privilege levels: EL0, EL1, EL2, and EL3
+
+Before we look at what `start.S` does, we need to understand one
+piece of ARM64 background: **exception levels**. The very first
+thing `start.S` does involves switching between two of them, so
+let's make sure we know what they are.
+
+### Why CPUs have privilege levels at all
+
+The CPU runs all code by executing instructions one at a time.
+Some of those instructions are *dangerous*: writing to a register
+that controls the MMU, masking interrupts so nothing can preempt
+you, or talking directly to a hardware device. If any random
+program could run those instructions, one buggy or malicious app
+could take over the whole machine.
+
+The fix that every modern CPU uses: **mark some instructions as
+only working in a special trusted mode.** Code in user mode
+either can't run those instructions at all, or the CPU catches
+the attempt and reports it. Code in kernel mode can run them.
+
+ARM64 calls these modes **exception levels** — abbreviated EL —
+and defines **four** of them, numbered 0 through 3.
+
+### What each EL is for
+
+| EL  | Who runs here                                       | What's allowed |
+|-----|-----------------------------------------------------|----------------|
+| EL0 | User programs (shells, editors, the apps you write) | Normal arithmetic and memory access. **Not** allowed to touch system registers, MMU controls, or talk directly to hardware. |
+| EL1 | The kernel                                          | Full control of memory mapping, peripherals, and interrupt handling. |
+| EL2 | Hypervisors (KVM, Xen, …)                           | Can virtualize EL1 itself: run a whole kernel as a "guest" and intercept what it does. |
+| EL3 | Secure firmware (TrustZone)                         | The most trusted code on the chip. Decides which code can run at the lower levels. |
+
+Higher number = more powerful. Code at a higher level can do
+anything code at a lower level can do, plus more.
+
+### Why four levels?
+
+x86 calls these **rings** and historically used rings 0 (kernel)
+and 3 (user) — two levels was enough. ARM64 has four because
+modern ARM chips support a wider mix of use cases:
+
+- **EL3** is the supervisor for the chip's secure side, used for
+  things like crypto keys, biometric data, or DRM.
+- **EL2** is for virtualization. A hypervisor at EL2 can run
+  multiple guest kernels at EL1 underneath, transparently.
+- **EL1** is "kernel mode" in the traditional sense. nonux lives
+  here.
+- **EL0** is "user mode" in the traditional sense.
+
+A simple system can stay at EL1 and EL0 and ignore the others.
+The hardware just makes EL2 and EL3 *available* for systems that
+need them.
+
+### Where nonux fits
+
+**nonux runs at EL1.** It's a kernel — not a hypervisor, not
+firmware.
+
+When QEMU starts our kernel on the `virt` machine, though, it
+drops us in at **EL2** by default. That's because QEMU is set up
+to allow hypervisor experiments. Since we're not a hypervisor,
+the very first thing [`core/boot/start.S`](../core/boot/start.S)
+does is **drop down from EL2 to EL1**.
+
+(If QEMU was started with `-machine virtualization=off`, we'd
+land directly at EL1 and the drop-down step wouldn't be needed.
+`start.S` handles both — it reads the `CurrentEL` system register
+to see where it actually is, and acts accordingly.)
+
+### How transitions between ELs happen
+
+**Higher to lower is voluntary, one instruction.** The
+instruction is `eret` ("exception return"). Despite the name,
+it's not just for returning from an exception — it's the official
+way to switch from a higher EL to a lower one. We'll see this in
+`start.S`: the code sets up where it wants to land, then runs
+`eret` to drop from EL2 into EL1.
+
+**Lower to higher is not voluntary.** Code at EL0 can't just
+decide to start running at EL1. The only way up is through an
+**exception** — an interrupt, a system call (the `svc`
+instruction), a memory fault, a divide-by-zero, or similar. The
+CPU automatically jumps to a fixed handler address at the higher
+EL, and the handler decides what to do.
+
+This asymmetry is the security model. Programs at EL0 can't
+escalate themselves on their own; they can only ask the kernel
+(at EL1) to do things on their behalf, via syscalls. The kernel
+decides what to allow.
+
+### What this means for nonux in practice
+
+Three things follow from the EL design:
+
+1. **`start.S` has to drop from EL2 to EL1** if it starts at EL2.
+   That's the first half of `start.S`'s job, which we'll see in
+   detail next.
+2. **Privileged instructions only work at EL1 (or higher).** The
+   kernel can program the MMU; user programs can't even attempt
+   to. The CPU enforces this.
+3. **User programs run at EL0.** When nonux launches a process,
+   it sets the CPU to EL0 before jumping to the program's entry
+   point. The program can only do things that work at EL0;
+   anything that needs the kernel (open a file, allocate memory,
+   …) goes through a syscall, which traps up to EL1, runs the
+   kernel's syscall handler, and returns to EL0.
+
+Future chapters will cover the syscall round-trip in detail.
+
+---
+
 ## What the CPU is doing the moment our code starts
 
 When QEMU jumps to `0x40080000`, the CPU is in a particular state.
@@ -470,12 +582,9 @@ Knowing this state matters, because our first instructions have to
 
 Two things to notice:
 
-- **We start at EL2** but want to run at EL1 (because EL1 is "the
-  kernel level"). The first thing we'll do is "drop down" from EL2
-  to EL1. ARM has an instruction for this: `eret` ("exception
-  return"), which is normally used for *coming back* from an
-  interrupt — but it also happens to be the official way to switch
-  exception levels.
+- **We start at EL2 but want to run at EL1** (covered in the
+  previous section). Our first instructions will use `eret` to
+  drop from EL2 to EL1.
 - **We have no stack yet.** Until we set the stack pointer to a
   valid address, we **cannot call any C function**, because every
   C function call uses the stack to save its return address.
