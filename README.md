@@ -52,6 +52,7 @@ nonux is a microkernel where every subsystem (scheduler, memory manager, filesys
 | [`test/`](test/README.md) | All tests: `host/` (native C unit tests), `kernel/` (in-QEMU ktests + EL0 program blobs), `interactive/` (scripted busybox shell sessions), `bench/` (Phase 10 placeholder). |
 | [`tools/`](tools/README.md) | Build toolchain: `gen-config.py`, `gen-iface.py`, `validate-config.py`, `verify-registry.py`, `run-qemu.sh`, JSON schemas, and tool unit tests. |
 | [`docs/`](docs/README.md) | Framework API reference docs: registry, component lifecycle, IPC router, hook framework, bootstrap. |
+| [`book/`](book/README.md) | Tutorial-style book aimed at first-time kernel readers. Conceptual, chapter-by-chapter walkthrough of how nonux is built. |
 | [`third_party/`](third_party/README.md) | Pre-built third-party binaries: busybox (ARM64 static) and musl libc headers/library for EL0 integration tests. |
 
 ## Documentation

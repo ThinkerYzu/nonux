@@ -5,11 +5,10 @@ is self-contained — types, functions, return codes, invariants,
 example usage — and is kept in sync with the real headers. Headers
 are the normative source; docs track them.
 
-## Background
-
-| Doc                                      | Topic                                                                                  |
-|------------------------------------------|----------------------------------------------------------------------------------------|
-| [Boot and linker](boot-and-linker.md)    | What a bootloader is, how QEMU's `-kernel` mode plays that role, the ARM64 entry contract, what `core/boot/linker.ld` controls, the timeline from `0x40080000` to `boot_main()`. |
+For *conceptual* / tutorial-style material aimed at first-time
+kernel readers (compiler/linker/loader, the ARM64 boot path, the
+linker script, …), see the [book](../book/README.md). The docs
+here are the manual; the book is the guided tour.
 
 ## Modules
 
