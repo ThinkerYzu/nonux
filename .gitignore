@@ -7,6 +7,11 @@
 *.cpio
 gen/
 
+# HTML files generated from Markdown by ../../scripts/convert_kb.sh.
+# Vendored upstream HTML (e.g. third_party/busybox/docs/cgi/*.html) is
+# already tracked and unaffected by this rule.
+*.html
+
 # Generated test fixtures (slice 7.6b initramfs payload — packer
 # regenerates these from sources every build).
 test/kernel/banner.txt
