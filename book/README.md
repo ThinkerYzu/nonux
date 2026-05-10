@@ -50,7 +50,7 @@ Chapters arrive when they're written, not on a schedule.
 ### Part II — Time and interrupts
 
 3. [Exceptions, the GIC, and IRQs](03-exceptions-gic-and-irqs.md)
-4. The timer and ticks
+4. [The timer and ticks](04-timer-and-ticks.md)
 
 ### Part III — Memory
 

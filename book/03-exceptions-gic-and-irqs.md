@@ -716,8 +716,9 @@ the SPI base of 32, that's IRQ **33**. Chapter 2 showed us
 hardcoding 33; now we know what the number means: "the second
 shared peripheral interrupt the GIC knows about".
 
-The per-CPU timer (covered in a later chapter) is a PPI: it's
-wired into each CPU's own GIC slot, so each CPU has its own copy.
+The per-CPU timer ([chapter 4](04-timer-and-ticks.md)) is a PPI:
+it's wired into each CPU's own GIC slot, so each CPU has its own
+copy.
 SGIs only matter for multi-core — one CPU writes a register that
 makes the GIC raise an IRQ on a different CPU.
 
@@ -1019,7 +1020,7 @@ kprintf("[cpu]  exception vectors installed at %p\n", vectors);
 gic_init();
 kprintf("[gic]  distributor + CPU interface enabled\n");
 
-timer_init(10);          /* sets up the per-CPU timer (later chapter) */
+timer_init(10);          /* sets up the per-CPU timer (chapter 4) */
 nx_console_init();       /* registers the PL011 IRQ — chapter 2 */
 
 /* …framework + scheduler bring-up… */
