@@ -340,13 +340,19 @@ In `core/mmu/mmu.c` these are wrapped in named macros:
 #define DESC_VALID        (1UL << 0)
 #define DESC_TABLE        (1UL << 1)
 #define DESC_ATTR_IDX(n)  ((uint64_t)((n) & 0x7) << 2)
-#define DESC_AP_EL1_RW    (0UL << 6)
+#define DESC_AP_EL1_RW    (0UL << 6)   /* AP[2:1] = 0b00 — EL1-only RW */
+#define DESC_AP_USER_RW   (1UL << 6)   /* AP[2:1] = 0b01 — EL0+EL1 RW */
 #define DESC_SH_INNER     (3UL << 8)
 #define DESC_SH_NONE      (0UL << 8)
 #define DESC_AF           (1UL << 10)
 #define DESC_PXN          (1UL << 53)
 #define DESC_UXN          (1UL << 54)
 ```
+
+(In `mmu.c` itself, `DESC_AP_USER_RW` is defined later — immediately
+above its only consumer, `user_block` — rather than alongside the
+rest of the descriptor vocabulary.  We've collected all the macros
+here for reading clarity.)
 
 …and three small helpers build the three kinds of block
 descriptors we use:
@@ -371,7 +377,6 @@ static inline uint64_t normal_block(uint64_t pa)
 }
 
 /* User-accessible Normal block: RW at both EL0 and EL1. */
-#define DESC_AP_USER_RW  (1UL << 6)
 static inline uint64_t user_block(uint64_t pa)
 {
     return pa | DESC_VALID |
