@@ -734,10 +734,10 @@ private interrupts; "shared peripheral interrupts" (SPIs) start at
 32. The PL011 happens to be SPI #1, which means `32 + 1 = 33`.
 We just looked that up in QEMU's source.
 
-We'll come back to what `irq_register` and `gic_enable` are doing
-under the covers in a later chapter on exceptions and the GIC.
-For now, treat them as the two switches you need to flip to wire
-an IRQ from a device to a function in our code.
+[Chapter 3 (Exceptions, the GIC, and IRQs)](03-exceptions-gic-and-irqs.md)
+walks `irq_register` and `gic_enable` under the covers. For
+this chapter, treat them as the two switches you need to flip
+to wire an IRQ from a device to a function in our code.
 
 ### The ISR — `nx_console_rx_isr`
 
@@ -1159,5 +1159,5 @@ end up at the same `uart_putc` and the same MMIO store.
   numbers in our driver come from there.
 - ARM Generic Interrupt Controller v2 Architecture Specification
   — the manual for the GIC, the chip that delivers IRQ 33 to the
-  CPU. Necessary reading for the IRQ-and-exceptions chapter, not
-  yet for this one.
+  CPU. The reference for [chapter 3](03-exceptions-gic-and-irqs.md);
+  not needed for this chapter.
