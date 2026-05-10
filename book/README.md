@@ -38,11 +38,61 @@ the kernel as you read. See the top-level
 
 ## Chapters
 
-| # | Title | What you'll learn |
-|---|-------|-------------------|
-| 1 | [Boot and linker — how nonux comes to life](01-boot-and-linker.md) | What a bootloader does and why we need one. The compiler/linker/loader pipeline. ELF vs raw binary. The ARM64 boot contract. What a linker script controls and why bare-metal needs one. The full timeline from `0x40080000` to `boot_main()`. |
+The book is planned as **18 chapters in 9 parts**. **Shipped
+chapters are linked**; planned chapters are listed without links.
+Chapters arrive when they're written, not on a schedule.
 
-*(More chapters coming.)*
+### Part I — Coming up
+
+1. [Boot and linker — how nonux comes to life](01-boot-and-linker.md)
+2. The console: kprintf and the UART
+
+### Part II — Memory
+
+3. Physical memory and the page allocator (PMM)
+4. Virtual memory and the MMU
+
+### Part III — Time and interrupts
+
+5. Exceptions, the GIC, and IRQs
+6. The timer and ticks
+
+### Part IV — Tasks
+
+7. Kernel threads and context switching
+8. The scheduler
+
+### Part V — Framework basics
+
+9. Slots, components, and the registry
+10. Interface Definition Language (IDL)
+
+### Part VI — IPC and storage
+
+11. Channels and IPC
+12. Filesystems (VFS, ramfs, procfs)
+
+### Part VII — Framework, advanced
+
+13. Hooks: intercepting and overriding
+14. Recomposition and runtime config
+
+### Part VIII — Userspace
+
+15. Processes and the user/kernel boundary
+16. System calls: EL0 ↔ EL1
+
+### Part IX — Userspace runtime and build
+
+17. POSIX shim, libnxlibc, and busybox
+18. Build, test, AI operability
+
+### Appendices (planned)
+
+- A. ARM64 cheat sheet
+- B. Glossary
+- C. Source map
+- D. Where to read more
 
 ## Conventions used in the book
 
