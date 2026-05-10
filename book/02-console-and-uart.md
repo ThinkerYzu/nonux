@@ -43,8 +43,8 @@ The files we'll be talking about:
   `nx_console_read`.
 - [`components/uart_pl011/uart_pl011.c`](../components/uart_pl011/uart_pl011.c) —
   the same UART, packaged as a *component* so userspace programs
-  can write to it through normal file descriptors. We'll touch on
-  this lightly here; the full framework story comes later.
+  can write to it through normal **file descriptors**. We'll touch
+  on this lightly here; the full framework story comes later.
 
 ---
 
@@ -100,6 +100,34 @@ The files we'll be talking about:
 - **Format string.** The first argument to `printf`-style functions
   — a string with `%d`, `%s`, etc. placeholders that get filled in
   from the remaining arguments.
+- **POSIX.** A standard set of names and rules that Unix-like
+  operating systems follow — for files, processes, system calls,
+  signals, and so on. When you see `read`, `write`, `fd`, or
+  `SIGTERM` in this book, those names come from POSIX.
+- **System call (syscall).** A request from a user program for
+  the kernel to do something the program isn't allowed to do
+  directly — open a file, write to a device, allocate memory.
+  The user code triggers a special CPU instruction that traps
+  into the kernel; the kernel runs the request and returns. The
+  full mechanics get a dedicated chapter later. In this chapter,
+  "the syscall layer" just means the kernel side of that boundary.
+- **File descriptor (fd).** A small integer a user program uses
+  to refer to an open file or device. POSIX reserves three by
+  convention: **fd 0** is standard input (`stdin`), **fd 1** is
+  standard output (`stdout`), **fd 2** is standard error
+  (`stderr`). `read(0, ...)` reads from stdin; `write(1, ...)`
+  writes to stdout.
+- **Kernel thread (kthread).** A thread of execution that lives
+  entirely inside the kernel — it doesn't belong to any user
+  process. Used for background work the kernel itself wants to
+  do (drivers, dispatchers, the idle loop). Kthreads run at EL1
+  from start to finish.
+- **Signal.** A short, named event the kernel can deliver to a
+  process — for example, "you've been asked to terminate"
+  (`SIGTERM`) or "a segmentation fault happened" (`SIGSEGV`). In
+  v1 nonux, a delivered `SIGTERM` simply terminates the process
+  at its next opportunity; full handler-driven signals are
+  deferred to a later chapter.
 
 ---
 
@@ -119,10 +147,10 @@ In nonux, the console has **two paths into the same physical UART**:
    path works from the moment `boot_main` starts running.
 
 2. **A component path** used by userspace. When a user program
-   writes to file descriptor 1 (`stdout`), the call goes through
-   the kernel's syscall layer, then through the component
-   framework, into a component called `uart_pl011`, and finally
-   *also* ends up at the same UART registers.
+   writes to fd 1 (the standard-output stream `stdout`), the call
+   goes through the kernel's **syscall** layer, then through the
+   component framework, into a component called `uart_pl011`, and
+   finally *also* ends up at the same UART registers.
 
 Most of this chapter walks the **direct path**, because that's the
 short, easy story and it covers all the hardware ideas you need.
@@ -433,7 +461,7 @@ On any system with a line-discipline driver — which means every
 hosted Linux program — there's a piece of kernel code that
 translates a bare LF (`\n`) into the pair CR+LF (`\r\n`) before
 the bytes hit a terminal. This is what the `ONLCR` flag in the
-POSIX `termios` settings does, and it's on by default.
+**POSIX** `termios` settings does, and it's on by default.
 
 A bare-metal kernel writing directly to a UART has no such layer.
 A terminal in **raw mode** treats the two characters very
@@ -738,8 +766,9 @@ The loop:
 3. Look at the byte. Two values are special:
    - **`0x03` (Ctrl-C)**: don't put it in the byte ring. Set a flag
      `g_intr_pending` instead — the kernel will pick it up later
-     and post `SIGTERM` to user processes. (Real signal handling
-     beyond a basic Ctrl-C kill is a story for a later chapter.)
+     and post a **signal** (`SIGTERM`, "please terminate") to user
+     processes. Full handler-driven signal delivery is a story
+     for a later chapter.
    - **`0x04` (Ctrl-D)**: same idea. Set `g_eof_pending`. The next
      `read` on stdin will return 0 (EOF) instead of blocking.
 4. Otherwise, **push the byte onto the ring** with `rx_push_one`.
@@ -822,9 +851,9 @@ Empty when `head == tail`. Full when `(head + 1) % SIZE == tail`
 and full apart by inspecting head and tail alone.
 
 The `_Atomic` qualifiers and the `__atomic_*` builtins matter
-because the producer (ISR context) and consumer (a kthread or a
-user task) really do run "at the same time" from a memory-ordering
-perspective. The producer must:
+because the producer (ISR context) and consumer (a **kthread** or
+a user task) really do run "at the same time" from a
+memory-ordering perspective. The producer must:
 
 - Write the byte into `g_rx_buf[h]` *before* publishing the new
   `head`.
