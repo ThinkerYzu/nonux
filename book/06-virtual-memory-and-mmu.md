@@ -277,9 +277,13 @@ section below.
 
 ## Descriptors: the bit-level layout
 
-A descriptor is one 64-bit value. Most of the bits at the
-"top" address part of the entry are the same across L1, L2,
-and L3. The fields nonux uses, ordered from low bit to high:
+A descriptor is one 64-bit value.  The bit layout is the
+same across L1, L2, and L3 except that bit 1 tells the MMU
+"this is a table descriptor; keep walking" (`Tbl` = 1 at
+L1/L2) versus "this is a block / page descriptor; the walk
+ends here" (`Blk` = 0 at L1/L2; bit 1 must be 1 for valid
+page descriptors at L3).  The fields nonux uses, ordered
+from low bit to high:
 
 | Bits   | Name      | Meaning                                                    |
 |--------|-----------|------------------------------------------------------------|
