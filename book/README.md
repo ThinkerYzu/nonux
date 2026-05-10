@@ -47,15 +47,15 @@ Chapters arrive when they're written, not on a schedule.
 1. [Boot and linker — how nonux comes to life](01-boot-and-linker.md)
 2. [The console: kprintf and the UART](02-console-and-uart.md)
 
-### Part II — Memory
+### Part II — Time and interrupts
 
-3. Physical memory and the page allocator (PMM)
-4. Virtual memory and the MMU
+3. Exceptions, the GIC, and IRQs
+4. The timer and ticks
 
-### Part III — Time and interrupts
+### Part III — Memory
 
-5. Exceptions, the GIC, and IRQs
-6. The timer and ticks
+5. Physical memory and the page allocator (PMM)
+6. Virtual memory and the MMU
 
 ### Part IV — Tasks
 
