@@ -158,16 +158,19 @@ output equals its input. So why pay for the page-table walks?
 
 Three reasons, in roughly increasing order of importance:
 
-1. **Caching and memory ordering.** When the MMU is off, ARM
-   treats *all* of RAM as Device-nGnRnE memory: no caches,
-   strict ordering, every load and store goes to the bus.
-   That's catastrophically slow. Turning the MMU on lets us
-   tag RAM as **Normal** memory — cacheable, write-back, free
-   to be reordered for performance — while keeping MMIO
-   regions (the GIC, the PL011) tagged as **Device** so writes
-   to them stay strictly ordered. This is the *single*
-   biggest reason real kernels turn the MMU on as early as
-   possible.
+1. **Caching and memory ordering.** When the MMU is off, the
+   architecture treats every data access as Device-nGnRnE: no
+   caches, strict ordering, every data load and store goes to
+   the bus. (Instruction fetches are architecturally
+   *cacheable* in this state, but in practice the I-cache is
+   also disabled until `mmu_init` turns it on alongside
+   `SCTLR.M` and `SCTLR.C`, so nothing actually fills.) That's
+   catastrophically slow. Turning the MMU on lets us tag RAM
+   as **Normal** memory — cacheable, write-back, free to be
+   reordered for performance — while keeping MMIO regions
+   (the GIC, the PL011) tagged as **Device** so writes to
+   them stay strictly ordered. This is the *single* biggest
+   reason real kernels turn the MMU on as early as possible.
 2. **Permissions.** Once the MMU is on, every page has bits
    that say "EL0 can read this", "EL1 can execute this",
    "this page is read-only", and so on. Without these bits,
