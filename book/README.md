@@ -45,7 +45,7 @@ Chapters arrive when they're written, not on a schedule.
 ### Part I — Coming up
 
 1. [Boot and linker — how nonux comes to life](01-boot-and-linker.md)
-2. The console: kprintf and the UART
+2. [The console: kprintf and the UART](02-console-and-uart.md)
 
 ### Part II — Memory
 
