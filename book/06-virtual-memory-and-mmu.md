@@ -230,7 +230,7 @@ The three levels carve a 39-bit VA into four pieces:
 ```
  38                30 29              21 20            12 11             0
 +---------------------+-------------------+----------------+----------------+
-| L1 index  (9 bits)  | L2 index (9 bits) | L3 idx (9 bit) | offset(12 bit) |
+| L1 index  (9 bits)  | L2 index (9 bits) | L3 idx (9 bits)| offset(12 bits)|
 +---------------------+-------------------+----------------+----------------+
        1 GiB                  2 MiB             4 KiB            byte
        per L1 entry         per L2 entry      per L3 entry    within page
@@ -266,18 +266,24 @@ section below.
 
 A descriptor is one 64-bit value. Most of the bits at the
 "top" address part of the entry are the same across L1, L2,
-and L3:
+and L3. The fields nonux uses, ordered from low bit to high:
 
-```
- 63       54 53 52 51    12 11 10 9      6 5 4    2 1 0
-+--+--------+--+--+--------+----+--+------+--+----+--+-+--+
-|XN|reserved|XN|  |  PA    |    |AF|AP[2:0|SH|attr|TBL|V |
-|UX|        |PX|  | (table |    |  |   1] |  | idx|/B|al|
-|N |        |N |  | or pg) |    |  |      |  |    | k|id|
-+--+--------+--+--+--------+----+--+------+--+----+--+-+--+
-```
+| Bits   | Name      | Meaning                                                    |
+|--------|-----------|------------------------------------------------------------|
+| 0      | V         | Valid (0 = no mapping; accesses fault)                     |
+| 1      | Tbl/Blk   | At L1/L2: 1 = table descriptor, 0 = block. At L3: must be 1 for a valid page. |
+| 4..2   | AttrIdx   | 3-bit index into MAIR_EL1 (picks memory type)              |
+| 7..6   | AP[2:1]   | Access permission (R/W vs RO; EL1-only vs EL0+EL1)         |
+| 9..8   | SH        | Shareability                                               |
+| 10     | AF        | Access Flag (always set in nonux)                          |
+| 47..12 | PA        | Output address: next-table base for table descriptors; block / page base for block / page descriptors |
+| 53     | PXN       | Privileged eXecute-Never (no execution at EL1)             |
+| 54     | UXN       | Unprivileged eXecute-Never (no execution at EL0)           |
 
-The bits we care about and what they mean:
+(Bit 11 nG, bit 52 contiguous-hint, bits 51..48, and bits 63..55
+software-use are all left zero in nonux's descriptors.)
+
+In more detail:
 
 - **`V` (bit 0)** — *Valid.* Zero means "no mapping; access
   here faults."
@@ -291,9 +297,11 @@ The bits we care about and what they mean:
 - **`AP` (bits 6..7)** — Two access-permission bits. The
   encoding is non-obvious: bit 6 selects "EL0 access
   allowed" (0 = EL1 only, 1 = EL0+EL1), and bit 7 selects
-  read-only (0 = R/W, 1 = read-only). nonux uses three
-  combinations: kernel R/W (`AP = 0b00`), user R/W
-  (`AP = 0b01`), and read-only is currently unused.
+  read-only (0 = R/W, 1 = read-only). Of the four AP
+  encodings, nonux uses two: kernel R/W (`AP = 0b00`) and
+  user R/W (`AP = 0b01`). Read-only mappings would be
+  encoded by setting bit 7, but no current call site needs
+  one.
 - **`SH` (bits 8..9)** — *Shareability.* Tells the MMU
   whether other observers (other CPUs, DMA agents) need to
   see writes. We use Inner Shareable for RAM (`SH = 0b11`)
@@ -1006,6 +1014,18 @@ this, the child could try to execute stale instructions — a
 bug that wouldn't show up in a quick test but would surface
 the moment the child's behaviour diverged.
 
+> **Side note: belt and suspenders with the PMM reservation.**
+> The PMM reserves the user-window PA range up front (we'll
+> see why below in §"A boot-time consequence: PMM
+> reservation"), so `dst`'s 8 MiB chunk can never *overlap*
+> the user window — strictly speaking, the aliasing bug above
+> is already prevented at the source. The TTBR0 switch in
+> `mmu_copy_user_backing` is defense-in-depth: it keeps the
+> fork-time copy correct even if a future change moved the
+> user backing out from under the reservation, and it makes
+> the safety property local to one function instead of a
+> distant invariant maintained by `boot.c`.
+
 > **Side note: this is exactly what COW fork removes.** In a
 > copy-on-write fork, the child's L1 starts out pointing at
 > the *same* PAs as the parent's, with every page marked
@@ -1218,7 +1238,7 @@ some piece of this picture.
   `drop_to_el0`, the one-way demotion from EL1 to EL0. The
   MMU's permission machinery is what makes this jump
   meaningful.
-- [Chapter 1 §"Exception levels and modes"](01-boot-and-linker.md) —
+- [Chapter 1 §"Privilege levels: EL0, EL1, EL2, and EL3"](01-boot-and-linker.md#privilege-levels-el0-el1-el2-and-el3) —
   introduces EL0/EL1 in passing; this chapter is where they
   start to bite.
 - [Chapter 5 §"Reserving a range"](05-physical-memory-and-pmm.md#reserving-a-range)
