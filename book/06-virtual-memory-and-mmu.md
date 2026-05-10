@@ -538,15 +538,41 @@ for (uint64_t i = 0; i < 512; i++) {
     l2_mmio_table[i] = device_block(MMIO_BASE + (i << BLOCK2_SHIFT));
     l2_ram_table[i]  = normal_block(RAM_BASE  + (i << BLOCK2_SHIFT));
 }
+
+/* Catch NULL-deref from EL1: leave slot 0 invalid. */
+l2_mmio_table[0] = 0;
 ```
 
 `BLOCK2_SHIFT = 21`, so `i << 21` walks through 0, 2 MiB, 4
-MiB, …, 1 GiB − 2 MiB. Each entry's `pa` field is exactly the
-2 MiB-aligned base of the block it represents. After the
+MiB, …, 1 GiB − 2 MiB.  Each entry's `pa` field is exactly the
+2 MiB-aligned base of the block it represents.  After the
 loop, `l2_mmio_table` covers `0x00000000`..`0x40000000` (the
 device range — GIC, UART, all MMIO) with Device blocks, and
 `l2_ram_table` covers `0x40000000`..`0x80000000` (the RAM
 range) with Normal blocks.
+
+The post-loop line then invalidates slot 0 of `l2_mmio_table`
+— the 2 MiB block covering PA `0x0`..`0x00200000`.  Without
+it, a kernel NULL-pointer dereference (`*(int*)0 = 42`,
+`memcpy(NULL, src, n)`, etc.) wouldn't fault: `AP = 0b00`
+in `device_block(0)` allows EL1 read/write, and the access
+would silently hit QEMU virt's NOR flash region at PA 0
+(absorbing writes, returning `0xFF` for reads).  Marking slot
+0 invalid converts every such access into a clean synchronous
+abort that routes through `on_sync` for diagnosis.  This is
+functionally safe: no MMIO nonux talks to lives in PA
+`0..0x200000` — the first device is the GIC at `0x08000000`.
+
+> **Side note: what already protected EL0?** EL0 NULL-deref
+> was already caught — `AP = 0b00` denies EL0 access, and
+> `UXN = 1` denies EL0 execution.  An EL0 program that
+> dereferences NULL takes a permission fault, `on_sync` sees
+> EL0 origin and kills the process.  An EL0 program that
+> *jumps* to NULL takes an instruction abort, same outcome.
+> EL1 NULL-deref was the only gap: `AP = 0b00` allows EL1
+> read/write, and although `PXN = 1` already blocked EL1
+> *execution* at PA 0, the read/write side was wide open
+> until this slot-0 invalidation closed it.
 
 Then the L1 wires the two L2s into place:
 
