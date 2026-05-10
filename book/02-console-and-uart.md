@@ -263,8 +263,10 @@ spending a moment on.
 
 ### The "magic addresses" trick
 
-On most modern systems, the CPU and devices share the same address
-space. Every device sits at some fixed range of memory addresses,
+On most modern systems, **RAM and devices share the same address
+space.** The CPU issues a load or a store against an address;
+depending on which range the address falls into, either a memory
+chip or a device responds. Every device sits at some fixed range,
 chosen by whoever designed the board (or in our case, whoever
 designed the QEMU `virt` machine).
 
