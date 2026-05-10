@@ -157,6 +157,17 @@ void mmu_init(void)
         l2_ram_table[i]  = normal_block(RAM_BASE  + (i << BLOCK2_SHIFT));
     }
 
+    /* Catch NULL-deref from EL1.  Without this, AP=0b00 in
+     * l2_mmio_table[0] lets the kernel read/write PA 0..2 MiB (QEMU
+     * virt's NOR flash region) silently — a `*(int*)0 = 42` or
+     * `memcpy(NULL, src, n)` doesn't fault, it just absorbs into
+     * flash.  Invalidating slot 0 turns any kernel NULL-deref into a
+     * clean synchronous abort routed through on_sync().  EL0
+     * NULL-deref was already caught (AP=0b00 denies EL0); this
+     * closes the EL1 side.  Safe: no MMIO nonux talks to lives in
+     * PA 0..2 MiB (first device is the GIC at 0x08000000). */
+    l2_mmio_table[0] = 0;
+
     /* Upgrade slot USER_WINDOW_INDEX's permissions so EL0 can access
      * the first user-window block in the kernel's address space.
      * Slice-5.5 era artifact for drop_to_el0 with kernel TTBR0 (no
