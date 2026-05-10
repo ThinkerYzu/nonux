@@ -674,6 +674,13 @@ concurrency in a bit.
 ### Setting up the IRQ — `nx_console_init`
 
 [`framework/console.c`](../framework/console.c) holds all of this.
+Two short helpers it uses everywhere are `uart_rd(off)` and
+`uart_wr(off, val)` — they're one-line wrappers around the same
+`*(volatile uint32_t *)(uart + off)` cast we used in the TX
+driver, just typed for readability. Whenever you see
+`uart_rd(...)` or `uart_wr(...)`, mentally substitute the
+volatile load or store from the MMIO section.
+
 Here is the part that arms the hardware:
 
 ```c
@@ -917,7 +924,17 @@ int nx_console_read(void *buf, size_t cap)
 }
 ```
 
-Strip the bookkeeping and the loop says:
+The block at the top — `nx_waitq_init`, `nx_pollset_listener_init`,
+`nx_console_register_pollset` — is the read side asking the ISR
+"please wake me when you push a byte". Symmetrically, every exit
+from the function calls `nx_console_unregister_pollset` to take
+the listener off the wake list. Inside the loop,
+`nx_waitq_wait_unless`'s third argument, `console_read_ready_pred`,
+is a one-line predicate that returns true when the ring has at
+least one byte (or EOF is queued); the wait checks it inside its
+own critical section to plug a lost-wakeup race.
+
+Strip that bookkeeping and the loop says:
 
 - Try to pop a byte from the ring.
 - If the buffer already has some bytes and the ring's empty, return
@@ -926,11 +943,11 @@ Strip the bookkeeping and the loop says:
 - Otherwise, **block** on a wait queue until the ISR signals "a
   byte just arrived".
 
-The wait-queue mechanics — what `nx_waitq_wait_unless` actually
-does, how the scheduler suspends and resumes the calling task, why
-the predicate has to be re-checked after the wake — get covered in
-their own chapters later. The thing to take away here is the
-**shape** of the I/O loop:
+The wait-queue and pollset machinery — what `nx_waitq_wait_unless`
+actually does, how the scheduler suspends and resumes the calling
+task, how the listener list connects producers and consumers — gets
+covered in its own chapters later. The thing to take away here is
+the **shape** of the I/O loop:
 
 - **Producer side (ISR):** push a byte, wake any waiters.
 - **Consumer side (read):** pop bytes if present, otherwise wait.
@@ -1023,10 +1040,14 @@ static int64_t uart_pl011_read(void *self, uint32_t id, void *buf, size_t cap)
 
 That's the whole component, on the byte-handling side. **Both
 calls eventually go through `uart_putc` (output) or the same RX
-ring (input)** — exactly the path we just walked through. The
-component is not a *different* driver; it's a thin wrapper that
-exposes the existing driver through a standard interface so the
-syscall layer can find it.
+ring (input)** — exactly the path we just walked through.
+`nx_console_write` is a tiny function in `framework/console.c`
+that loops `uart_putc` over the buffer; `nx_console_read_nonblocking`
+is the same pop-from-the-ring code as `nx_console_read` but it
+returns immediately (with `NX_EAGAIN`) when the ring is empty
+instead of blocking. The component is not a *different* driver;
+it's a thin wrapper that exposes the existing driver through a
+standard interface so the syscall layer can find it.
 
 Why bother? Three reasons:
 
