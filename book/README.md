@@ -55,7 +55,7 @@ Chapters arrive when they're written, not on a schedule.
 ### Part III — Memory
 
 5. [Physical memory and the page allocator (PMM)](05-physical-memory-and-pmm.md)
-6. Virtual memory and the MMU
+6. [Virtual memory and the MMU](06-virtual-memory-and-mmu.md)
 
 ### Part IV — Tasks
 

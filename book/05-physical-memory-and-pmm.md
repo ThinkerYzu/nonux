@@ -63,9 +63,9 @@ The relevant files in this repo:
   **MMU** (memory management unit). nonux turns the MMU on early
   in `boot_main` with an *identity map* — virtual address `X`
   translates to physical address `X` for every address in RAM.
-  We'll explore the MMU properly in the next chapter; for this
-  chapter, "virtual" and "physical" mean the same thing
-  numerically.
+  [Chapter 6](06-virtual-memory-and-mmu.md) walks the MMU
+  properly; for this chapter, "virtual" and "physical" mean the
+  same thing numerically.
 - **Page.** A fixed-size, page-aligned chunk of physical (or
   virtual) memory. The size is a hardware parameter; on ARMv8
   with its smallest granule it's **4096 bytes** (4 KiB), and that
@@ -572,10 +572,11 @@ pmm_reserve_range((uintptr_t)mmu_user_window_base(),
                   (size_t)mmu_user_window_size());
 ```
 
-The full reason will make more sense after the next chapter on
-the MMU, but the short version is: nonux carves out a slice of
-virtual-address space called the **user window**, and overlays
-it with each running process's pages. If kernel code happened
+The full reason is in
+[chapter 6 §"A boot-time consequence: PMM reservation"](06-virtual-memory-and-mmu.md#a-boot-time-consequence-pmm-reservation).
+Short version: nonux carves out a slice of virtual-address
+space called the **user window**, and overlays it with each
+running process's pages. If kernel code happened
 to allocate a kstack or a page table whose *physical* address
 fell into that window, EL1 access to those bytes through their
 identity-mapped virtual address would go to the *wrong process's*
