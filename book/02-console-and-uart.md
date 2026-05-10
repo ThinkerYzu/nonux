@@ -90,9 +90,10 @@ The files we'll be talking about:
   off the end of the array, it wraps back to the start — that's
   the "ring".
 - **IRQ (Interrupt Request).** A signal from a device asking the
-  CPU to stop what it's doing and run a short handler. Chapter 1
-  introduced the term; we'll see one fire here. IRQs come up again
-  in much more depth in a later chapter.
+  CPU to stop what it's doing and run a short handler. The CPU
+  pauses, runs the handler, then resumes whatever it was doing.
+  We'll see one fire in this chapter; the deeper hardware
+  mechanics get a chapter of their own later.
 - **ISR (Interrupt Service Routine).** The handler function that
   runs when an IRQ fires. ISRs run at EL1 with interrupts masked
   and have to be short — they're not allowed to block, sleep, or
@@ -160,8 +161,10 @@ we'll just establish that it exists and what role it plays for the
 console.
 
 The **input side** — typing a key into your terminal and having
-the kernel see it — has only one path: the IRQ-driven ring buffer
-in `framework/console.c`. We'll cover that too.
+the kernel see it — has only one path: an **IRQ**-driven ring
+buffer in `framework/console.c`. (An IRQ — interrupt request —
+is the device's way of poking the CPU when something arrives;
+we'll see one fire later in this chapter.) We'll cover that too.
 
 ---
 
