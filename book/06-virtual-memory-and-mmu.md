@@ -198,19 +198,29 @@ configuration — virtual equals physical — so no kernel symbol
 *moves*, but each access is now classified, cached, and
 permission-checked.
 
-> **Side note: why not later?** A common sequencing mistake
-> is to bring the MMU up *after* the kernel has done a
-> bunch of work that benefits from the cache, on the
-> reasoning that the kernel can run fine without it for the
-> first few microseconds. The trouble is the *transition*:
-> if data has been written without the cache (uncached
-> stores) and then the cache turns on, those stores aren't
-> visible to cached loads until you do an awkward dance of
-> `dc cisw` invalidations. Turning the MMU on right at the
-> top of `boot_main` is much simpler — the only thing the
-> kernel has touched before that point is the UART (which
-> stays Device-typed), and there's nothing in the cache to
-> reconcile.
+> **Side note: why not later?** Three reasons.  First, cache
+> and TLB state at reset is *architecturally undefined* —
+> the cache may hold valid lines with garbage from firmware,
+> speculative prefetches, or simulator wackiness — so the
+> kernel must invalidate both before relying on them.  Doing
+> that early, before there's anything in memory the kernel
+> cares about, keeps the dance simple.  (The kernel's own
+> pre-MMU stores aren't a problem in the way one might
+> expect: with MMU off everything is Device-nGnRnE, so those
+> stores commit to memory directly without entering the
+> cache.  But a stale cache line left over from reset *could*
+> shadow them after the cache is enabled, which is what makes
+> the invalidate-then-enable order non-negotiable.)  Second,
+> running with MMU off means every load and store is
+> Device-typed: slow, strictly ordered, and `LDXR/STXR`
+> atomics may not behave as expected.  Third, a bad-pointer
+> access at EL1 produces a clean synchronous abort once the
+> MMU is on; without it you'd get a bus error at best and
+> silent corruption at worst.  Turning the MMU on right at
+> the top of `boot_main` collects all three benefits
+> immediately, and the only thing the kernel has touched
+> before that point is the UART — which stays Device-typed,
+> so it doesn't care.
 
 ---
 
