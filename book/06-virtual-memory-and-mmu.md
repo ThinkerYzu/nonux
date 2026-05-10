@@ -571,6 +571,26 @@ level immediately.
 > before stuffing it into the L1 entry. nonux gets to skip
 > that translation step because identity is identity.
 
+> **Side note: no L3 tables in this configuration.** Notice
+> we never declare an `l3_*_table`.  The L2 entries are
+> *block* descriptors (2 MiB blocks) rather than table
+> descriptors, so the walk reaches its answer at L2 and the
+> MMU never asks for an L3.  The architecture *defines* a
+> third level for the 4 KiB granule we configured (TG0 = 0b00
+> in TCR), but using it is optional — block descriptors at L2
+> short-circuit the walk whenever 2 MiB granularity is good
+> enough.  nonux today doesn't need finer than 2 MiB anywhere
+> (every kernel mapping and every per-process user window is
+> a multiple of 2 MiB), so we don't pay for L3 tables.  The
+> Phase 9 per-process MM rework is exactly the change that
+> introduces them: it swaps the user-window L2 entries from
+> block descriptors to table descriptors that point at L3
+> pages, so each 4 KiB user page can be allocated, mapped,
+> and protected individually.  Until then, the bit-1 rule for
+> L3 page descriptors in the previous section is *prescriptive*
+> for a future reader of the rework — not something you'll
+> see in today's tables.
+
 ---
 
 ## The walk, by example
