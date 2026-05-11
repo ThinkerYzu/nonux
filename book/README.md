@@ -60,7 +60,7 @@ Chapters arrive when they're written, not on a schedule.
 ### Part IV — Tasks
 
 7. [Kernel threads and context switching](07-kernel-threads-and-context-switch.md)
-8. The scheduler
+8. [The scheduler](08-the-scheduler.md)
 
 ### Part V — Framework basics
 
