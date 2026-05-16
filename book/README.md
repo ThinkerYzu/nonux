@@ -64,7 +64,7 @@ Chapters arrive when they're written, not on a schedule.
 
 ### Part V — Framework basics
 
-9. Slots, components, and the registry
+9. [Slots, components, and the registry](09-slots-components-and-registry.md)
 10. Interface Definition Language (IDL)
 
 ### Part VI — IPC and storage
